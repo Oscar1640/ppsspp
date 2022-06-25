@@ -73,7 +73,7 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 	themeInfos.clear();
 	ThemeInfo def{};
 	def.name = "Default";
-	def.UIAtlas = "ui_atlas";
+	def.UIAtlas = "ui_atlas_luna";
 	themeInfos.push_back(def);
 
 	// This will update the theme if already present, as such default in assets/theme will get priority if exist
@@ -148,10 +148,10 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 						info.UIAtlas = tmpPath;
 					} else {
 						// Files not found, fallback to default
-						info.UIAtlas = "ui_atlas";
+						info.UIAtlas = "ui_atlas_luna";
 					}
 				} else {
-					info.UIAtlas = "ui_atlas";
+					info.UIAtlas = "ui_atlas_luna";
 				}
 
 				appendTheme(info);
@@ -232,9 +232,9 @@ void UpdateTheme(UIContext *ctx) {
 	// Load any missing atlas metadata (the images are loaded from UIContext).
 	LoadAtlasMetadata(ui_atlas, (themeInfos[i].UIAtlas + ".meta").c_str(), true);
 #if !(PPSSPP_PLATFORM(WINDOWS) || PPSSPP_PLATFORM(ANDROID))
-	LoadAtlasMetadata(font_atlas, "font_atlas.meta", ui_atlas.num_fonts == 0);
+	LoadAtlasMetadata(font_atlas, "font_atlas_luna.meta", ui_atlas.num_fonts == 0);
 #else
-	LoadAtlasMetadata(font_atlas, "asciifont_atlas.meta", ui_atlas.num_fonts == 0);
+	LoadAtlasMetadata(font_atlas, "asciifont_atlas_luna.meta", ui_atlas.num_fonts == 0);
 #endif
 
 	ctx->setUIAtlas(themeInfos[i].UIAtlas + ".zim");
