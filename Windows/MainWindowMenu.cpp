@@ -971,7 +971,7 @@ namespace MainWindow {
 			break;
 
 		case ID_OPTIONS_FULLSCREEN:
-			SendToggleFullscreen(!g_Config.bFullScreen);
+			SendToggleFullscreen(!g_Config.UseFullScreen());
 			break;
 
 		case ID_OPTIONS_VERTEXCACHE:

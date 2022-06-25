@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -170,6 +171,7 @@ protected:
 	ReplacedTextureAlpha alphaStatus_;
 	double lastUsed_ = 0.0;
 	LimitedWaitable *threadWaitable_ = nullptr;
+	std::mutex mutex_;
 	bool cancelPrepare_ = false;
 
 	friend TextureReplacer;
@@ -206,6 +208,10 @@ public:
 		return none_;
 	}
 
+	// Check if a NotifyTextureDecoded for this texture is desired (used to avoid reads from write-combined memory.)
+	bool WillSave(const ReplacedTextureDecodeInfo &replacedInfo);
+
+	// Notify that a new texture was decoded.  May already be upscaled, saves the data passed.
 	void NotifyTextureDecoded(const ReplacedTextureDecodeInfo &replacedInfo, const void *data, int pitch, int level, int w, int h);
 
 	void Decimate(bool forcePressure);
@@ -225,7 +231,6 @@ protected:
 	void PopulateReplacement(ReplacedTexture *result, u64 cachekey, u32 hash, int w, int h);
 	bool PopulateLevel(ReplacedTextureLevel &level);
 
-	SimpleBuf<u32> saveBuf;
 	bool enabled_ = false;
 	bool allowVideo_ = false;
 	bool ignoreAddress_ = false;
@@ -244,5 +249,5 @@ protected:
 
 	ReplacedTexture none_;
 	std::unordered_map<ReplacementCacheKey, ReplacedTexture> cache_;
-	std::unordered_map<ReplacementCacheKey, ReplacedTextureLevel> savedCache_;
+	std::unordered_map<ReplacementCacheKey, std::pair<ReplacedTextureLevel, double>> savedCache_;
 };

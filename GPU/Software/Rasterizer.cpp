@@ -208,19 +208,6 @@ static inline void SetPixelDepth(int x, int y, int stride, u16 value) {
 	depthbuf.Set16(x, y, stride, value);
 }
 
-static inline u8 GetPixelStencil(GEBufferFormat fmt, int fbStride, int x, int y) {
-	if (fmt == GE_FORMAT_565) {
-		// Always treated as 0 for comparison purposes.
-		return 0;
-	} else if (fmt == GE_FORMAT_5551) {
-		return ((fb.Get16(x, y, fbStride) & 0x8000) != 0) ? 0xFF : 0;
-	} else if (fmt == GE_FORMAT_4444) {
-		return Convert4To8(fb.Get16(x, y, fbStride) >> 12);
-	} else {
-		return fb.Get32(x, y, fbStride) >> 24;
-	}
-}
-
 static inline bool IsRightSideOrFlatBottomLine(const Vec2<int>& vertex, const Vec2<int>& line1, const Vec2<int>& line2)
 {
 	if (line1.y == line2.y) {
@@ -549,16 +536,18 @@ static inline __m128i SOFTRAST_CALL TriangleEdgeStartSSE4(__m128i initX, __m128i
 template <bool useSSE4>
 Vec4<int> TriangleEdge<useSSE4>::Start(const ScreenCoords &v0, const ScreenCoords &v1, const ScreenCoords &origin) {
 	// Start at pixel centers.
-	Vec4<int> initX = Vec4<int>::AssignToAll(origin.x) + Vec4<int>(7, 23, 7, 23);
-	Vec4<int> initY = Vec4<int>::AssignToAll(origin.y) + Vec4<int>(7, 7, 23, 23);
+	static constexpr int centerOff = (SCREEN_SCALE_FACTOR / 2) - 1;
+	static constexpr int centerPlus1 = SCREEN_SCALE_FACTOR + centerOff;
+	Vec4<int> initX = Vec4<int>::AssignToAll(origin.x) + Vec4<int>(centerOff, centerPlus1, centerOff, centerPlus1);
+	Vec4<int> initY = Vec4<int>::AssignToAll(origin.y) + Vec4<int>(centerOff, centerOff, centerPlus1, centerPlus1);
 
 	// orient2d refactored.
 	int xf = v0.y - v1.y;
 	int yf = v1.x - v0.x;
 	int c = v1.y * v0.x - v1.x * v0.y;
 
-	stepX = Vec4<int>::AssignToAll(xf * 16 * 2);
-	stepY = Vec4<int>::AssignToAll(yf * 16 * 2);
+	stepX = Vec4<int>::AssignToAll(xf * SCREEN_SCALE_FACTOR * 2);
+	stepY = Vec4<int>::AssignToAll(yf * SCREEN_SCALE_FACTOR * 2);
 
 #if defined(_M_SSE) && !PPSSPP_ARCH(X86)
 	if (useSSE4)
@@ -611,7 +600,7 @@ void TriangleEdge<useSSE4>::NarrowMinMaxX(const Vec4<int> &w, int64_t minX, int6
 	if (wmax < 0) {
 		if (stepX.x > 0) {
 			int steps = -wmax / stepX.x;
-			rowMinX = std::max(rowMinX, minX + steps * 16 * 2);
+			rowMinX = std::max(rowMinX, minX + steps * SCREEN_SCALE_FACTOR * 2);
 		} else if (stepX.x <= 0) {
 			rowMinX = rowMaxX + 1;
 		}
@@ -619,7 +608,7 @@ void TriangleEdge<useSSE4>::NarrowMinMaxX(const Vec4<int> &w, int64_t minX, int6
 
 	if (wmax >= 0 && stepX.x < 0) {
 		int steps = (-wmax / stepX.x) + 1;
-		rowMaxX = std::min(rowMaxX, minX + steps * 16 * 2);
+		rowMaxX = std::min(rowMaxX, minX + steps * SCREEN_SCALE_FACTOR * 2);
 	}
 }
 
@@ -727,7 +716,7 @@ void DrawTriangleSlice(
 	std::string ztag = StringFromFormat("DisplayListTZ_%08x", state.listPC);
 #endif
 
-	for (int64_t curY = minY; curY <= maxY; curY += 32,
+	for (int64_t curY = minY; curY <= maxY; curY += SCREEN_SCALE_FACTOR * 2,
 										w0_base = e0.StepY(w0_base),
 										w1_base = e1.StepY(w1_base),
 										w2_base = e2.StepY(w2_base)) {
@@ -735,25 +724,25 @@ void DrawTriangleSlice(
 		Vec4<int> w1 = w1_base;
 		Vec4<int> w2 = w2_base;
 
-		DrawingCoords p = TransformUnit::ScreenToDrawing(minX, curY, state.screenOffsetX, state.screenOffsetY);
+		DrawingCoords p = TransformUnit::ScreenToDrawing(minX, curY);
 
 		int64_t rowMinX = minX, rowMaxX = maxX;
 		e0.NarrowMinMaxX(w0, minX, rowMinX, rowMaxX);
 		e1.NarrowMinMaxX(w1, minX, rowMinX, rowMaxX);
 		e2.NarrowMinMaxX(w2, minX, rowMinX, rowMaxX);
 
-		int skipX = (rowMinX - minX) / 32;
+		int skipX = (rowMinX - minX) / (SCREEN_SCALE_FACTOR * 2);
 		w0 = e0.StepXTimes(w0, skipX);
 		w1 = e1.StepXTimes(w1, skipX);
 		w2 = e2.StepXTimes(w2, skipX);
 		p.x = (p.x + 2 * skipX) & 0x3FF;
 
 		// TODO: Maybe we can clip the edges instead?
-		int scissorYPlus1 = curY + 16 > maxY ? -1 : 0;
-		Vec4<int> scissor_mask = Vec4<int>(0, rowMaxX - rowMinX - 16, scissorYPlus1, (rowMaxX - rowMinX - 16) | scissorYPlus1);
-		Vec4<int> scissor_step = Vec4<int>(0, -32, 0, -32);
+		int scissorYPlus1 = curY + SCREEN_SCALE_FACTOR > maxY ? -1 : 0;
+		Vec4<int> scissor_mask = Vec4<int>(0, rowMaxX - rowMinX - SCREEN_SCALE_FACTOR, scissorYPlus1, (rowMaxX - rowMinX - SCREEN_SCALE_FACTOR) | scissorYPlus1);
+		Vec4<int> scissor_step = Vec4<int>(0, -(SCREEN_SCALE_FACTOR * 2), 0, -(SCREEN_SCALE_FACTOR * 2));
 
-		for (int64_t curX = rowMinX; curX <= rowMaxX; curX += 32,
+		for (int64_t curX = rowMinX; curX <= rowMaxX; curX += SCREEN_SCALE_FACTOR * 2,
 			w0 = e0.StepX(w0),
 			w1 = e1.StepX(w1),
 			w2 = e2.StepX(w2),
@@ -861,9 +850,9 @@ void DrawTriangleSlice(
 	}
 
 #if !defined(SOFTGPU_MEMORY_TAGGING_DETAILED) && defined(SOFTGPU_MEMORY_TAGGING_BASIC)
-	for (int y = minY; y <= maxY; y += 16) {
-		DrawingCoords p = TransformUnit::ScreenToDrawing(minX, y, state.screenOffsetX, state.screenOffsetY);
-		DrawingCoords pend = TransformUnit::ScreenToDrawing(maxX, y, state.screenOffsetX, state.screenOffsetY);
+	for (int y = minY; y <= maxY; y += SCREEN_SCALE_FACTOR) {
+		DrawingCoords p = TransformUnit::ScreenToDrawing(minX, y);
+		DrawingCoords pend = TransformUnit::ScreenToDrawing(maxX, y);
 		uint32_t row = gstate.getFrameBufAddress() + p.y * pixelID.cached.framebufStride * bpp;
 		NotifyMemInfo(MemBlockFlags::WRITE, row + p.x * bpp, (pend.x - p.x) * bpp, tag.c_str(), tag.size());
 
@@ -886,6 +875,161 @@ void DrawTriangle(const VertexData &v0, const VertexData &v1, const VertexData &
 	drawSlice(v0, v1, v2, range.x1, range.y1, range.x2, range.y2, state);
 }
 
+void DrawRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &range, const RasterizerState &state) {
+	int entireX1 = std::min(v0.screenpos.x, v1.screenpos.x);
+	int entireY1 = std::min(v0.screenpos.y, v1.screenpos.y);
+	int entireX2 = std::max(v0.screenpos.x, v1.screenpos.x) - 1;
+	int entireY2 = std::max(v0.screenpos.y, v1.screenpos.y) - 1;
+	int minX = std::max(entireX1, range.x1) | (SCREEN_SCALE_FACTOR / 2 - 1);
+	int minY = std::max(entireY1, range.y1) | (SCREEN_SCALE_FACTOR / 2 - 1);
+	int maxX = std::min(entireX2, range.x2);
+	int maxY = std::min(entireY2, range.y2);
+
+	Vec2f rowST(0.0f, 0.0f);
+	// Note: this is double the x or y movement.
+	Vec2f stx(0.0f, 0.0f);
+	Vec2f sty(0.0f, 0.0f);
+	if (state.enableTextures) {
+		Vec2f tc0 = v0.texturecoords;
+		Vec2f tc1 = v1.texturecoords;
+		if (state.throughMode) {
+			// For levels > 0, mipmapping is always based on level 0.  Simpler to scale first.
+			tc0.s() *= 1.0f / (float)(1 << state.samplerID.width0Shift);
+			tc1.s() *= 1.0f / (float)(1 << state.samplerID.width0Shift);
+			tc0.t() *= 1.0f / (float)(1 << state.samplerID.height0Shift);
+			tc1.t() *= 1.0f / (float)(1 << state.samplerID.height0Shift);
+		}
+
+		int diffX = (entireX2 - entireX1 + 1) / SCREEN_SCALE_FACTOR;
+		int diffY = (entireY2 - entireY1 + 1) / SCREEN_SCALE_FACTOR;
+		float diffS = tc1.s() - tc0.s();
+		float diffT = tc1.t() - tc0.t();
+
+		if (v0.screenpos.x < v1.screenpos.x) {
+			if (v0.screenpos.y < v1.screenpos.y) {
+				// Okay, simple, TL -> BR.  S and T move toward v1 with X and Y.
+				rowST = tc0;
+				stx = Vec2f(2.0f * diffS / diffX, 0.0f);
+				sty = Vec2f(0.0f, 2.0f * diffT / diffY);
+			} else {
+				// BL to TR, rotated.  We start at TL still.
+				// X moves T (not S) toward v1, and Y moves S away from v1.
+				rowST = Vec2f(tc1.s(), tc0.t());
+				stx = Vec2f(0.0f, 2.0f * diffT / diffX);
+				sty = Vec2f(2.0f * -diffS / diffY, 0.0f);
+			}
+		} else {
+			if (v0.screenpos.y < v1.screenpos.y) {
+				// TR to BL.  Like BL to TR, rotated.
+				// X moves T (not s) away from v1, and Y moves S toward v1.
+				rowST = Vec2f(tc0.s(), tc1.t());
+				stx = Vec2f(0.0f, 2.0f * -diffT / diffX);
+				sty = Vec2f(2.0f * diffS / diffY, 0.0f);
+			} else {
+				// BR to TL, just inverse of TL to BR.
+				rowST = Vec2f(tc1.s(), tc1.t());
+				stx = Vec2f(2.0f * -diffS / diffX, 0.0f);
+				sty = Vec2f(0.0f, 2.0f * -diffT / diffY);
+			}
+		}
+
+		// Okay, now move ST to the minX, minY position.
+		rowST += (stx / (float)(SCREEN_SCALE_FACTOR * 2)) * (minX - entireX1);
+		rowST += (sty / (float)(SCREEN_SCALE_FACTOR * 2)) * (minY - entireY1);
+	}
+
+	// And now what we add to spread out to 4 values.
+	const Vec4f sto4(0.0f, 0.5f * stx.s(), 0.5f * sty.s(), 0.5f * stx.s() + 0.5f * sty.s());
+	const Vec4f tto4(0.0f, 0.5f * stx.t(), 0.5f * sty.t(), 0.5f * stx.t() + 0.5f * sty.t());
+
+	ScreenCoords pprime(minX, minY, 0);
+	Vec4<int> fog = Vec4<int>::AssignToAll(ClampFogDepth(v1.fogdepth));
+	Vec4<int> z = Vec4<int>::AssignToAll(v1.screenpos.z);
+	Vec3<int> sec_color = v1.color1;
+
+#if defined(SOFTGPU_MEMORY_TAGGING_DETAILED) || defined(SOFTGPU_MEMORY_TAGGING_BASIC)
+	uint32_t bpp = state.pixelID.FBFormat() == GE_FORMAT_8888 ? 4 : 2;
+	std::string tag = StringFromFormat("DisplayListR_%08x", state.listPC);
+	std::string ztag = StringFromFormat("DisplayListRZ_%08x", state.listPC);
+#endif
+
+	for (int64_t curY = minY; curY <= maxY; curY += SCREEN_SCALE_FACTOR * 2, rowST += sty) {
+		DrawingCoords p = TransformUnit::ScreenToDrawing(range.x1, curY);
+
+		int scissorY2 = curY + SCREEN_SCALE_FACTOR > maxY ? -1 : 0;
+		Vec4<int> scissor_mask = Vec4<int>(0, maxX - minX - SCREEN_SCALE_FACTOR, scissorY2, (maxX - minX - SCREEN_SCALE_FACTOR) | scissorY2);
+		Vec4<int> scissor_step = Vec4<int>(0, -(SCREEN_SCALE_FACTOR * 2), 0, -(SCREEN_SCALE_FACTOR * 2));
+		Vec2f st = rowST;
+
+		for (int64_t curX = minX; curX <= maxX; curX += SCREEN_SCALE_FACTOR * 2,
+			st += stx,
+			scissor_mask += scissor_step,
+			p.x = (p.x + 2) & 0x3FF) {
+			Vec4<int> mask = scissor_mask;
+
+			Vec4<int> prim_color[4];
+			for (int i = 0; i < 4; ++i) {
+				prim_color[i] = v1.color0;
+			}
+
+			if (state.enableTextures) {
+				Vec4<float> s, t;
+				s = Vec4<float>::AssignToAll(st.s()) + sto4;
+				t = Vec4<float>::AssignToAll(st.t()) + tto4;
+
+				ApplyTexturing(state, prim_color, mask, s, t, curX, curY);
+			}
+
+			if (!state.pixelID.clearMode) {
+				for (int i = 0; i < 4; ++i) {
+#if defined(_M_SSE)
+					// TODO: Tried making Vec4 do this, but things got slower.
+					const __m128i sec = _mm_and_si128(sec_color.ivec, _mm_set_epi32(0, -1, -1, -1));
+					prim_color[i].ivec = _mm_add_epi32(prim_color[i].ivec, sec);
+#else
+					prim_color[i] += Vec4<int>(sec_color, 0);
+#endif
+				}
+			}
+
+			PROFILE_THIS_SCOPE("draw_rect_px");
+			DrawingCoords subp = p;
+			for (int i = 0; i < 4; ++i) {
+				if (mask[i] < 0) {
+					continue;
+				}
+				subp.x = p.x + (i & 1);
+				subp.y = p.y + (i / 2);
+
+				state.drawPixel(subp.x, subp.y, z[i], fog[i], ToVec4IntArg(prim_color[i]), state.pixelID);
+
+#if defined(SOFTGPU_MEMORY_TAGGING_DETAILED)
+				uint32_t row = gstate.getFrameBufAddress() + subp.y * state.pixelID.cached.framebufStride * bpp;
+				NotifyMemInfo(MemBlockFlags::WRITE, row + subp.x * bpp, bpp, tag.c_str(), tag.size());
+				if (state.pixelID.depthWrite) {
+					row = gstate.getDepthBufAddress() + subp.y * state.pixelID.cached.depthbufStride * 2;
+					NotifyMemInfo(MemBlockFlags::WRITE, row + subp.x * 2, 2, ztag.c_str(), ztag.size());
+				}
+#endif
+			}
+		}
+	}
+
+#if !defined(SOFTGPU_MEMORY_TAGGING_DETAILED) && defined(SOFTGPU_MEMORY_TAGGING_BASIC)
+	for (int y = minY; y <= maxY; y += SCREEN_SCALE_FACTOR) {
+		DrawingCoords p = TransformUnit::ScreenToDrawing(minX, y);
+		DrawingCoords pend = TransformUnit::ScreenToDrawing(maxX, y);
+		uint32_t row = gstate.getFrameBufAddress() + p.y * state.pixelID.cached.framebufStride * bpp;
+		NotifyMemInfo(MemBlockFlags::WRITE, row + p.x * bpp, (pend.x - p.x) * bpp, tag.c_str(), tag.size());
+
+		if (state.pixelID.depthWrite) {
+			row = gstate.getDepthBufAddress() + p.y * state.pixelID.cached.depthbufStride * 2;
+			NotifyMemInfo(MemBlockFlags::WRITE, row + p.x * 2, (pend.x - p.x) * 2, ztag.c_str(), ztag.size());
+		}
+	}
+#endif
+}
+
 void DrawPoint(const VertexData &v0, const BinCoords &range, const RasterizerState &state) {
 	ScreenCoords pos = v0.screenpos;
 	Vec4<int> prim_color = v0.color0;
@@ -894,7 +1038,7 @@ void DrawPoint(const VertexData &v0, const BinCoords &range, const RasterizerSta
 	auto &pixelID = state.pixelID;
 	auto &samplerID = state.samplerID;
 
-	if (state.enableTextures && !pixelID.clearMode) {
+	if (state.enableTextures) {
 		float s = v0.texturecoords.s();
 		float t = v0.texturecoords.t();
 		if (state.throughMode) {
@@ -916,11 +1060,11 @@ void DrawPoint(const VertexData &v0, const BinCoords &range, const RasterizerSta
 	if (!pixelID.clearMode)
 		prim_color += Vec4<int>(sec_color, 0);
 
-	DrawingCoords p = TransformUnit::ScreenToDrawing(pos, state.screenOffsetX, state.screenOffsetY);
+	DrawingCoords p = TransformUnit::ScreenToDrawing(pos);
 	u16 z = pos.z;
 
 	u8 fog = 255;
-	if (pixelID.applyFog && !pixelID.clearMode) {
+	if (pixelID.applyFog) {
 		fog = ClampFogDepth(v0.fogdepth);
 	}
 
@@ -943,13 +1087,13 @@ void DrawPoint(const VertexData &v0, const BinCoords &range, const RasterizerSta
 }
 
 void ClearRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &range, const RasterizerState &state) {
-	DrawingCoords pprime = TransformUnit::ScreenToDrawing(range.x1, range.y1, state.screenOffsetX, state.screenOffsetY);
-	DrawingCoords pend = TransformUnit::ScreenToDrawing(range.x2, range.y2, state.screenOffsetX, state.screenOffsetY);
+	DrawingCoords pprime = TransformUnit::ScreenToDrawing(range.x1, range.y1);
+	DrawingCoords pend = TransformUnit::ScreenToDrawing(range.x2, range.y2);
 	auto &pixelID = state.pixelID;
 	auto &samplerID = state.samplerID;
 
 	// Min and max are in PSP fixed point screen coordinates, 16 here is for the 4 subpixel bits.
-	const int w = (range.x2 - range.x1 + 1) / 16;
+	const int w = (range.x2 - range.x1 + 1) / SCREEN_SCALE_FACTOR;
 	if (w <= 0)
 		return;
 
@@ -1129,14 +1273,14 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 
 	int steps;
 	if (abs(dx) < abs(dy))
-		steps = abs(dy) / 16;
+		steps = abs(dy) / SCREEN_SCALE_FACTOR;
 	else
-		steps = abs(dx) / 16;
+		steps = abs(dx) / SCREEN_SCALE_FACTOR;
 
 	// Avoid going too far since we typically don't start at the pixel center.
-	if (dx < 0 && dx >= -16)
+	if (dx < 0 && dx >= -SCREEN_SCALE_FACTOR)
 		dx++;
-	if (dy < 0 && dy >= -16)
+	if (dy < 0 && dy >= -SCREEN_SCALE_FACTOR)
 		dy++;
 
 	double xinc = (double)dx / steps;
@@ -1171,7 +1315,7 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 			}
 
 			u8 fog = 255;
-			if (pixelID.applyFog && !pixelID.clearMode) {
+			if (pixelID.applyFog) {
 				fog = ClampFogDepth((v0.fogdepth * (float)(steps - i) + v1.fogdepth * (float)i) / steps1);
 			}
 
@@ -1181,7 +1325,7 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 				prim_color.a() = 0x7F;
 			}
 
-			if (state.enableTextures && !pixelID.clearMode) {
+			if (state.enableTextures) {
 				float s, s1;
 				float t, t1;
 				if (state.throughMode) {
@@ -1199,8 +1343,8 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 				}
 
 				// If inc is 0, force the delta to zero.
-				float ds = xinc == 0.0 ? 0.0f : (s1 - s) * 16.0f * (1.0f / xinc);
-				float dt = yinc == 0.0 ? 0.0f : (t1 - t) * 16.0f * (1.0f / yinc);
+				float ds = xinc == 0.0 ? 0.0f : (s1 - s) * (float)SCREEN_SCALE_FACTOR * (1.0f / xinc);
+				float dt = yinc == 0.0 ? 0.0f : (t1 - t) * (float)SCREEN_SCALE_FACTOR * (1.0f / yinc);
 
 				int texLevel;
 				int texLevelFrac;
@@ -1209,7 +1353,7 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 
 				if (state.antialiasLines) {
 					// TODO: This is a naive and wrong implementation.
-					DrawingCoords p0 = TransformUnit::ScreenToDrawing(x, y, state.screenOffsetX, state.screenOffsetY);
+					DrawingCoords p0 = TransformUnit::ScreenToDrawing(x, y);
 					s = ((float)p0.x + xinc / 32.0f) / 512.0f;
 					t = ((float)p0.y + yinc / 32.0f) / 512.0f;
 
@@ -1224,7 +1368,7 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 				prim_color += Vec4<int>(sec_color, 0);
 
 			PROFILE_THIS_SCOPE("draw_px");
-			DrawingCoords p = TransformUnit::ScreenToDrawing(x, y, state.screenOffsetX, state.screenOffsetY);
+			DrawingCoords p = TransformUnit::ScreenToDrawing(x, y);
 			state.drawPixel(p.x, p.y, z, fog, ToVec4IntArg(prim_color), pixelID);
 
 #if defined(SOFTGPU_MEMORY_TAGGING_DETAILED) || defined(SOFTGPU_MEMORY_TAGGING_BASIC)
@@ -1243,21 +1387,6 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 		y += yinc;
 		z += zinc;
 	}
-}
-
-bool GetCurrentStencilbuffer(GPUDebugBuffer &buffer) {
-	int w = gstate.getRegionX2() + 1;
-	int h = gstate.getRegionY2() + 1;
-	buffer.Allocate(w, h, GPU_DBG_FORMAT_8BIT);
-
-	u8 *row = buffer.GetData();
-	for (int y = 0; y < w; ++y) {
-		for (int x = 0; x < h; ++x) {
-			row[x] = GetPixelStencil(gstate.FrameBufFormat(), gstate.FrameBufStride(), x, y);
-		}
-		row += w;
-	}
-	return true;
 }
 
 bool GetCurrentTexture(GPUDebugBuffer &buffer, int level)

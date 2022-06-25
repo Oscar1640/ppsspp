@@ -124,6 +124,7 @@ static const VkLogicOp logicOps[] = {
 
 void DrawEngineVulkan::ResetFramebufferRead() {
 	boundSecondary_ = VK_NULL_HANDLE;
+	fboTexBound_ = false;
 }
 
 // TODO: Do this more progressively. No need to compute the entire state if the entire state hasn't changed.
@@ -161,23 +162,17 @@ void DrawEngineVulkan::ConvertStateToVulkanKey(FramebufferManagerVulkan &fbManag
 				key.logicOp = VK_LOGIC_OP_CLEAR;
 			}
 
-			// Set blend - unless we need to do it in the shader.
-			GenericBlendState blendState;
-			ConvertBlendState(blendState, gstate_c.allowFramebufferRead);
-
 			GenericMaskState maskState;
 			ConvertMaskState(maskState, gstate_c.allowFramebufferRead);
 
+			// Set blend - unless we need to do it in the shader.
+			GenericBlendState blendState;
+			ConvertBlendState(blendState, gstate_c.allowFramebufferRead, maskState.applyFramebufferRead);
+
 			if (blendState.applyFramebufferRead || maskState.applyFramebufferRead) {
-				if (ApplyFramebufferRead(&fboTexNeedsBind_)) {
-					// The shader takes over the responsibility for blending, so recompute.
-					ApplyStencilReplaceAndLogicOpIgnoreBlend(blendState.replaceAlphaWithStencil, blendState);
-				} else {
-					// Until next time, force it off.
-					ResetFramebufferRead();
-					gstate_c.SetAllowFramebufferRead(false);
-					// Make sure we recompute the fragment shader ID to one that doesn't try to use shader blending.
-				}
+				ApplyFramebufferRead(&fboTexNeedsBind_);
+				// The shader takes over the responsibility for blending, so recompute.
+				ApplyStencilReplaceAndLogicOpIgnoreBlend(blendState.replaceAlphaWithStencil, blendState);
 				gstate_c.Dirty(DIRTY_FRAGMENTSHADER_STATE);
 			} else if (blendState.resetFramebufferRead) {
 				ResetFramebufferRead();
@@ -367,7 +362,7 @@ void DrawEngineVulkan::ConvertStateToVulkanKey(FramebufferManagerVulkan &fbManag
 }
 
 void DrawEngineVulkan::BindShaderBlendTex() {
-	// TODO:  At this point, we know if the vertices are full alpha or not.
+	// TODO: At this point, we know if the vertices are full alpha or not.
 	// Set the nearest/linear here (since we correctly know if alpha/color tests are needed)?
 	if (!gstate.isModeClear()) {
 		if (fboTexNeedsBind_) {

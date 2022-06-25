@@ -30,6 +30,8 @@
 extern const char *PPSSPP_GIT_VERSION;
 const int MAX_CONFIG_VOLUME = 8;
 
+extern bool jitForcedOff;
+
 enum ChatPositions {
 	BOTTOM_LEFT = 0,
 	BOTTOM_CENTER = 1,
@@ -61,6 +63,7 @@ struct ConfigCustomButton {
 	int image;
 	int shape;
 	bool toggle;
+	bool repeat;
 };
 
 struct Config {
@@ -202,6 +205,7 @@ public:
 	bool bVertexDecoderJit;
 	bool bFullScreen;
 	bool bFullScreenMulti;
+	int iForceFullScreen = -1; // -1 = nope, 0 = force off, 1 = force on (not saved.)
 	int iInternalResolution;  // 0 = Auto (native), 1 = 1x (480x272), 2 = 2x, 3 = 3x, 4 = 4x and so on.
 	int iAnisotropyLevel;  // 0 - 5, powers of 2: 0 = 1x = no aniso
 	int bHighQualityDepth;
@@ -537,6 +541,12 @@ public:
 	bool IsPortrait() const;
 	int NextValidBackend();
 	bool IsBackendEnabled(GPUBackend backend, bool validate = true);
+
+	bool UseFullScreen() const {
+		if (iForceFullScreen != -1)
+			return iForceFullScreen == 1;
+		return bFullScreen;
+	}
 
 protected:
 	void LoadStandardControllerIni();

@@ -390,8 +390,10 @@ void GameSettingsScreen::CreateViews() {
 	graphicsSettings->Add(new CheckBox(&g_Config.bFullScreen, gr->T("FullScreen", "Full Screen")))->OnClick.Handle(this, &GameSettingsScreen::OnFullscreenChange);
 	if (System_GetPropertyInt(SYSPROP_DISPLAY_COUNT) > 1) {
 		CheckBox *fullscreenMulti = new CheckBox(&g_Config.bFullScreenMulti, gr->T("Use all displays"));
-		fullscreenMulti->SetEnabledPtr(&g_Config.bFullScreen);
-		graphicsSettings->Add(fullscreenMulti)->OnClick.Handle(this, &GameSettingsScreen::OnFullscreenChange);
+		fullscreenMulti->SetEnabledFunc([] {
+			return g_Config.UseFullScreen();
+		});
+		graphicsSettings->Add(fullscreenMulti)->OnClick.Handle(this, &GameSettingsScreen::OnFullscreenMultiChange);
 	}
 #endif
 	// Display Layout Editor: To avoid overlapping touch controls on large tablets, meet geeky demands for integer zoom/unstretched image etc.
@@ -919,21 +921,25 @@ void GameSettingsScreen::CreateViews() {
 		backgroundChoice_->OnClick.Handle(this, &GameSettingsScreen::OnChangeBackground);
 	}
 
-	PopupMultiChoiceDynamic *theme = systemSettings->Add(new PopupMultiChoiceDynamic(&g_Config.sThemeName, sy->T("Color Theme"), GetThemeInfoNames(), th->GetName(), screenManager()));
+	PopupMultiChoiceDynamic *theme = systemSettings->Add(new PopupMultiChoiceDynamic(&g_Config.sThemeName, sy->T("Theme"), GetThemeInfoNames(), th->GetName(), screenManager()));
 	theme->OnChoice.Add([=](EventParams &e) {
-		UpdateTheme();
+		UpdateTheme(screenManager()->getUIContext());
 
 		return UI::EVENT_CONTINUE;
 	});
 
-	PopupSliderChoiceFloat *tint = new PopupSliderChoiceFloat(&g_Config.fUITint, 0.0, 1.0, n->T("Color Tint"), 0.01f, screenManager());
-	tint->SetHasDropShadow(false);
-	tint->SetLiveUpdate(true);
-	systemSettings->Add(tint);
-	PopupSliderChoiceFloat *saturation = new PopupSliderChoiceFloat(&g_Config.fUISaturation, 0.0, 2.0, n->T("Color Saturation"), 0.01f, screenManager());
-	saturation->SetHasDropShadow(false);
-	saturation->SetLiveUpdate(true);
-	systemSettings->Add(saturation);
+
+	if (!draw->GetBugs().Has(Draw::Bugs::RASPBERRY_SHADER_COMP_HANG)) {
+		// We use shaders without tint capability on hardware with this driver bug.
+		PopupSliderChoiceFloat *tint = new PopupSliderChoiceFloat(&g_Config.fUITint, 0.0, 1.0, sy->T("Color Tint"), 0.01f, screenManager());
+		tint->SetHasDropShadow(false);
+		tint->SetLiveUpdate(true);
+		systemSettings->Add(tint);
+		PopupSliderChoiceFloat *saturation = new PopupSliderChoiceFloat(&g_Config.fUISaturation, 0.0, 2.0, sy->T("Color Saturation"), 0.01f, screenManager());
+		saturation->SetHasDropShadow(false);
+		saturation->SetLiveUpdate(true);
+		systemSettings->Add(saturation);
+	}
 
 	static const char *backgroundAnimations[] = { "No animation", "Floating symbols", "Recent games", "Waves", "Moving background" };
 	systemSettings->Add(new PopupMultiChoice(&g_Config.iBackgroundAnimation, sy->T("UI background animation"), backgroundAnimations, 0, ARRAY_SIZE(backgroundAnimations), sy->GetName(), screenManager()));
@@ -1023,7 +1029,7 @@ void GameSettingsScreen::CreateViews() {
 
 	static const char *ioTimingMethods[] = { "Fast (lag on slow storage)", "Host (bugs, less lag)", "Simulate UMD delays" };
 	View *ioTimingMethod = systemSettings->Add(new PopupMultiChoice(&g_Config.iIOTimingMethod, sy->T("IO timing method"), ioTimingMethods, 0, ARRAY_SIZE(ioTimingMethods), sy->GetName(), screenManager()));
-	systemSettings->Add(new CheckBox(&g_Config.bForceLagSync, sy->T("Force real clock sync (slower, less lag)")));
+	systemSettings->Add(new CheckBox(&g_Config.bForceLagSync, sy->T("Force real clock sync (slower, less lag)")))->SetDisabledPtr(&g_Config.bAutoFrameSkip);
 	PopupSliderChoice *lockedMhz = systemSettings->Add(new PopupSliderChoice(&g_Config.iLockedCPUSpeed, 0, 1000, sy->T("Change CPU Clock", "Change CPU Clock (unstable)"), screenManager(), sy->T("MHz, 0:default")));
 	lockedMhz->OnChange.Add([&](UI::EventParams &) {
 		enableReportsCheckbox_->SetEnabled(Reporting::IsSupported());
@@ -1103,18 +1109,22 @@ if (!g_Config.bSimpleUI) {
 	static const char* buttonPref[] = { "Use O to confirm", "Use X to confirm" };
 	systemSettings->Add(new PopupMultiChoice(&g_Config.iButtonPreference, sy->T("Confirmation Button"), buttonPref, 0, 2, sy->GetName(), screenManager()));
 
+#if !defined(MOBILE_DEVICE) || PPSSPP_PLATFORM(ANDROID)
+	// Search
+	LinearLayout *searchSettings = AddTab("GameSettingsSearch", ms->T("Search"), true);
+
+	searchSettings->Add(new ItemHeader(se->T("Find settings")));
 	if (System_GetPropertyBool(SYSPROP_HAS_KEYBOARD)) {
-		// Search
-		LinearLayout* searchSettings = AddTab("GameSettingsSearch", ms->T("Search"), true);
-
-		searchSettings->Add(new ItemHeader(se->T("Find settings")));
 		searchSettings->Add(new ChoiceWithValueDisplay(&searchFilter_, se->T("Filter"), (const char*)nullptr))->OnClick.Handle(this, &GameSettingsScreen::OnChangeSearchFilter);
-		clearSearchChoice_ = searchSettings->Add(new Choice(se->T("Clear filter")));
-		clearSearchChoice_->OnClick.Handle(this, &GameSettingsScreen::OnClearSearchFilter);
-		noSearchResults_ = searchSettings->Add(new TextView(se->T("No settings matched '%1'"), new LinearLayoutParams(Margins(20, 5))));
-
-		ApplySearchFilter();
+	} else {
+		searchSettings->Add(new PopupTextInputChoice(&searchFilter_, se->T("Filter"), "", 64, screenManager()))->OnChange.Handle(this, &GameSettingsScreen::OnChangeSearchFilter);
 	}
+	clearSearchChoice_ = searchSettings->Add(new Choice(se->T("Clear filter")));
+	clearSearchChoice_->OnClick.Handle(this, &GameSettingsScreen::OnClearSearchFilter);
+	noSearchResults_ = searchSettings->Add(new TextView(se->T("No settings matched '%1'"), new LinearLayoutParams(Margins(20, 5))));
+
+	ApplySearchFilter();
+#endif
 }
 }
 
@@ -1300,7 +1310,13 @@ UI::EventReturn GameSettingsScreen::OnChangeBackground(UI::EventParams &e) {
 }
 
 UI::EventReturn GameSettingsScreen::OnFullscreenChange(UI::EventParams &e) {
-	System_SendMessage("toggle_fullscreen", g_Config.bFullScreen ? "1" : "0");
+	g_Config.iForceFullScreen = -1;
+	System_SendMessage("toggle_fullscreen", g_Config.UseFullScreen() ? "1" : "0");
+	return UI::EVENT_DONE;
+}
+
+UI::EventReturn GameSettingsScreen::OnFullscreenMultiChange(UI::EventParams &e) {
+	System_SendMessage("toggle_fullscreen", g_Config.UseFullScreen() ? "1" : "0");
 	return UI::EVENT_DONE;
 }
 
@@ -1751,6 +1767,9 @@ UI::EventReturn GameSettingsScreen::OnChangeSearchFilter(UI::EventParams &e) {
 			NativeMessageReceived("gameSettings_search", StripSpaces(value).c_str());
 		}
 	});
+#else
+	if (!System_GetPropertyBool(SYSPROP_HAS_KEYBOARD))
+		NativeMessageReceived("gameSettings_search", StripSpaces(searchFilter_).c_str());
 #endif
 	return UI::EVENT_DONE;
 }

@@ -374,9 +374,6 @@
     <ClInclude Include="GPU\ShaderTranslation.h">
       <Filter>GPU</Filter>
     </ClInclude>
-    <ClInclude Include="Data\Convert\ColorConvNEON.h">
-      <Filter>Data\Convert</Filter>
-    </ClInclude>
     <ClInclude Include="Data\Convert\ColorConv.h">
       <Filter>Data\Convert</Filter>
     </ClInclude>
@@ -413,6 +410,15 @@
       <Filter>GPU\Vulkan</Filter>
     </ClInclude>
     <ClInclude Include="GPU\Vulkan\VulkanProfiler.h">
+      <Filter>GPU\Vulkan</Filter>
+    </ClInclude>
+    <ClInclude Include="Thread\Barrier.h">
+      <Filter>Thread</Filter>
+    </ClInclude>
+    <ClInclude Include="Thread\Waitable.h">
+      <Filter>Thread</Filter>
+    </ClInclude>
+    <ClInclude Include="GPU\Vulkan\VulkanBarrier.h">
       <Filter>GPU\Vulkan</Filter>
     </ClInclude>
   </ItemGroup>
@@ -762,9 +768,6 @@
     <ClCompile Include="GPU\ShaderTranslation.cpp">
       <Filter>GPU</Filter>
     </ClCompile>
-    <ClCompile Include="Data\Convert\ColorConvNEON.cpp">
-      <Filter>Data\Convert</Filter>
-    </ClCompile>
     <ClCompile Include="Data\Convert\ColorConv.cpp">
       <Filter>Data\Convert</Filter>
     </ClCompile>
@@ -790,6 +793,9 @@
       <Filter>ext\vma</Filter>
     </ClCompile>
     <ClCompile Include="GPU\Vulkan\VulkanProfiler.cpp">
+      <Filter>GPU\Vulkan</Filter>
+    </ClCompile>
+    <ClCompile Include="GPU\Vulkan\VulkanBarrier.cpp">
       <Filter>GPU\Vulkan</Filter>
     </ClCompile>
   </ItemGroup>

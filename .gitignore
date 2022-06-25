@@ -51,6 +51,8 @@ UWP/.vs
 
 # For Mac
 .DS_Store
+PPSSPPSDL.app
+include/glslang/build_info.h
 
 # For ppsspp.ini, etc.
 ppsspp.ini
@@ -95,6 +97,8 @@ asciifont_atlas_luna.zim.png
 ppge_atlas_luna.zim.png
 local.properties
 r.sh
+Windows/compileData*
+Windows/*.ipch
 
 # For vim
 *.swp
@@ -130,3 +134,9 @@ ui_atlas_luna.zim
 /font_preview.png
 ppge_atlas_luna.meta
 ppge_atlas_luna.zim
+
+# CMake stuff
+CMakeFiles
+
+# Clangd 
+.cache/

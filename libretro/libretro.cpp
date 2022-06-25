@@ -34,6 +34,8 @@
 #include "Core/Host.h"
 #include "Core/MemMap.h"
 #include "Core/System.h"
+#include "Core/CoreTiming.h"
+#include "Core/HW/Display.h"
 
 #include "GPU/GPUState.h"
 #include "GPU/GPUInterface.h"
@@ -64,7 +66,22 @@
 // frames, or 3 seconds of runtime...
 #define AUDIO_FRAMES_MOVING_AVG_ALPHA (1.0f / 180.0f)
 
+// Calculated swap interval is 'stable' if the same
+// value is recorded for a number of retro_run()
+// calls equal to VSYNC_SWAP_INTERVAL_FRAMES
+#define VSYNC_SWAP_INTERVAL_FRAMES 6
+// Calculated swap interval is 'valid' if it is
+// within VSYNC_SWAP_INTERVAL_THRESHOLD of an integer
+// value
+#define VSYNC_SWAP_INTERVAL_THRESHOLD 0.05f
+// Swap interval detection is only enabled if the
+// core is running at 'normal' speed - i.e. if
+// run speed is within VSYNC_SWAP_INTERVAL_RUN_SPEED_THRESHOLD
+// percent of 100
+#define VSYNC_SWAP_INTERVAL_RUN_SPEED_THRESHOLD 5.0f
+
 static bool libretro_supports_bitmasks = false;
+static std::string changeProAdhocServer;
 
 namespace Libretro
 {
@@ -73,6 +90,139 @@ namespace Libretro
    static retro_audio_sample_batch_t audio_batch_cb;
    static retro_input_poll_t input_poll_cb;
    static retro_input_state_t input_state_cb;
+} // namespace Libretro
+
+namespace Libretro
+{
+   static bool detectVsyncSwapInterval = false;
+   static bool detectVsyncSwapIntervalOptShown = true;
+
+   static s64 expectedTimeUsPerRun = 0;
+   static uint32_t vsyncSwapInterval = 1;
+   static uint32_t vsyncSwapIntervalLast = 1;
+   static uint32_t vsyncSwapIntervalCounter = 0;
+   static int numVBlanksLast = 0;
+   static double fpsTimeLast = 0.0;
+   static float runSpeed = 0.0f;
+   static s64 runTicksLast = 0;
+
+   static void VsyncSwapIntervalReset()
+   {
+      expectedTimeUsPerRun = (s64)(1000000.0f / (60.0f / 1.001f));
+      vsyncSwapInterval = 1;
+      vsyncSwapIntervalLast = 1;
+      vsyncSwapIntervalCounter = 0;
+
+      numVBlanksLast = 0;
+      fpsTimeLast = 0.0;
+      runSpeed = 0.0f;
+      runTicksLast = 0;
+
+      detectVsyncSwapIntervalOptShown = true;
+   }
+
+   static void VsyncSwapIntervalDetect()
+   {
+      if (!detectVsyncSwapInterval)
+         return;
+
+      // All bets are off if core is running at
+      // the 'wrong' speed (i.e. cycle count for
+      // this run will be meaningless if internal
+      // frame rate is dropping below expected
+      // value, or fast forward is enabled)
+      double fpsTime = time_now_d();
+      int numVBlanks = __DisplayGetNumVblanks();
+      int frames = numVBlanks - numVBlanksLast;
+
+      if (frames >= VSYNC_SWAP_INTERVAL_FRAMES << 1)
+      {
+         double fps = (double)frames / (fpsTime - fpsTimeLast);
+         runSpeed = fps / ((60.0f / 1.001f) / 100.0f);
+
+         fpsTimeLast = fpsTime;
+         numVBlanksLast = numVBlanks;
+      }
+
+      float speedDelta = 100.0f - runSpeed;
+      speedDelta = (speedDelta < 0.0f) ? -speedDelta : speedDelta;
+
+      // Speed is measured relative to a 60 Hz refresh
+      // rate. If we are transitioning from a low internal
+      // frame rate to a higher internal frame rate, then
+      // 'full speed' may actually equate to
+      // (100 / current_swap_interval)...
+      if ((vsyncSwapInterval > 1) &&
+          (speedDelta >= VSYNC_SWAP_INTERVAL_RUN_SPEED_THRESHOLD))
+      {
+         speedDelta = 100.0f - (runSpeed * (float)vsyncSwapInterval);
+         speedDelta = (speedDelta < 0.0f) ? -speedDelta : speedDelta;
+      }
+
+      if (speedDelta >= VSYNC_SWAP_INTERVAL_RUN_SPEED_THRESHOLD)
+      {
+         // Swap interval detection is invalid - bail out
+         vsyncSwapIntervalCounter = 0;
+         return;
+      }
+
+      // Get elapsed time (us) for this run
+      s64 runTicks = CoreTiming::GetTicks();
+      s64 runTimeUs = cyclesToUs(runTicks - runTicksLast);
+
+      // Check if current internal frame rate is a
+      // factor of the default ~60 Hz
+      float swapRatio = (float)runTimeUs / (float)expectedTimeUsPerRun;
+      uint32_t swapInteger;
+      float swapRemainder;
+
+      // If internal frame rate is equal to (within threshold)
+      // or higher than the default ~60 Hz, fall back to a
+      // swap interval of 1
+      if (swapRatio < (1.0f + VSYNC_SWAP_INTERVAL_THRESHOLD))
+      {
+         swapInteger = 1;
+         swapRemainder = 0.0f;
+      }
+      else
+      {
+         swapInteger = (uint32_t)(swapRatio + 0.5f);
+         swapRemainder = swapRatio - (float)swapInteger;
+         swapRemainder = (swapRemainder < 0.0f) ?
+               -swapRemainder : swapRemainder;
+      }
+
+      // > Swap interval is considered 'valid' if it is
+      //   within VSYNC_SWAP_INTERVAL_THRESHOLD of an integer
+      //   value
+      // > If valid, check if new swap interval differs from
+      //   previously logged value
+      if ((swapRemainder <= VSYNC_SWAP_INTERVAL_THRESHOLD) &&
+          (swapInteger != vsyncSwapInterval))
+      {
+         vsyncSwapIntervalCounter =
+               (swapInteger == vsyncSwapIntervalLast) ?
+                     (vsyncSwapIntervalCounter + 1) : 0;
+
+         // Check whether swap interval is 'stable'
+         if (vsyncSwapIntervalCounter >= VSYNC_SWAP_INTERVAL_FRAMES)
+         {
+            vsyncSwapInterval = swapInteger;
+            vsyncSwapIntervalCounter = 0;
+
+            // Notify frontend
+            retro_system_av_info avInfo;
+            retro_get_system_av_info(&avInfo);
+            environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avInfo);
+         }
+
+         vsyncSwapIntervalLast = swapInteger;
+      }
+      else
+         vsyncSwapIntervalCounter = 0;
+
+      runTicksLast = runTicks;
+   }
 } // namespace Libretro
 
 namespace Libretro
@@ -167,14 +317,15 @@ namespace Libretro
 
    static void AudioUploadSamples()
    {
-      // - The core specifies a fixed frame rate of (60.0f / 1.001f)
-      //   and a fixed sample rate of 44100
-      // - This means the frontend expects exactly 735.735
-      //   sample frames per call of retro_run()
-      // - Provided that g_Config.bRenderDuplicateFrames is
-      //   force enabled and frameskip is disabled, the mean
-      //   of the buffer occupancy will approximate to this
-      //   value in most cases
+
+      // - If 'Detect Frame Rate Changes' is disabled, then
+      //   the  core specifies a fixed frame rate of (60.0f / 1.001f)
+      // - At the audio sample rate of 44100, this means the
+      //   frontend expects exactly 735.735 sample frames per call of
+      //   retro_run()
+      // - If g_Config.bRenderDuplicateFrames is enabled and
+      //   frameskip is disabled, the mean of the buffer occupancy
+      //   willapproximate to this value in most cases
       uint32_t framesAvailable = AudioBufferOccupancy();
 
       if (framesAvailable > 0)
@@ -341,12 +492,44 @@ template <typename T> class RetroOption
          return false;
       }
 
+      void Show(bool show)
+      {
+      struct retro_core_option_display optionDisplay{id_, show};
+      environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &optionDisplay);
+      }
+
+      void Set(const char *val)
+      {
+      struct retro_variable var{id_, val};
+      environ_cb(RETRO_ENVIRONMENT_SET_VARIABLE, &var);
+      }
+
    private:
       const char *id_;
       const char *name_;
       std::string options_;
       std::vector<std::pair<std::string, T>> list_;
 };
+
+#define MAC_INITIALIZER_LIST \
+{                            \
+   {"0", "0"},               \
+   {"1", "1"},               \
+   {"2", "2"},               \
+   {"3", "3"},               \
+   {"4", "4"},               \
+   {"5", "5"},               \
+   {"6", "6"},               \
+   {"7", "7"},               \
+   {"8", "8"},               \
+   {"9", "9"},               \
+   {"a", "a"},               \
+   {"b", "b"},               \
+   {"c", "c"},               \
+   {"d", "d"},               \
+   {"e", "e"},               \
+   {"f", "f"}                \
+}
 
 static RetroOption<CPUCore> ppsspp_cpu_core("ppsspp_cpu_core", "CPU Core", { { "JIT", CPUCore::JIT }, { "IR JIT", CPUCore::IR_JIT }, { "Interpreter", CPUCore::INTERPRETER } });
 static RetroOption<int> ppsspp_locked_cpu_speed("ppsspp_locked_cpu_speed", "Locked CPU Speed", { { "off", 0 }, { "222MHz", 222 }, { "266MHz", 266 }, { "333MHz", 333 } });
@@ -372,6 +555,8 @@ static RetroOption<bool> ppsspp_gpu_hardware_transform("ppsspp_gpu_hardware_tran
 static RetroOption<bool> ppsspp_vertex_cache("ppsspp_vertex_cache", "Vertex Cache (Speedhack)", false);
 static RetroOption<bool> ppsspp_cheats("ppsspp_cheats", "Internal Cheats Support", false);
 static RetroOption<IOTimingMethods> ppsspp_io_timing_method("ppsspp_io_timing_method", "IO Timing Method", { { "Fast", IOTimingMethods::IOTIMING_FAST }, { "Host", IOTimingMethods::IOTIMING_HOST }, { "Simulate UMD delays", IOTimingMethods::IOTIMING_REALISTIC } });
+static RetroOption<bool> ppsspp_frame_duplication("ppsspp_frame_duplication", "Duplicate Frames in 30 Hz Games", false);
+static RetroOption<bool> ppsspp_detect_vsync_swap_interval("ppsspp_detect_vsync_swap_interval", "Detect Frame Rate Changes (Notify Frontend)", false);
 static RetroOption<bool> ppsspp_software_skinning("ppsspp_software_skinning", "Software Skinning", true);
 static RetroOption<bool> ppsspp_ignore_bad_memory_access("ppsspp_ignore_bad_memory_access", "Ignore bad memory accesses", true);
 static RetroOption<bool> ppsspp_lazy_texture_caching("ppsspp_lazy_texture_caching", "Lazy texture caching (Speedup)", false);
@@ -379,9 +564,117 @@ static RetroOption<bool> ppsspp_retain_changed_textures("ppsspp_retain_changed_t
 static RetroOption<bool> ppsspp_force_lag_sync("ppsspp_force_lag_sync", "Force real clock sync (Slower, less lag)", false);
 static RetroOption<int> ppsspp_spline_quality("ppsspp_spline_quality", "Spline/Bezier curves quality", { {"Low", 0}, {"Medium", 1}, {"High", 2} });
 static RetroOption<bool> ppsspp_disable_slow_framebuffer_effects("ppsspp_disable_slow_framebuffer_effects", "Disable slower effects (Speedup)", false);
+static RetroOption<bool> ppsspp_enable_wlan("ppsspp_enable_wlan", "Enable Networking/WLAN (beta, may break games)", false);
+static RetroOption<std::string> ppsspp_change_mac_address[] = {
+    {"ppsspp_change_mac_address01", "MAC address Pt  1: X-:--:--:--:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address02", "MAC address Pt  2: -X:--:--:--:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address03", "MAC address Pt  3: --:X-:--:--:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address04", "MAC address Pt  4: --:-X:--:--:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address05", "MAC address Pt  5: --:--:X-:--:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address06", "MAC address Pt  6: --:--:-X:--:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address07", "MAC address Pt  7: --:--:--:X-:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address08", "MAC address Pt  8: --:--:--:-X:--:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address09", "MAC address Pt  9: --:--:--:--:X-:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address10", "MAC address Pt 10: --:--:--:--:-X:--", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address11", "MAC address Pt 11: --:--:--:--:--:X-", MAC_INITIALIZER_LIST},
+    {"ppsspp_change_mac_address12", "MAC address Pt 12: --:--:--:--:--:-X", MAC_INITIALIZER_LIST}
+};
+static RetroOption<int> ppsspp_wlan_channel("ppsspp_wlan_channel", "WLAN channel", {{"Auto", 0}, {"1", 1}, {"6", 6}, {"11", 11}} );
+static RetroOption<bool> ppsspp_enable_builtin_pro_ad_hoc_server("ppsspp_enable_builtin_pro_ad_hoc_server", "Enable built-in PRO ad hoc server", false);
+static RetroOption<std::string> ppsspp_change_pro_ad_hoc_server_address("ppsspp_change_pro_ad_hoc_server_address", "Change PRO ad hoc server IP address (localhost = multiple instances)", {
+    {"socom.cc", "socom.cc"},
+    {"myneighborsushicat.com", "myneighborsushicat.com"},
+    {"localhost", "localhost"},
+    {"IP address", "IP address"}
+});
+static RetroOption<int> ppsspp_pro_ad_hoc_ipv4[] = {
+   {"ppsspp_pro_ad_hoc_server_address01", "PRO ad hoc server IP address Pt  1: x--.---.---.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address02", "PRO ad hoc server IP address Pt  2: -x-.---.---.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address03", "PRO ad hoc server IP address Pt  3: --x.---.---.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address04", "PRO ad hoc server IP address Pt  4: ---.x--.---.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address05", "PRO ad hoc server IP address Pt  5: ---.-x-.---.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address06", "PRO ad hoc server IP address Pt  6: ---.--x.---.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address07", "PRO ad hoc server IP address Pt  7: ---.---.x--.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address08", "PRO ad hoc server IP address Pt  8: ---.---.-x-.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address09", "PRO ad hoc server IP address Pt  9: ---.---.--x.--- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address10", "PRO ad hoc server IP address Pt 10: ---.---.---.x-- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address11", "PRO ad hoc server IP address Pt 11: ---.---.---.-x- ", 0, 10, 1},
+   {"ppsspp_pro_ad_hoc_server_address12", "PRO ad hoc server IP address Pt 12: ---.---.---.--x ", 0, 10, 1}
+};
+static RetroOption<bool> ppsspp_enable_upnp("ppsspp_enable_upnp", "Enable UPnP (need a few seconds to detect)", false);
+static RetroOption<bool> ppsspp_upnp_use_original_port("ppsspp_upnp_use_original_port", "UPnP use original port (enabled = PSP compatibility)", true);
+static RetroOption<int> ppsspp_port_offset("ppsspp_port_offset", "Port offset (0 = PSP compatibility)", 0, 65001, 1000);
+static RetroOption<int> ppsspp_minimum_timeout("ppsspp_minimum timeout", "Minimum timeout (override in ms, 0 = default))", 0, 5001, 100);
+static RetroOption<bool> ppsspp_forced_first_connect("ppsspp_forced_first_connect", "Forced first connect (faster connect)", false);
+
+static bool set_variable_visibility(void)
+{
+   bool updated = false;
+
+   if (ppsspp_change_pro_ad_hoc_server_address.Update(&changeProAdhocServer))
+       updated = true;
+
+   if (changeProAdhocServer == "IP address")
+   {
+      g_Config.proAdhocServer = "";
+      for (int i = 0;;)
+      {
+         int addressPt = 0;
+         ppsspp_pro_ad_hoc_ipv4[i].Show(true);
+         ppsspp_pro_ad_hoc_ipv4[i].Update(&addressPt);
+         g_Config.proAdhocServer += static_cast<char>('0' + addressPt);
+
+         if (++i == 12)
+            break;
+
+         if (i % 3 == 0)
+            g_Config.proAdhocServer += '.';
+      }
+   }
+   else
+   {
+      g_Config.proAdhocServer = changeProAdhocServer;
+
+      for (int i = 0; i < 12; ++i)
+         ppsspp_pro_ad_hoc_ipv4[i].Show(false);
+   }
+
+   if (ppsspp_enable_upnp.Update(&g_Config.bEnableUPnP))
+      updated = true;
+
+   ppsspp_upnp_use_original_port.Show(g_Config.bEnableUPnP);
+
+   bool detectVsyncSwapIntervalOptShownLast = detectVsyncSwapIntervalOptShown;
+   bool autoFrameSkip = false;
+   int frameSkip = 0;
+   bool renderDuplicateFrames = false;
+
+   ppsspp_auto_frameskip.Update(&autoFrameSkip);
+   ppsspp_frameskip.Update(&frameSkip);
+   ppsspp_frame_duplication.Update(&renderDuplicateFrames);
+
+   detectVsyncSwapIntervalOptShown =
+         !autoFrameSkip &&
+         (frameSkip == 0) &&
+         !renderDuplicateFrames;
+
+   if (detectVsyncSwapIntervalOptShown != detectVsyncSwapIntervalOptShownLast)
+   {
+      ppsspp_detect_vsync_swap_interval.Show(detectVsyncSwapIntervalOptShown);
+      updated = true;
+   }
+
+   return updated;
+}
 
 void retro_set_environment(retro_environment_t cb)
 {
+   environ_cb = cb;
+
+   struct retro_core_options_update_display_callback update_display_cb;
+   update_display_cb.callback = set_variable_visibility;
+   environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK, &update_display_cb);
+
    std::vector<retro_variable> vars;
    vars.push_back(ppsspp_internal_resolution.GetOptions());
    vars.push_back(ppsspp_cpu_core.GetOptions());
@@ -395,6 +688,8 @@ void retro_set_environment(retro_environment_t cb)
    vars.push_back(ppsspp_auto_frameskip.GetOptions());
    vars.push_back(ppsspp_frameskip.GetOptions());
    vars.push_back(ppsspp_frameskiptype.GetOptions());
+   vars.push_back(ppsspp_frame_duplication.GetOptions());
+   vars.push_back(ppsspp_detect_vsync_swap_interval.GetOptions());
    vars.push_back(ppsspp_vertex_cache.GetOptions());
    vars.push_back(ppsspp_fast_memory.GetOptions());
    vars.push_back(ppsspp_block_transfer_gpu.GetOptions());
@@ -414,11 +709,22 @@ void retro_set_environment(retro_environment_t cb)
    vars.push_back(ppsspp_io_timing_method.GetOptions());
    vars.push_back(ppsspp_ignore_bad_memory_access.GetOptions());
    vars.push_back(ppsspp_cheats.GetOptions());
+   vars.push_back(ppsspp_enable_wlan.GetOptions());
+   for (int i = 0; i < 12; ++i)
+      vars.push_back(ppsspp_change_mac_address[i].GetOptions());
+   vars.push_back(ppsspp_wlan_channel.GetOptions());
+   vars.push_back(ppsspp_enable_builtin_pro_ad_hoc_server.GetOptions());
+   vars.push_back(ppsspp_change_pro_ad_hoc_server_address.GetOptions());
+   for (int i = 0; i < 12; ++i)
+      vars.push_back(ppsspp_pro_ad_hoc_ipv4[i].GetOptions());
+   vars.push_back(ppsspp_enable_upnp.GetOptions());
+   vars.push_back(ppsspp_upnp_use_original_port.GetOptions());
+   vars.push_back(ppsspp_port_offset.GetOptions());
+   vars.push_back(ppsspp_minimum_timeout.GetOptions());
+   vars.push_back(ppsspp_forced_first_connect.GetOptions());
    vars.push_back({});
 
-   environ_cb = cb;
-
-   cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars.data());
+   environ_cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars.data());
 }
 
 static int get_language_auto(void)
@@ -516,6 +822,8 @@ static void check_variables(CoreParameter &coreParam)
    ppsspp_cpu_core.Update((CPUCore *)&g_Config.iCpuCore);
    ppsspp_io_timing_method.Update((IOTimingMethods *)&g_Config.iIOTimingMethod);
    ppsspp_lower_resolution_for_effects.Update(&g_Config.iBloomHack);
+   ppsspp_frame_duplication.Update(&g_Config.bRenderDuplicateFrames);
+   ppsspp_detect_vsync_swap_interval.Update(&detectVsyncSwapInterval);
    ppsspp_software_skinning.Update(&g_Config.bSoftwareSkinning);
    ppsspp_ignore_bad_memory_access.Update(&g_Config.bIgnoreBadMemAccess);
    ppsspp_lazy_texture_caching.Update(&g_Config.bTextureBackoffCache);
@@ -527,7 +835,7 @@ static void check_variables(CoreParameter &coreParam)
    const bool do_scaling_type_update = ppsspp_texture_scaling_type.Update(&g_Config.iTexScalingType);
    const bool do_scaling_level_update = ppsspp_texture_scaling_level.Update(&g_Config.iTexScalingLevel);
    const bool do_texture_shader_update = ppsspp_texture_shader.Update(&g_Config.sTextureShaderName);
-   
+
    g_Config.bTexHardwareScaling = "Off" != g_Config.sTextureShaderName;
    
    if (gpu && (do_scaling_type_update || do_scaling_level_update || do_texture_shader_update))
@@ -543,6 +851,21 @@ static void check_variables(CoreParameter &coreParam)
    g_Config.sLanguageIni = map_psp_language_to_i18n_locale(g_Config.iLanguage);
    i18nrepo.LoadIni(g_Config.sLanguageIni);
 
+   // Cannot detect refresh rate changes if:
+   // > Frame skipping is enabled
+   // > Frame duplication is enabled
+   detectVsyncSwapInterval &=
+         !g_Config.bAutoFrameSkip &&
+         (g_Config.iFrameSkip == 0) &&
+         !g_Config.bRenderDuplicateFrames;
+
+   bool updateAvInfo = false;
+   if (!detectVsyncSwapInterval && (vsyncSwapInterval != 1))
+   {
+      vsyncSwapInterval = 1;
+      updateAvInfo = true;
+   }
+
    if (ppsspp_internal_resolution.Update(&g_Config.iInternalResolution) && !PSP_IsInited())
    {
       coreParam.pixelWidth  = coreParam.renderWidth  = g_Config.iInternalResolution * 480;
@@ -550,15 +873,59 @@ static void check_variables(CoreParameter &coreParam)
 
       if (gpu)
       {
-         retro_system_av_info av_info;
-         retro_get_system_av_info(&av_info);
-         environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av_info);
+         retro_system_av_info avInfo;
+         retro_get_system_av_info(&avInfo);
+         environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avInfo);
+         updateAvInfo = false;
          gpu->Resized();
       }
    }
 
+   if (updateAvInfo)
+   {
+      retro_system_av_info avInfo;
+      retro_get_system_av_info(&avInfo);
+      environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avInfo);
+   }
+
    bool isFastForwarding = environ_cb(RETRO_ENVIRONMENT_GET_FASTFORWARDING, &isFastForwarding);
    coreParam.fastForward = isFastForwarding;
+
+   ppsspp_enable_wlan.Update(&g_Config.bEnableWlan);
+   ppsspp_wlan_channel.Update(&g_Config.iWlanAdhocChannel);
+   ppsspp_enable_builtin_pro_ad_hoc_server.Update(&g_Config.bEnableAdhocServer);
+
+   ppsspp_upnp_use_original_port.Update(&g_Config.bUPnPUseOriginalPort);
+   ppsspp_port_offset.Update(&g_Config.iPortOffset);
+   ppsspp_minimum_timeout.Update(&g_Config.iMinTimeout);
+   ppsspp_forced_first_connect.Update(&g_Config.bForcedFirstConnect);
+
+   g_Config.sMACAddress = "";
+   for (int i = 0; i < 12;)
+   {
+      std::string digit;
+      ppsspp_change_mac_address[i].Update(&digit);
+      g_Config.sMACAddress += digit;
+
+      if (++i == 12)
+         break;
+
+      if (i % 2 == 0)
+          g_Config.sMACAddress += ":";
+   }
+
+   if (g_Config.sMACAddress == "00:00:00:00:00:00")
+   {
+      g_Config.sMACAddress = CreateRandMAC();
+
+      for (int i = 0; i < 12; ++i)
+      {
+         std::string digit = {g_Config.sMACAddress[i + i / 2]};
+         ppsspp_change_mac_address[i].Set(digit.c_str());
+      }
+   }
+
+   set_variable_visibility();
 }
 
 void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { audio_batch_cb = cb; }
@@ -568,6 +935,7 @@ void retro_set_input_state(retro_input_state_t cb) { input_state_cb = cb; }
 
 void retro_init(void)
 {
+   VsyncSwapIntervalReset();
    AudioBufferInit();
 
    g_threadManager.Init(cpu_info.num_cores, cpu_info.logical_cpu_count);
@@ -611,8 +979,6 @@ void retro_init(void)
 
    g_Config.Load("", "");
    g_Config.iInternalResolution = 0;
-   g_Config.sMACAddress = "12:34:56:78:9A:BC";
-   g_Config.bRenderDuplicateFrames = true;
 
    const char* nickname = NULL;
    if (environ_cb(RETRO_ENVIRONMENT_GET_USERNAME, &nickname) && nickname)
@@ -634,6 +1000,8 @@ void retro_init(void)
    g_Config.memStickDirectory = retro_save_dir;
    g_Config.flash0Directory = retro_base_dir / "flash0";
    g_Config.internalDataDirectory = retro_base_dir;
+   g_Config.bEnableNetworkChat = false;
+   g_Config.bDiscordPresence = false;
 
    VFSRegister("", new DirectoryAssetReader(retro_base_dir));
 
@@ -653,6 +1021,7 @@ void retro_deinit(void)
 
    libretro_supports_bitmasks = false;
 
+   VsyncSwapIntervalReset();
    AudioBufferDeinit();
 }
 
@@ -674,7 +1043,7 @@ void retro_get_system_info(struct retro_system_info *info)
 void retro_get_system_av_info(struct retro_system_av_info *info)
 {
    *info = {};
-   info->timing.fps            = 60.0f / 1.001f;
+   info->timing.fps            = (60.0 / 1.001) / (double)vsyncSwapInterval;
    info->timing.sample_rate    = SAMPLERATE;
 
    info->geometry.base_width   = g_Config.iInternalResolution * 480;
@@ -819,6 +1188,8 @@ bool retro_load_game(const struct retro_game_info *game)
       return false;
    }
 
+   set_variable_visibility();
+
    return true;
 }
 
@@ -932,6 +1303,7 @@ void retro_run(void)
       if(   emuThreadState == EmuThreadState::PAUSED ||
             emuThreadState == EmuThreadState::PAUSE_REQUESTED)
       {
+         VsyncSwapIntervalDetect();
          AudioUploadSamples();
          ctx->SwapBuffers();
          return;
@@ -942,6 +1314,7 @@ void retro_run(void)
 
       if (!ctx->ThreadFrame())
       {
+         VsyncSwapIntervalDetect();
          AudioUploadSamples();
          return;
       }
@@ -949,6 +1322,7 @@ void retro_run(void)
    else
       EmuFrame();
 
+   VsyncSwapIntervalDetect();
    AudioUploadSamples();
    ctx->SwapBuffers();
 }
@@ -1076,7 +1450,11 @@ float System_GetPropertyFloat(SystemProperty prop)
    switch (prop)
    {
       case SYSPROP_DISPLAY_REFRESH_RATE:
-         return 60.f;
+         // Have to lie here and report 60 Hz instead
+         // of (60.0 / 1.001), otherwise the internal
+         // stereo resampler will output at the wrong
+         // frequency...
+         return 60.0f;
       case SYSPROP_DISPLAY_SAFE_INSET_LEFT:
       case SYSPROP_DISPLAY_SAFE_INSET_RIGHT:
       case SYSPROP_DISPLAY_SAFE_INSET_TOP:

@@ -125,22 +125,17 @@ void DrawEngineDX9::ApplyDrawState(int prim) {
 			bool alphaMask = gstate.isClearModeAlphaMask();
 			dxstate.colorMask.set(colorMask, colorMask, colorMask, alphaMask);
 		} else {
-			// Set blend - unless we need to do it in the shader.
-			GenericBlendState blendState;
-			ConvertBlendState(blendState, gstate_c.allowFramebufferRead);
-
 			GenericMaskState maskState;
 			ConvertMaskState(maskState, gstate_c.allowFramebufferRead);
 
+			// Set blend - unless we need to do it in the shader.
+			GenericBlendState blendState;
+			ConvertBlendState(blendState, gstate_c.allowFramebufferRead, maskState.applyFramebufferRead);
+
 			if (blendState.applyFramebufferRead || maskState.applyFramebufferRead) {
-				if (ApplyFramebufferRead(&fboTexNeedsBind_)) {
-					// The shader takes over the responsibility for blending, so recompute.
-					ApplyStencilReplaceAndLogicOpIgnoreBlend(blendState.replaceAlphaWithStencil, blendState);
-				} else {
-					// Until next time, force it off.
-					ResetFramebufferRead();
-					gstate_c.SetAllowFramebufferRead(false);
-				}
+				ApplyFramebufferRead(&fboTexNeedsBind_);
+				// The shader takes over the responsibility for blending, so recompute.
+				ApplyStencilReplaceAndLogicOpIgnoreBlend(blendState.replaceAlphaWithStencil, blendState);
 				gstate_c.Dirty(DIRTY_FRAGMENTSHADER_STATE);
 			} else if (blendState.resetFramebufferRead) {
 				ResetFramebufferRead();

@@ -130,11 +130,6 @@
 #include "android/jni/app-android.h"
 #endif
 
-// The new UI framework, for initialization
-
-static Atlas g_ui_atlas;
-static Atlas g_font_atlas;
-
 #if PPSSPP_ARCH(ARM) && defined(__ANDROID__)
 #include "../../android/jni/ArmEmitterTest.h"
 #elif PPSSPP_ARCH(ARM64) && defined(__ANDROID__)
@@ -464,10 +459,8 @@ void NativeInit(int argc, const char *argv[], const char *savegame_dir, const ch
 
 	ShaderTranslationInit();
 
-	InitFastMath(cpu_info.bNEON);
+	InitFastMath();
 	g_threadManager.Init(cpu_info.num_cores, cpu_info.logical_cpu_count);
-
-	SetupAudioFormats();
 
 	g_Discord.SetPresenceMenu();
 
@@ -679,11 +672,11 @@ void NativeInit(int argc, const char *argv[], const char *savegame_dir, const ch
 				if (!strncmp(argv[i], "--pause-menu-exit", strlen("--pause-menu-exit")))
 					g_Config.bPauseMenuExitsEmulator = true;
 				if (!strcmp(argv[i], "--fullscreen")) {
-					g_Config.bFullScreen = true;
+					g_Config.iForceFullScreen = 1;
 					System_SendMessage("toggle_fullscreen", "1");
 				}
 				if (!strcmp(argv[i], "--windowed")) {
-					g_Config.bFullScreen = false;
+					g_Config.iForceFullScreen = 0;
 					System_SendMessage("toggle_fullscreen", "0");
 				}
 				if (!strcmp(argv[i], "--touchscreentest"))
@@ -777,7 +770,7 @@ void NativeInit(int argc, const char *argv[], const char *savegame_dir, const ch
 		// Just gonna force it to the IR interpreter on startup.
 		// We don't hide the option, but we make sure it's off on bootup. In case someone wants
 		// to experiment in future iOS versions or something...
-		g_Config.iCpuCore = (int)CPUCore::IR_JIT;
+		jitForcedOff = true;
 	}
 
 	auto des = GetI18NCategory("DesktopUI");
@@ -856,7 +849,7 @@ void NativeInit(int argc, const char *argv[], const char *savegame_dir, const ch
 	isOuya = KeyMap::IsOuya(sysName);
 
 #if !defined(MOBILE_DEVICE) && defined(USING_QT_UI)
-	MainWindow *mainWindow = new MainWindow(nullptr, g_Config.bFullScreen);
+	MainWindow *mainWindow = new MainWindow(nullptr, g_Config.UseFullScreen());
 	mainWindow->show();
 	if (host == nullptr) {
 		host = new QtHost(mainWindow);
@@ -876,22 +869,6 @@ void NativeInit(int argc, const char *argv[], const char *savegame_dir, const ch
 void RenderOverlays(UIContext *dc, void *userdata);
 bool CreateGlobalPipelines();
 
-static void LoadAtlasMetadata(Atlas &metadata, const char *filename, bool required) {
-	size_t atlas_data_size = 0;
-	if (!metadata.IsMetadataLoaded()) {
-		const uint8_t *atlas_data = VFSReadFile(filename, &atlas_data_size);
-		bool load_success = atlas_data != nullptr && metadata.Load(atlas_data, atlas_data_size);
-		if (!load_success) {
-			if (required)
-				ERROR_LOG(G3D, "Failed to load %s - graphics will be broken", filename);
-			else
-				WARN_LOG(G3D, "Failed to load %s", filename);
-			// Stumble along with broken visuals instead of dying...
-		}
-		delete[] atlas_data;
-	}
-}
-
 bool NativeInitGraphics(GraphicsContext *graphicsContext) {
 	INFO_LOG(SYSTEM, "NativeInitGraphics");
 
@@ -906,22 +883,14 @@ bool NativeInitGraphics(GraphicsContext *graphicsContext) {
 		return false;
 	}
 
-	// Load any missing atlas metadata (the images are loaded from UIContext).
-	LoadAtlasMetadata(g_ui_atlas, "ui_atlas_luna.meta", true);
-#if !(PPSSPP_PLATFORM(WINDOWS) || PPSSPP_PLATFORM(ANDROID))
-	LoadAtlasMetadata(g_font_atlas, "font_atlas_luna.meta", g_ui_atlas.num_fonts == 0);
-#else
-	LoadAtlasMetadata(g_font_atlas, "asciifont_atlas_luna.meta", g_ui_atlas.num_fonts == 0);
-#endif
+	ui_draw2d.SetAtlas(GetUIAtlas());
+	ui_draw2d.SetFontAtlas(GetFontAtlas());
+	ui_draw2d_front.SetAtlas(GetUIAtlas());
+	ui_draw2d_front.SetFontAtlas(GetFontAtlas());
 
-	ui_draw2d.SetAtlas(&g_ui_atlas);
-	ui_draw2d.SetFontAtlas(&g_font_atlas);
-	ui_draw2d_front.SetAtlas(&g_ui_atlas);
-	ui_draw2d_front.SetFontAtlas(&g_font_atlas);
-
-	UpdateTheme();
 	uiContext = new UIContext();
 	uiContext->theme = GetTheme();
+	UpdateTheme(uiContext);
 
 	ui_draw2d.Init(g_draw, texColorPipeline);
 	ui_draw2d_front.Init(g_draw, texColorPipeline);
@@ -1496,6 +1465,12 @@ void NativeShutdown() {
 	g_Config.Save("NativeShutdown");
 
 	INFO_LOG(SYSTEM, "NativeShutdown called");
+
+	for (auto &cat : GetI18NMissingKeys()) {
+		for (auto &key : cat.second) {
+			INFO_LOG(SYSTEM, "Missing translation [%s]: %s", cat.first.c_str(), key.c_str());
+		}
+	}
 
 	ShutdownWebServer();
 

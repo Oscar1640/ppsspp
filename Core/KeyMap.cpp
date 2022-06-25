@@ -81,6 +81,7 @@ void UpdateNativeMenuKeys() {
 	const KeyDef hardcodedConfirmKeys[] = {
 		KeyDef(DEVICE_ID_KEYBOARD, NKCODE_SPACE),
 		KeyDef(DEVICE_ID_KEYBOARD, NKCODE_ENTER),
+		KeyDef(DEVICE_ID_KEYBOARD, NKCODE_NUMPAD_ENTER),
 		KeyDef(DEVICE_ID_ANY, NKCODE_BUTTON_A),
 		KeyDef(DEVICE_ID_PAD_0, NKCODE_DPAD_CENTER),  // A number of Android devices.
 	};
@@ -395,6 +396,11 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_ANALOG_ROTATE_CW, "Rotate Analog (CW)"},
 	{VIRTKEY_ANALOG_ROTATE_CCW, "Rotate Analog (CCW)"},
 
+	{VIRTKEY_SCREEN_ROTATION_VERTICAL, "Display Portrait"},
+	{VIRTKEY_SCREEN_ROTATION_VERTICAL180, "Display Portrait Reversed"},
+	{VIRTKEY_SCREEN_ROTATION_HORIZONTAL, "Display Landscape"},
+	{VIRTKEY_SCREEN_ROTATION_HORIZONTAL180, "Display Landscape Reversed"},
+
 	{CTRL_HOME, "Home"},
 	{CTRL_HOLD, "Hold"},
 	{CTRL_WLAN, "Wlan"},
@@ -599,7 +605,7 @@ bool IsKeyMapped(int device, int key) {
 
 bool ReplaceSingleKeyMapping(int btn, int index, KeyDef key) {
 	// Check for duplicate
-	for (int i = 0; i < g_controllerMap[btn].size(); ++i) {
+	for (int i = 0; i < (int)g_controllerMap[btn].size(); ++i) {
 		if (i != index && g_controllerMap[btn][i] == key) {
 			g_controllerMap[btn].erase(g_controllerMap[btn].begin()+index);
 			g_controllerMapGeneration++;
@@ -650,6 +656,8 @@ void RestoreDefault() {
 	SetDefaultKeyMap(DEFAULT_MAPPING_PAD, false);
 #elif PPSSPP_PLATFORM(ANDROID)
 	// Autodetect a few common (and less common) devices
+	// Note that here we check the device name, not the controller name. We don't get
+	// the controller name until a button has been pressed so can't use it to set defaults.
 	std::string name = System_GetProperty(SYSPROP_NAME);
 	if (IsNvidiaShield(name)) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_SHIELD, false);
@@ -658,10 +666,10 @@ void RestoreDefault() {
 	} else if (IsXperiaPlay(name)) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_XPERIA_PLAY, false);
 	} else if (IsMOQII7S(name)) {
-		INFO_LOG(SYSTEM, "MOQI pad map");
 		SetDefaultKeyMap(DEFAULT_MAPPING_MOQI_I7S, false);
+	} else if (IsRetroid(name)) {
+		SetDefaultKeyMap(DEFAULT_MAPPING_RETRO_STATION_CONTROLLER, false);
 	} else {
-		INFO_LOG(SYSTEM, "Default pad map");
 		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_PAD, false);
 	}
 #else
@@ -732,6 +740,12 @@ bool IsNvidiaShield(const std::string &name) {
 	return name == "NVIDIA:SHIELD";
 }
 
+bool IsRetroid(const std::string &name) {
+	// TODO: Not sure if there are differences between different Retroid devices.
+	// The one I have is a "Retroid Pocket 2+".
+	return startsWith(name, "Retroid:");
+}
+
 bool IsNvidiaShieldTV(const std::string &name) {
 	return name == "NVIDIA:SHIELD Android TV";
 }
@@ -745,7 +759,7 @@ bool IsMOQII7S(const std::string &name) {
 }
 
 bool HasBuiltinController(const std::string &name) {
-	return IsOuya(name) || IsXperiaPlay(name) || IsNvidiaShield(name) || IsMOQII7S(name);
+	return IsOuya(name) || IsXperiaPlay(name) || IsNvidiaShield(name) || IsMOQII7S(name) || IsRetroid(name);
 }
 
 void NotifyPadConnected(const std::string &name) {
@@ -760,8 +774,8 @@ void AutoConfForPad(const std::string &name) {
 #if PPSSPP_PLATFORM(ANDROID)
 	if (name.find("Xbox") != std::string::npos) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_XBOX, false);
-	} else {
-		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_PAD, false);
+	} else if (name == "Retro Station Controller") {
+		SetDefaultKeyMap(DEFAULT_MAPPING_RETRO_STATION_CONTROLLER, false);
 	}
 #else
 	// TODO: Should actually check for XInput?

@@ -17,55 +17,32 @@
 
 #pragma once
 
+#include "ppsspp_config.h"
+
+#include "Common/Common.h"
+#include "Common/Swap.h"
+#include "Core/MemMap.h"
+#include "Core/ConfigValues.h"
+#include "GPU/ge_constants.h"
+#include "GPU/GPUState.h"
+
 enum CheckAlphaResult {
 	// These are intended to line up with TexCacheEntry::STATUS_ALPHA_UNKNOWN, etc.
 	CHECKALPHA_FULL = 0,
 	CHECKALPHA_ANY = 4,
 };
 
-#include "ppsspp_config.h"
-#include "Common/Common.h"
-#include "Common/Swap.h"
-#include "Core/MemMap.h"
-#include "Core/ConfigValues.h"
-#include "GPU/ge_constants.h"
-#include "GPU/Common/TextureDecoderNEON.h"
-#include "GPU/GPUState.h"
-
-void SetupTextureDecoder();
-
-// Pitch must be aligned to 16 bits (as is the case on a PSP)
+// For both of these, pitch must be aligned to 16 bits (as is the case on a PSP).
 void DoSwizzleTex16(const u32 *ysrcp, u8 *texptr, int bxc, int byc, u32 pitch);
+void DoUnswizzleTex16(const u8 *texptr, u32 *ydestp, int bxc, int byc, u32 pitch);
 
-// For SSE, we statically link the SSE2 algorithms.
-#if defined(_M_SSE)
-u32 QuickTexHashSSE2(const void *checkp, u32 size);
-#define DoQuickTexHash QuickTexHashSSE2
-#define StableQuickTexHash QuickTexHashSSE2
+u32 StableQuickTexHash(const void *checkp, u32 size);
 
-// Pitch must be aligned to 16 bytes (as is the case on a PSP)
-void DoUnswizzleTex16Basic(const u8 *texptr, u32 *ydestp, int bxc, int byc, u32 pitch);
-#define DoUnswizzleTex16 DoUnswizzleTex16Basic
-
-// For ARM64, NEON is mandatory, so we also statically link.
-#elif PPSSPP_ARCH(ARM64)
-#define DoQuickTexHash QuickTexHashNEON
-#define StableQuickTexHash QuickTexHashNEON
-#define DoUnswizzleTex16 DoUnswizzleTex16NEON
-#else
-typedef u32 (*QuickTexHashFunc)(const void *checkp, u32 size);
-extern QuickTexHashFunc DoQuickTexHash;
-extern QuickTexHashFunc StableQuickTexHash;
-
-typedef void (*UnswizzleTex16Func)(const u8 *texptr, u32 *ydestp, int bxc, int byc, u32 pitch);
-extern UnswizzleTex16Func DoUnswizzleTex16;
-#endif
-
-CheckAlphaResult CheckAlphaRGBA8888Basic(const u32 *pixelData, int stride, int w, int h);
-CheckAlphaResult CheckAlphaABGR4444Basic(const u32 *pixelData, int stride, int w, int h);
-CheckAlphaResult CheckAlphaRGBA4444Basic(const u32 *pixelData, int stride, int w, int h);
-CheckAlphaResult CheckAlphaABGR1555Basic(const u32 *pixelData, int stride, int w, int h);
-CheckAlphaResult CheckAlphaRGBA5551Basic(const u32 *pixelData, int stride, int w, int h);
+// outMask is an in/out parameter.
+void CopyAndSumMask16(u16 *dst, const u16 *src, int width, u32 *outMask);
+void CopyAndSumMask32(u32 *dst, const u32 *src, int width, u32 *outMask);
+void CheckMask16(const u16 *src, int width, u32 *outMask);
+void CheckMask32(const u32 *src, int width, u32 *outMask);
 
 // All these DXT structs are in the reverse order, as compared to PC.
 // On PC, alpha comes before color, and interpolants are before the tile data.
@@ -88,7 +65,7 @@ struct DXT5Block {
 	u8 alpha1; u8 alpha2;
 };
 
-void DecodeDXT1Block(u32 *dst, const DXT1Block *src, int pitch, int height, bool ignore1bitAlpha);
+void DecodeDXT1Block(u32 *dst, const DXT1Block *src, int pitch, int height, u32 *alpha);
 void DecodeDXT3Block(u32 *dst, const DXT3Block *src, int pitch, int height);
 void DecodeDXT5Block(u32 *dst, const DXT5Block *src, int pitch, int height);
 
@@ -117,52 +94,95 @@ static const u8 textureBitsPerPixel[16] = {
 
 u32 GetTextureBufw(int level, u32 texaddr, GETextureFormat format);
 
+inline bool AlphaSumIsFull(u32 alphaSum, u32 fullAlphaMask) {
+	return fullAlphaMask != 0 && (alphaSum & fullAlphaMask) == fullAlphaMask;
+}
+
+inline CheckAlphaResult CheckAlpha16(const u16 *pixelData, int width, u32 fullAlphaMask) {
+	u32 alphaSum = 0xFFFFFFFF;
+	CheckMask16(pixelData, width, &alphaSum);
+	return AlphaSumIsFull(alphaSum, fullAlphaMask) ? CHECKALPHA_FULL : CHECKALPHA_ANY;
+}
+
+inline CheckAlphaResult CheckAlpha32(const u32 *pixelData, int width, u32 fullAlphaMask) {
+	u32 alphaSum = 0xFFFFFFFF;
+	CheckMask32(pixelData, width, &alphaSum);
+	return AlphaSumIsFull(alphaSum, fullAlphaMask) ? CHECKALPHA_FULL : CHECKALPHA_ANY;
+}
+
+inline CheckAlphaResult CheckAlpha32Rect(const u32 *pixelData, int stride, int width, int height, u32 fullAlphaMask) {
+	u32 alphaSum = 0xFFFFFFFF;
+	for (int y = 0; y < height; y++) {
+		CheckMask32(pixelData + stride * y, width, &alphaSum);
+	}
+	return AlphaSumIsFull(alphaSum, fullAlphaMask) ? CHECKALPHA_FULL : CHECKALPHA_ANY;
+}
+
 template <typename IndexT, typename ClutT>
-inline void DeIndexTexture(ClutT *dest, const IndexT *indexed, int length, const ClutT *clut) {
+inline void DeIndexTexture(/*WRITEONLY*/ ClutT *dest, const IndexT *indexed, int length, const ClutT *clut, u32 *outAlphaSum) {
 	// Usually, there is no special offset, mask, or shift.
 	const bool nakedIndex = gstate.isClutIndexSimple();
+
+	ClutT alphaSum = (ClutT)(-1);
 
 	if (nakedIndex) {
 		if (sizeof(IndexT) == 1) {
 			for (int i = 0; i < length; ++i) {
-				*dest++ = clut[*indexed++];
+				ClutT color = clut[*indexed++];
+				alphaSum &= color;
+				*dest++ = color;
 			}
 		} else {
 			for (int i = 0; i < length; ++i) {
-				*dest++ = clut[(*indexed++) & 0xFF];
+				ClutT color = clut[(*indexed++) & 0xFF];
+				alphaSum &= color;
+				*dest++ = color;
 			}
 		}
 	} else {
 		for (int i = 0; i < length; ++i) {
-			*dest++ = clut[gstate.transformClutIndex(*indexed++)];
+			ClutT color = clut[gstate.transformClutIndex(*indexed++)];
+			alphaSum &= color;
+			*dest++ = color;
 		}
 	}
+
+	*outAlphaSum &= (u32)alphaSum;
 }
 
 template <typename IndexT, typename ClutT>
-inline void DeIndexTexture(ClutT *dest, const u32 texaddr, int length, const ClutT *clut) {
+inline void DeIndexTexture(/*WRITEONLY*/ ClutT *dest, const u32 texaddr, int length, const ClutT *clut, u32 *outAlphaSum) {
 	const IndexT *indexed = (const IndexT *) Memory::GetPointer(texaddr);
-	DeIndexTexture(dest, indexed, length, clut);
+	DeIndexTexture(dest, indexed, length, clut, outAlphaSum);
 }
 
 template <typename ClutT>
-inline void DeIndexTexture4(ClutT *dest, const u8 *indexed, int length, const ClutT *clut) {
+inline void DeIndexTexture4(/*WRITEONLY*/ ClutT *dest, const u8 *indexed, int length, const ClutT *clut, u32 *outAlphaSum) {
 	// Usually, there is no special offset, mask, or shift.
 	const bool nakedIndex = gstate.isClutIndexSimple();
 
+	ClutT alphaSum = (ClutT)(-1);
 	if (nakedIndex) {
 		for (int i = 0; i < length; i += 2) {
 			u8 index = *indexed++;
-			dest[i + 0] = clut[(index >> 0) & 0xf];
-			dest[i + 1] = clut[(index >> 4) & 0xf];
+			ClutT color0 = clut[index & 0xf];
+			ClutT color1 = clut[index >> 4];
+			dest[i + 0] = color0;
+			dest[i + 1] = color1;
+			alphaSum &= color0 & color1;
 		}
 	} else {
 		for (int i = 0; i < length; i += 2) {
 			u8 index = *indexed++;
-			dest[i + 0] = clut[gstate.transformClutIndex((index >> 0) & 0xf)];
-			dest[i + 1] = clut[gstate.transformClutIndex((index >> 4) & 0xf)];
+			ClutT color0 = clut[gstate.transformClutIndex((index >> 0) & 0xf)];
+			ClutT color1 = clut[gstate.transformClutIndex((index >> 4) & 0xf)];
+			dest[i + 0] = color0;
+			dest[i + 1] = color1;
+			alphaSum &= color0 & color1;
 		}
 	}
+
+	*outAlphaSum &= (u32)alphaSum;
 }
 
 template <typename ClutT>

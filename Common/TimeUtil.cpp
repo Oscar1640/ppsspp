@@ -19,6 +19,8 @@
 #endif
 #include <ctime>
 
+// TODO: https://github.com/floooh/sokol/blob/9a6237fcdf213e6da48e4f9201f144bcb2dcb46f/sokol_time.h#L229-L248
+
 static double curtime = 0;
 
 #ifdef _WIN32
@@ -66,7 +68,7 @@ void sleep_ms(int ms) {
 
 // Return the current time formatted as Minutes:Seconds:Milliseconds
 // in the form 00:00:000.
-void GetTimeFormatted(char formattedTime[11]) {
+void GetTimeFormatted(char formattedTime[13]) {
 	time_t sysTime;
 	time(&sysTime);
 

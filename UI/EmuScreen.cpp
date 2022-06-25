@@ -414,6 +414,9 @@ void EmuScreen::dialogFinished(const Screen *dialog, DialogResult result) {
 		System_SendMessage("event", "exitgame");
 		quit_ = false;
 	}
+	// Returning to the PauseScreen, unless we're stepping, means we should go back to controls.
+	if (Core_IsActive())
+		UI::EnableFocusMovement(false);
 	RecreateViews();
 }
 
@@ -708,6 +711,18 @@ void EmuScreen::onVKeyDown(int virtualKeyCode) {
 		break;
 	case VIRTKEY_MUTE_TOGGLE:
 		g_Config.bEnableSound = !g_Config.bEnableSound;
+		break;
+	case VIRTKEY_SCREEN_ROTATION_VERTICAL:
+		g_Config.iInternalScreenRotation = ROTATION_LOCKED_VERTICAL;
+		break;
+	case VIRTKEY_SCREEN_ROTATION_VERTICAL180:
+		g_Config.iInternalScreenRotation = ROTATION_LOCKED_VERTICAL180;
+		break;
+	case VIRTKEY_SCREEN_ROTATION_HORIZONTAL:
+		g_Config.iInternalScreenRotation = ROTATION_LOCKED_HORIZONTAL;
+		break;
+	case VIRTKEY_SCREEN_ROTATION_HORIZONTAL180:
+		g_Config.iInternalScreenRotation = ROTATION_LOCKED_HORIZONTAL180;
 		break;
 	}
 }
@@ -1130,7 +1145,18 @@ static const char *CPUCoreAsString(int core) {
 static void DrawCrashDump(UIContext *ctx) {
 	const ExceptionInfo &info = Core_GetExceptionInfo();
 
+	auto sy = GetI18NCategory("System");
 	FontID ubuntu24("UBUNTU24");
+
+	int x = 20 + System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_LEFT);
+	int y = 20 + System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_TOP);
+
+	ctx->Flush();
+	if (ctx->Draw()->GetFontAtlas()->getFont(ubuntu24))
+		ctx->BindFontTexture();
+	ctx->Draw()->SetFontScale(1.2f, 1.2f);
+	ctx->Draw()->DrawTextShadow(ubuntu24, sy->T("Game crashed"), x, y, 0xFFFFFFFF);
+
 	char statbuf[4096];
 	char versionString[256];
 	snprintf(versionString, sizeof(versionString), "%s", PPSSPP_GIT_VERSION);
@@ -1147,9 +1173,7 @@ static void DrawCrashDump(UIContext *ctx) {
 	int sysVersion = System_GetPropertyInt(SYSPROP_SYSTEMVERSION);
 
 	// First column
-	ctx->Flush();
-	int x = 20 + System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_LEFT);
-	int y = 50 + System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_TOP);
+	y += 65;
 
 	int columnWidth = (ctx->GetBounds().w - x - 10) / 2;
 	int height = ctx->GetBounds().h;
@@ -1167,8 +1191,6 @@ static void DrawCrashDump(UIContext *ctx) {
 		sysName.c_str(), sysVersion, GetCompilerABI()
 	);
 
-	if (ctx->Draw()->GetFontAtlas()->getFont(ubuntu24))
-		ctx->BindFontTexture();
 	ctx->Draw()->SetFontScale(.7f, .7f);
 	ctx->Draw()->DrawTextShadow(ubuntu24, statbuf, x, y, 0xFFFFFFFF);
 	y += 140;
@@ -1210,7 +1232,7 @@ BREAK
 	// Draw some additional stuff to the right.
 
 	x += columnWidth + 10;
-	y = 50;
+	y = 85;
 	snprintf(statbuf, sizeof(statbuf),
 		"CPU Core: %s (flags: %08x)\n"
 		"Locked CPU freq: %d MHz\n"
@@ -1489,7 +1511,7 @@ void EmuScreen::renderUI() {
 		DrawFrameTimes(ctx, ctx->GetLayoutBounds());
 	}
 
-#if !PPSSPP_PLATFORM(UWP)
+#if !PPSSPP_PLATFORM(UWP) && !PPSSPP_PLATFORM(SWITCH)
 	if (g_Config.iGPUBackend == (int)GPUBackend::VULKAN && g_Config.bShowAllocatorDebug) {
 		DrawAllocatorVis(ctx, gpu);
 	}

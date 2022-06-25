@@ -83,7 +83,7 @@ if(NOT ANDROID AND NOT IOS)
 	endif()
 endif()
 
-if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux" AND NOT USE_LIBNX)
 	set(LINUX ON)
 	add_definitions(-D__STDC_CONSTANT_MACROS)
 endif()
@@ -146,6 +146,7 @@ option(UNITTEST "Set to ON to generate the unittest target" ${UNITTEST})
 option(SIMULATOR "Set to ON when targeting an x86 simulator of an ARM platform" ${SIMULATOR})
 option(LIBRETRO "Set to ON to generate the libretro target" OFF)
 # :: Options
+option(USE_LIBNX "Set to ON to build for Switch(libnx)" OFF)
 option(USE_FFMPEG "Build with FFMPEG support" ON)
 option(USE_DISCORD "Build with Discord support" ON)
 option(USE_MINIUPNPC "Build with miniUPnPc support" ON)
@@ -432,7 +433,6 @@ set(CommonARM
 	Common/ArmCPUDetect.cpp
 	Common/ArmEmitter.h
 	Common/ArmEmitter.cpp
-	Common/Data/Convert/ColorConvNEON.cpp
 )
 source_group(ARM FILES ${CommonARM})
 
@@ -579,6 +579,8 @@ add_library(Common STATIC
 	Common/GPU/OpenGL/GLQueueRunner.h
 	Common/GPU/OpenGL/DataFormatGL.cpp
 	Common/GPU/OpenGL/DataFormatGL.h
+	Common/GPU/Vulkan/VulkanBarrier.cpp
+	Common/GPU/Vulkan/VulkanBarrier.h
 	Common/GPU/Vulkan/VulkanDebug.cpp
 	Common/GPU/Vulkan/VulkanDebug.h
 	Common/GPU/Vulkan/VulkanContext.cpp
@@ -1147,8 +1149,12 @@ elseif(TARGET SDL2::SDL2)
 		SDL/SDLJoystick.cpp
 		SDL/SDLMain.cpp
 		SDL/SDLGLGraphicsContext.cpp
-		SDL/SDLVulkanGraphicsContext.cpp
 	)
+	if(NOT USE_LIBNX)
+		set(nativeExtra ${nativeExtra}
+			SDL/SDLVulkanGraphicsContext.cpp
+		)
+	endif()
 	set(nativeExtraLibs ${nativeExtraLibs} SDL2::SDL2)
 	if(APPLE)
 		set(nativeExtra ${nativeExtra} SDL/SDLMain.h SDL/SDLMain.mm SDL/SDLCocoaMetalLayer.h SDL/SDLCocoaMetalLayer.mm)
@@ -1266,7 +1272,7 @@ if(LINUX AND NOT ANDROID)
 endif()
 
 set(ATOMIC_LIB)
-if(ANDROID)
+if(ANDROID OR (LINUX AND ARM_DEVICE))
 	set(ATOMIC_LIB atomic)
 endif()
 
@@ -1510,9 +1516,6 @@ if(WIN32)
 	list(APPEND GPU_IMPLS ${GPU_D3D9} ${GPU_D3D11})
 endif()
 
-if(ARMV7 OR ARM64)
-	set(GPU_NEON GPU/Common/TextureDecoderNEON.cpp)
-endif()
 set(GPU_SOURCES
 	${GPU_IMPLS}
 	${GPU_NEON}
@@ -1971,8 +1974,6 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/ThreadPools.h
 	Core/Util/AudioFormat.cpp
 	Core/Util/AudioFormat.h
-	Core/Util/AudioFormatNEON.cpp
-	Core/Util/AudioFormatNEON.h
 	Core/Util/GameManager.cpp
 	Core/Util/GameManager.h
 	Core/Util/PortManager.cpp
@@ -1981,7 +1982,6 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/Util/BlockAllocator.h
 	Core/Util/PPGeDraw.cpp
 	Core/Util/PPGeDraw.h
-	${CORE_NEON}
 	${GPU_SOURCES}
 	ext/disarm.cpp
 	${CMAKE_CURRENT_BINARY_DIR}/git-version.cpp

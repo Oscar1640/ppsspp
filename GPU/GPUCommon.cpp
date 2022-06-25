@@ -1,4 +1,16 @@
 #include "ppsspp_config.h"
+
+#if defined(_M_SSE)
+#include <emmintrin.h>
+#endif
+#if PPSSPP_ARCH(ARM_NEON)
+#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
+#include <arm64_neon.h>
+#else
+#include <arm_neon.h>
+#endif
+#endif
+
 #include <algorithm>
 #include <type_traits>
 #include <mutex>
@@ -99,7 +111,7 @@ const CommonCommandTableEntry commonCommandTable[] = {
 	{ GE_CMD_LIGHTTYPE1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_LIGHT1 },
 	{ GE_CMD_LIGHTTYPE2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_LIGHT2 },
 	{ GE_CMD_LIGHTTYPE3, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_LIGHT3 },
-	{ GE_CMD_MATERIALUPDATE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },
+	{ GE_CMD_MATERIALUPDATE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },  // TODO: This should not need to dirty the fragment shader?
 
 	// These change both shaders so need flushing.
 	{ GE_CMD_LIGHTMODE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },
@@ -382,7 +394,6 @@ GPUCommon::GPUCommon(GraphicsContext *gfxCtx, Draw::DrawContext *draw) :
 	static_assert(sizeof(DisplayList) == 456, "Bad DisplayList size");
 
 	Reinitialize();
-	SetupColorConv();
 	gstate.Reset();
 	gstate_c.Reset();
 	gpuStats.Reset();
@@ -1027,6 +1038,8 @@ bool GPUCommon::InterpretList(DisplayList &list) {
 	}
 
 	FinishDeferred();
+	if (debugRecording_)
+		GPURecord::NotifyCPU();
 
 	// We haven't run the op at list.pc, so it shouldn't count.
 	if (cycleLastPC != list.pc) {
@@ -1626,20 +1639,40 @@ void GPUCommon::Execute_Prim(u32 op, u32 diff) {
 			return;
 	}
 
-	// This also makes skipping drawing very effective.
-	framebufferManager_->SetRenderFrameBuffer(gstate_c.IsDirty(DIRTY_FRAMEBUF), gstate_c.skipDrawReason);
+	// Update cached framebuffer format.
+	// We store it in the cache so it can be modified for blue-to-alpha, next.
+	gstate_c.framebufFormat = gstate.FrameBufFormat();
 
+	if (!Memory::IsValidAddress(gstate_c.vertexAddr)) {
+		ERROR_LOG(G3D, "Bad vertex address %08x!", gstate_c.vertexAddr);
+		return;
+	}
+
+	// See the documentation for gstate_c.blueToAlpha.
+	bool blueToAlpha = false;
+	if (PSP_CoreParameter().compat.flags().BlueToAlpha) {
+		if (gstate_c.framebufFormat == GEBufferFormat::GE_FORMAT_565 && gstate.getColorMask() == 0x0FFFFF) {
+			blueToAlpha = true;
+		}
+		if (blueToAlpha != gstate_c.blueToAlpha) {
+			gstate_c.blueToAlpha = blueToAlpha;
+			gstate_c.Dirty(DIRTY_FRAGMENTSHADER_STATE | DIRTY_BLEND_STATE);
+		}
+	}
+
+	// This also makes skipping drawing very effective.
+	VirtualFramebuffer *vfb = framebufferManager_->SetRenderFrameBuffer(gstate_c.IsDirty(DIRTY_FRAMEBUF), gstate_c.skipDrawReason);
+	if (blueToAlpha) {
+		vfb->usageFlags |= FB_USAGE_BLUE_TO_ALPHA;
+	}
+
+	// Must check this after SetRenderFrameBuffer so we know SKIPDRAW_NON_DISPLAYED_FB.
 	if (gstate_c.skipDrawReason & (SKIPDRAW_SKIPFRAME | SKIPDRAW_NON_DISPLAYED_FB)) {
 		// Rough estimate, not sure what's correct.
 		cyclesExecuted += EstimatePerVertexCost() * count;
 		if (gstate.isModeClear()) {
 			gpuStats.numClears++;
 		}
-		return;
-	}
-
-	if (!Memory::IsValidAddress(gstate_c.vertexAddr)) {
-		ERROR_LOG(G3D, "Bad vertex address %08x!", gstate_c.vertexAddr);
 		return;
 	}
 
@@ -1838,6 +1871,8 @@ void GPUCommon::Execute_Bezier(u32 op, u32 diff) {
 	// We don't dirty on normal changes anymore as we prescale, but it's needed for splines/bezier.
 	gstate_c.Dirty(DIRTY_UVSCALEOFFSET);
 
+	gstate_c.framebufFormat = gstate.FrameBufFormat();
+
 	// This also make skipping drawing very effective.
 	framebufferManager_->SetRenderFrameBuffer(gstate_c.IsDirty(DIRTY_FRAMEBUF), gstate_c.skipDrawReason);
 	if (gstate_c.skipDrawReason & (SKIPDRAW_SKIPFRAME | SKIPDRAW_NON_DISPLAYED_FB)) {
@@ -1905,6 +1940,8 @@ void GPUCommon::Execute_Bezier(u32 op, u32 diff) {
 void GPUCommon::Execute_Spline(u32 op, u32 diff) {
 	// We don't dirty on normal changes anymore as we prescale, but it's needed for splines/bezier.
 	gstate_c.Dirty(DIRTY_UVSCALEOFFSET);
+
+	gstate_c.framebufFormat = gstate.FrameBufFormat();
 
 	// This also make skipping drawing very effective.
 	framebufferManager_->SetRenderFrameBuffer(gstate_c.IsDirty(DIRTY_FRAMEBUF), gstate_c.skipDrawReason);
@@ -2009,6 +2046,8 @@ void GPUCommon::Execute_BlockTransferStart(u32 op, u32 diff) {
 	Flush();
 
 	PROFILE_THIS_SCOPE("block");  // don't include the flush in the profile, would be misleading.
+
+	gstate_c.framebufFormat = gstate.FrameBufFormat();
 
 	// and take appropriate action. This is a block transfer between RAM and VRAM, or vice versa.
 	// Can we skip this on SkipDraw?
@@ -2775,9 +2814,12 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 		framebufferManager_->NotifyBlockTransferAfter(dstBasePtr, dstStride, dstX, dstY, srcBasePtr, srcStride, srcX, srcY, width, height, bpp, skipDrawReason);
 	}
 
+	const uint32_t numBytes = width * height * bpp;
 	const uint32_t srcSize = height * srcStride * bpp;
 	const uint32_t dstSize = height * dstStride * bpp;
-	if (MemBlockInfoDetailed(srcSize, dstSize)) {
+	// We do the check here on the number of bytes to avoid marking really tiny images.
+	// Helps perf in GT menu which does insane amounts of these, one for each text character per frame.
+	if (MemBlockInfoDetailed(numBytes, numBytes)) {
 		const uint32_t src = srcBasePtr + (srcY * srcStride + srcX) * bpp;
 		const uint32_t dst = dstBasePtr + (dstY * dstStride + dstX) * bpp;
 		const std::string tag = "GPUBlockTransfer/" + GetMemWriteTagAt(src, srcSize);
@@ -2887,7 +2929,7 @@ bool GPUCommon::PerformStencilUpload(u32 dest, int size) {
 bool GPUCommon::GetCurrentFramebuffer(GPUDebugBuffer &buffer, GPUDebugFramebufferType type, int maxRes) {
 	u32 fb_address = type == GPU_DBG_FRAMEBUF_RENDER ? (gstate.getFrameBufRawAddress() | 0x04000000) : framebufferManager_->DisplayFramebufAddr();
 	int fb_stride = type == GPU_DBG_FRAMEBUF_RENDER ? gstate.FrameBufStride() : framebufferManager_->DisplayFramebufStride();
-	GEBufferFormat format = type == GPU_DBG_FRAMEBUF_RENDER ? gstate.FrameBufFormat() : framebufferManager_->DisplayFramebufFormat();
+	GEBufferFormat format = type == GPU_DBG_FRAMEBUF_RENDER ? gstate_c.framebufFormat : framebufferManager_->DisplayFramebufFormat();
 	return framebufferManager_->GetFramebuffer(fb_address, fb_stride, format, buffer, maxRes);
 }
 
@@ -2963,6 +3005,21 @@ bool GPUCommon::FramebufferReallyDirty() {
 		return dirty;
 	}
 	return true;
+}
+
+void GPUCommon::UpdateUVScaleOffset() {
+#ifdef _M_SSE
+	__m128i values = _mm_slli_epi32(_mm_load_si128((const __m128i *) & gstate.texscaleu), 8);
+	_mm_storeu_si128((__m128i *)&gstate_c.uv, values);
+#elif PPSSPP_ARCH(ARM_NEON)
+	const uint32x4_t values = vshlq_n_u32(vld1q_u32((const u32 *)&gstate.texscaleu), 8);
+	vst1q_u32((u32 *)&gstate_c.uv, values);
+#else
+	gstate_c.uv.uScale = getFloat24(gstate.texscaleu);
+	gstate_c.uv.vScale = getFloat24(gstate.texscalev);
+	gstate_c.uv.uOff = getFloat24(gstate.texoffsetu);
+	gstate_c.uv.vOff = getFloat24(gstate.texoffsetv);
+#endif
 }
 
 size_t GPUCommon::FormatGPUStatsCommon(char *buffer, size_t size) {

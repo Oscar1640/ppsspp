@@ -18,6 +18,7 @@ SDLJoystick *joystick = NULL;
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <csignal>
 #include <thread>
 #include <locale>
 
@@ -519,6 +520,11 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_LIBNX
 	socketInitializeDefault();
 	nxlinkStdio();
+#else // HAVE_LIBNX
+	// Ignore sigpipe.
+	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+		perror("Unable to ignore SIGPIPE");
+	}
 #endif // HAVE_LIBNX
 
 	PROFILE_INIT();
@@ -644,7 +650,7 @@ int main(int argc, char *argv[]) {
 	if (mode & SDL_WINDOW_FULLSCREEN_DESKTOP) {
 		pixel_xres = g_DesktopWidth;
 		pixel_yres = g_DesktopHeight;
-		g_Config.bFullScreen = true;
+		g_Config.iForceFullScreen = 1;
 	} else {
 		// set a sensible default resolution (2x)
 		pixel_xres = 480 * 2 * set_scale;
@@ -652,7 +658,7 @@ int main(int argc, char *argv[]) {
 		if (portrait) {
 			std::swap(pixel_xres, pixel_yres);
 		}
-		g_Config.bFullScreen = false;
+		g_Config.iForceFullScreen = 0;
 	}
 
 	set_dpi = 1.0f / set_dpi;
@@ -709,7 +715,7 @@ int main(int argc, char *argv[]) {
 	NativeInit(remain_argc, (const char **)remain_argv, path, external_dir, nullptr);
 
 	// Use the setting from the config when initing the window.
-	if (g_Config.bFullScreen)
+	if (g_Config.UseFullScreen())
 		mode |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 
 	int x = SDL_WINDOWPOS_UNDEFINED_DISPLAY(getDisplayNumber());
@@ -735,6 +741,7 @@ int main(int argc, char *argv[]) {
 			printf("GL init error '%s'\n", error_message.c_str());
 		}
 		graphicsContext = ctx;
+#if !PPSSPP_PLATFORM(SWITCH)
 	} else if (g_Config.iGPUBackend == (int)GPUBackend::VULKAN) {
 		SDLVulkanGraphicsContext *ctx = new SDLVulkanGraphicsContext();
 		if (!ctx->Init(window, x, y, mode, &error_message)) {
@@ -748,6 +755,7 @@ int main(int argc, char *argv[]) {
 		} else {
 			graphicsContext = ctx;
 		}
+#endif
 	}
 
 	bool useEmuThread = g_Config.iGPUBackend == (int)GPUBackend::OPENGL;
@@ -861,7 +869,10 @@ int main(int argc, char *argv[]) {
 					UpdateScreenScale(new_width, new_height);
 
 					// Set variable here in case fullscreen was toggled by hotkey
-					g_Config.bFullScreen = fullscreen;
+					if (g_Config.UseFullScreen() != fullscreen) {
+						g_Config.bFullScreen = fullscreen;
+						g_Config.iForceFullScreen = -1;
+					}
 
 					// Hide/Show cursor correctly toggling fullscreen
 					if (lastUIState == UISTATE_INGAME && fullscreen && !g_Config.bShowTouchControls) {
@@ -1131,9 +1142,9 @@ int main(int argc, char *argv[]) {
 #if !defined(MOBILE_DEVICE)
 		if (lastUIState != GetUIState()) {
 			lastUIState = GetUIState();
-			if (lastUIState == UISTATE_INGAME && g_Config.bFullScreen && !g_Config.bShowTouchControls)
+			if (lastUIState == UISTATE_INGAME && g_Config.UseFullScreen() && !g_Config.bShowTouchControls)
 				SDL_ShowCursor(SDL_DISABLE);
-			if (lastUIState != UISTATE_INGAME || !g_Config.bFullScreen)
+			if (lastUIState != UISTATE_INGAME || !g_Config.UseFullScreen())
 				SDL_ShowCursor(SDL_ENABLE);
 		}
 #endif

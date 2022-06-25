@@ -220,8 +220,8 @@ const SoftwareCommandTableEntry softgpuCommandTable[] = {
 	{ GE_CMD_ANTIALIASENABLE, 0, SoftDirty::RAST_BASIC },
 
 	// Viewport and offset for positions.
-	{ GE_CMD_OFFSETX, 0, SoftDirty::BINNER_RANGE | SoftDirty::TRANSFORM_BASIC | SoftDirty::RAST_OFFSET },
-	{ GE_CMD_OFFSETY, 0, SoftDirty::BINNER_RANGE | SoftDirty::TRANSFORM_BASIC | SoftDirty::RAST_OFFSET },
+	{ GE_CMD_OFFSETX, 0, SoftDirty::RAST_OFFSET },
+	{ GE_CMD_OFFSETY, 0, SoftDirty::RAST_OFFSET },
 	{ GE_CMD_VIEWPORTXSCALE, 0, SoftDirty::TRANSFORM_VIEWPORT },
 	{ GE_CMD_VIEWPORTYSCALE, 0, SoftDirty::TRANSFORM_VIEWPORT },
 	{ GE_CMD_VIEWPORTXCENTER, 0, SoftDirty::TRANSFORM_VIEWPORT },
@@ -235,9 +235,9 @@ const SoftwareCommandTableEntry softgpuCommandTable[] = {
 	{ GE_CMD_MAXZ, 0, SoftDirty::PIXEL_BASIC | SoftDirty::PIXEL_CACHED },
 
 	// Region doesn't seem to affect scissor or anything.
-	// TODO: Double check, the registers are always set so they ought to... do something?
-	{ GE_CMD_REGION1 },
-	{ GE_CMD_REGION2 },
+	// As long as REGION1 is zero, REGION2 is effectively another scissor.
+	{ GE_CMD_REGION1, 0, SoftDirty::BINNER_RANGE },
+	{ GE_CMD_REGION2, 0, SoftDirty::BINNER_RANGE },
 
 	// Scissor, only used by the binner.
 	{ GE_CMD_SCISSOR1, 0, SoftDirty::BINNER_RANGE },
@@ -472,9 +472,8 @@ SoftGPU::~SoftGPU() {
 		fbTex = nullptr;
 	}
 
-	if (presentation_) {
-		delete presentation_;
-	}
+	delete presentation_;
+	delete drawEngine_;
 
 	Sampler::Shutdown();
 	Rasterizer::Shutdown();
@@ -793,10 +792,24 @@ void SoftGPU::Execute_BlockTransferStart(u32 op, u32 diff) {
 
 	DEBUG_LOG(G3D, "Block transfer: %08x/%x -> %08x/%x, %ix%ix%i (%i,%i)->(%i,%i)", srcBasePtr, srcStride, dstBasePtr, dstStride, width, height, bpp, srcX, srcY, dstX, dstY);
 
-	for (int y = 0; y < height; y++) {
-		const u8 *srcp = Memory::GetPointer(srcBasePtr + ((y + srcY) * srcStride + srcX) * bpp);
-		u8 *dstp = Memory::GetPointer(dstBasePtr + ((y + dstY) * dstStride + dstX) * bpp);
-		memcpy(dstp, srcp, width * bpp);
+	if (srcStride == dstStride && (u32)width == srcStride) {
+		u32 srcLineStartAddr = srcBasePtr + (srcY * srcStride + srcX) * bpp;
+		u32 dstLineStartAddr = dstBasePtr + (dstY * dstStride + dstX) * bpp;
+
+		const u8 *srcp = Memory::GetPointer(srcLineStartAddr);
+		u8 *dstp = Memory::GetPointer(dstLineStartAddr);
+		memcpy(dstp, srcp, width * height * bpp);
+		GPURecord::NotifyMemcpy(dstLineStartAddr, srcLineStartAddr, width * height * bpp);
+	} else {
+		for (int y = 0; y < height; y++) {
+			u32 srcLineStartAddr = srcBasePtr + ((y + srcY) * srcStride + srcX) * bpp;
+			u32 dstLineStartAddr = dstBasePtr + ((y + dstY) * dstStride + dstX) * bpp;
+
+			const u8 *srcp = Memory::GetPointer(srcLineStartAddr);
+			u8 *dstp = Memory::GetPointer(dstLineStartAddr);
+			memcpy(dstp, srcp, width * bpp);
+			GPURecord::NotifyMemcpy(dstLineStartAddr, srcLineStartAddr, width * bpp);
+		}
 	}
 
 	if (MemBlockInfoDetailed(srcSize, dstSize)) {
@@ -1167,26 +1180,38 @@ bool SoftGPU::FramebufferReallyDirty() {
 	return true;
 }
 
+static DrawingCoords GetTargetSize(int stride) {
+	int w = std::min(stride, std::max(gstate.getRegionX2(), gstate.getScissorX2()) + 1);
+	int h = std::max(gstate.getRegionY2(), gstate.getScissorY2()) + 1;
+	if (gstate.getRegionX2() == 1023 && gstate.getRegionY2() == 1023) {
+		// Some games max out region, but always scissor to an appropriate size.
+		// Both values always scissor, we just prefer region as it's usually a more stable size.
+		w = std::max(stride, gstate.getScissorX2() + 1);
+		h = std::max(272, gstate.getScissorY2() + 1);
+	}
+
+	return DrawingCoords((s16)w, (s16)h);
+}
+
 bool SoftGPU::GetCurrentFramebuffer(GPUDebugBuffer &buffer, GPUDebugFramebufferType type, int maxRes) {
-	int w = gstate.getRegionX2() + 1;
-	int h = gstate.getRegionY2() + 1;
 	int stride = gstate.FrameBufStride();
+	DrawingCoords size = GetTargetSize(stride);
 	GEBufferFormat fmt = gstate.FrameBufFormat();
 
 	if (type == GPU_DBG_FRAMEBUF_DISPLAY) {
-		w = 480;
-		h = 272;
+		size.x = 480;
+		size.y = 272;
 		stride = displayStride_;
 		fmt = displayFormat_;
 	}
 
-	buffer.Allocate(w, h, fmt);
+	buffer.Allocate(size.x, size.y, fmt);
 
 	const int depth = fmt == GE_FORMAT_8888 ? 4 : 2;
 	const u8 *src = fb.data;
 	u8 *dst = buffer.GetData();
-	const int byteWidth = w * depth;
-	for (int y = 0; y < h; ++y) {
+	const int byteWidth = size.x * depth;
+	for (int16_t y = 0; y < size.y; ++y) {
 		memcpy(dst, src, byteWidth);
 		dst += byteWidth;
 		src += stride * depth;
@@ -1199,24 +1224,45 @@ bool SoftGPU::GetOutputFramebuffer(GPUDebugBuffer &buffer) {
 }
 
 bool SoftGPU::GetCurrentDepthbuffer(GPUDebugBuffer &buffer) {
-	const int w = gstate.getRegionX2() + 1;
-	const int h = gstate.getRegionY2() + 1;
-	buffer.Allocate(w, h, GPU_DBG_FORMAT_16BIT);
+	DrawingCoords size = GetTargetSize(gstate.DepthBufStride());
+	buffer.Allocate(size.x, size.y, GPU_DBG_FORMAT_16BIT);
 
 	const int depth = 2;
 	const u8 *src = depthbuf.data;
 	u8 *dst = buffer.GetData();
-	for (int y = 0; y < h; ++y) {
-		memcpy(dst, src, w * depth);
-		dst += w * depth;
+	for (int16_t y = 0; y < size.y; ++y) {
+		memcpy(dst, src, size.x * depth);
+		dst += size.x * depth;
 		src += gstate.DepthBufStride() * depth;
 	}
 	return true;
 }
 
-bool SoftGPU::GetCurrentStencilbuffer(GPUDebugBuffer &buffer)
-{
-	return Rasterizer::GetCurrentStencilbuffer(buffer);
+static inline u8 GetPixelStencil(GEBufferFormat fmt, int fbStride, int x, int y) {
+	if (fmt == GE_FORMAT_565) {
+		// Always treated as 0 for comparison purposes.
+		return 0;
+	} else if (fmt == GE_FORMAT_5551) {
+		return ((fb.Get16(x, y, fbStride) & 0x8000) != 0) ? 0xFF : 0;
+	} else if (fmt == GE_FORMAT_4444) {
+		return Convert4To8(fb.Get16(x, y, fbStride) >> 12);
+	} else {
+		return fb.Get32(x, y, fbStride) >> 24;
+	}
+}
+
+bool SoftGPU::GetCurrentStencilbuffer(GPUDebugBuffer &buffer) {
+	DrawingCoords size = GetTargetSize(gstate.FrameBufStride());
+	buffer.Allocate(size.x, size.y, GPU_DBG_FORMAT_8BIT);
+
+	u8 *row = buffer.GetData();
+	for (int16_t y = 0; y < size.y; ++y) {
+		for (int16_t x = 0; x < size.x; ++x) {
+			row[x] = GetPixelStencil(gstate.FrameBufFormat(), gstate.FrameBufStride(), x, y);
+		}
+		row += size.x;
+	}
+	return true;
 }
 
 bool SoftGPU::GetCurrentTexture(GPUDebugBuffer &buffer, int level)

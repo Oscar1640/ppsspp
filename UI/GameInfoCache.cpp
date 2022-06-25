@@ -83,6 +83,7 @@ bool GameInfo::Delete() {
 	case IdentifiedFileType::PSP_ELF:
 	case IdentifiedFileType::UNKNOWN_BIN:
 	case IdentifiedFileType::UNKNOWN_ELF:
+	case IdentifiedFileType::UNKNOWN_ISO:
 	case IdentifiedFileType::ARCHIVE_RAR:
 	case IdentifiedFileType::ARCHIVE_ZIP:
 	case IdentifiedFileType::ARCHIVE_7Z:
@@ -677,9 +678,13 @@ void GameInfoCache::Clear() {
 
 void GameInfoCache::CancelAll() {
 	for (auto info : info_) {
-		auto fl = info.second->GetFileLoader();
-		if (fl) {
-			fl->Cancel();
+		// GetFileLoader will create one if there isn't one already.
+		// Avoid that by checking.
+		if (info.second->HasFileLoader()) {
+			auto fl = info.second->GetFileLoader();
+			if (fl) {
+				fl->Cancel();
+			}
 		}
 	}
 }

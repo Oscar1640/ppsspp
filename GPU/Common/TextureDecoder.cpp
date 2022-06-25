@@ -16,7 +16,9 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include "ppsspp_config.h"
+
 #include "ext/xxhash.h"
+
 #include "Common/Common.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/CPUDetect.h"
@@ -25,14 +27,30 @@
 #include "GPU/GPU.h"
 #include "GPU/GPUState.h"
 #include "GPU/Common/TextureDecoder.h"
-// NEON is in a separate file so that it can be compiled with a runtime check.
-#include "GPU/Common/TextureDecoderNEON.h"
 
 #ifdef _M_SSE
 #include <emmintrin.h>
 #include <smmintrin.h>
+#endif
 
-u32 QuickTexHashSSE2(const void *checkp, u32 size) {
+#if PPSSPP_ARCH(ARM_NEON)
+#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
+#include <arm64_neon.h>
+#else
+#include <arm_neon.h>
+#endif
+#endif
+
+#ifdef __clang__
+// Weird how you can't just use #pragma in a macro.
+#define DO_NOT_VECTORIZE_LOOP _Pragma("clang loop vectorize(disable)")
+#else
+#define DO_NOT_VECTORIZE_LOOP
+#endif
+
+#ifdef _M_SSE
+
+static u32 QuickTexHashSSE2(const void *checkp, u32 size) {
 	u32 check = 0;
 
 	if (((intptr_t)checkp & 0xf) == 0 && (size & 0x3f) == 0) {
@@ -65,6 +83,106 @@ u32 QuickTexHashSSE2(const void *checkp, u32 size) {
 	return check;
 }
 #endif
+
+#if PPSSPP_ARCH(ARM_NEON)
+
+alignas(16) static const u16 QuickTexHashInitial[8] = { 0xc00bU, 0x9bd9U, 0x4b73U, 0xb651U, 0x4d9bU, 0x4309U, 0x0083U, 0x0001U };
+
+static u32 QuickTexHashNEON(const void *checkp, u32 size) {
+	u32 check = 0;
+
+	if (((intptr_t)checkp & 0xf) == 0 && (size & 0x3f) == 0) {
+#if PPSSPP_PLATFORM(IOS) || PPSSPP_ARCH(ARM64) || defined(_MSC_VER) || !PPSSPP_ARCH(ARMV7)
+		uint32x4_t cursor = vdupq_n_u32(0);
+		uint16x8_t cursor2 = vld1q_u16(QuickTexHashInitial);
+		uint16x8_t update = vdupq_n_u16(0x2455U);
+
+		const u32 *p = (const u32 *)checkp;
+		const u32 *pend = p + size / 4;
+		while (p < pend) {
+			cursor = vreinterpretq_u32_u16(vmlaq_u16(vreinterpretq_u16_u32(cursor), vreinterpretq_u16_u32(vld1q_u32(&p[4 * 0])), cursor2));
+			cursor = veorq_u32(cursor, vld1q_u32(&p[4 * 1]));
+			cursor = vaddq_u32(cursor, vld1q_u32(&p[4 * 2]));
+			cursor = veorq_u32(cursor, vreinterpretq_u32_u16(vmulq_u16(vreinterpretq_u16_u32(vld1q_u32(&p[4 * 3])), cursor2)));
+			cursor2 = vaddq_u16(cursor2, update);
+
+			p += 4 * 4;
+		}
+
+		cursor = vaddq_u32(cursor, vreinterpretq_u32_u16(cursor2));
+		uint32x2_t mixed = vadd_u32(vget_high_u32(cursor), vget_low_u32(cursor));
+		check = vget_lane_u32(mixed, 0) + vget_lane_u32(mixed, 1);
+#else
+		// TODO: Why does this crash on iOS, but only certain devices?
+		// It's faster than the above, but I guess it sucks to be using an iPhone.
+		// As of 2020 clang, it's still faster by ~1.4%.
+
+		// d0/d1 (q0) - cursor
+		// d2/d3 (q1) - cursor2
+		// d4/d5 (q2) - update
+		// d16-d23 (q8-q11) - memory transfer
+		asm volatile (
+			// Initialize cursor.
+			"vmov.i32 q0, #0\n"
+
+			// Initialize cursor2.
+			"movw r0, 0xc00b\n"
+			"movt r0, 0x9bd9\n"
+			"movw r1, 0x4b73\n"
+			"movt r1, 0xb651\n"
+			"vmov d2, r0, r1\n"
+			"movw r0, 0x4d9b\n"
+			"movt r0, 0x4309\n"
+			"movw r1, 0x0083\n"
+			"movt r1, 0x0001\n"
+			"vmov d3, r0, r1\n"
+
+			// Initialize update.
+			"movw r0, 0x2455\n"
+			"vdup.i16 q2, r0\n"
+
+			// This is where we end.
+			"add r0, %1, %2\n"
+
+			// Okay, do the memory hashing.
+			"QuickTexHashNEON_next:\n"
+			"pld [%2, #0xc0]\n"
+			"vldmia %2!, {d16-d23}\n"
+			"vmla.i16 q0, q1, q8\n"
+			"vmul.i16 q11, q11, q1\n"
+			"veor.i32 q0, q0, q9\n"
+			"cmp %2, r0\n"
+			"vadd.i32 q0, q0, q10\n"
+			"vadd.i16 q1, q1, q2\n"
+			"veor.i32 q0, q0, q11\n"
+			"blo QuickTexHashNEON_next\n"
+
+			// Now let's get the result.
+			"vadd.i32 q0, q0, q1\n"
+			"vadd.i32 d0, d0, d1\n"
+			"vmov r0, r1, d0\n"
+			"add %0, r0, r1\n"
+
+			: "=r"(check)
+			: "r"(size), "r"(checkp)
+			: "r0", "r1", "d0", "d1", "d2", "d3", "d4", "d5", "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "cc"
+			);
+#endif
+	} else {
+		const u32 size_u32 = size / 4;
+		const u32 *p = (const u32 *)checkp;
+		for (u32 i = 0; i < size_u32; i += 4) {
+			check += p[i + 0];
+			check ^= p[i + 1];
+			check += p[i + 2];
+			check ^= p[i + 3];
+		}
+	}
+
+	return check;
+}
+
+#endif  // PPSSPP_ARCH(ARM_NEON)
 
 // Masks to downalign bufw to 16 bytes, and wrap at 2048.
 static const u32 textureAlignMask16[16] = {
@@ -99,7 +217,8 @@ u32 GetTextureBufw(int level, u32 texaddr, GETextureFormat format) {
 	return bufw;
 }
 
-u32 QuickTexHashNonSSE(const void *checkp, u32 size) {
+// Is this compatible with QuickTexHashNEON/SSE?
+static u32 QuickTexHashNonSSE(const void *checkp, u32 size) {
 	u32 check = 0;
 
 	if (((intptr_t)checkp & 0xf) == 0 && (size & 0x3f) == 0) {
@@ -150,39 +269,7 @@ u32 QuickTexHashNonSSE(const void *checkp, u32 size) {
 	return check;
 }
 
-#if !PPSSPP_ARCH(ARM64) && !defined(_M_SSE)
 static u32 QuickTexHashBasic(const void *checkp, u32 size) {
-#if PPSSPP_ARCH(ARM) && defined(__GNUC__)
-	__builtin_prefetch(checkp, 0, 0);
-
-	u32 check;
-	asm volatile (
-		// Let's change size to the end address.
-		"add %1, %1, %2\n"
-		"mov r6, #0\n"
-
-		".align 2\n"
-
-		// If we have zero sized input, we'll return garbage.  Oh well, shouldn't happen.
-		"QuickTexHashBasic_next:\n"
-		"ldmia %2!, {r2-r5}\n"
-		"add r6, r6, r2\n"
-		"eor r6, r6, r3\n"
-		"cmp %2, %1\n"
-		"add r6, r6, r4\n"
-		"eor r6, r6, r5\n"
-		"blo QuickTexHashBasic_next\n"
-
-		".align 2\n"
-
-		"QuickTexHashBasic_done:\n"
-		"mov %0, r6\n"
-
-		: "=r"(check)
-		: "r"(size), "r"(checkp)
-		: "r2", "r3", "r4", "r5", "r6"
-	);
-#else
 	u32 check = 0;
 	const u32 size_u32 = size / 4;
 	const u32 *p = (const u32 *)checkp;
@@ -192,11 +279,19 @@ static u32 QuickTexHashBasic(const void *checkp, u32 size) {
 		check += p[i + 2];
 		check ^= p[i + 3];
 	}
-#endif
 
 	return check;
 }
+
+u32 StableQuickTexHash(const void *checkp, u32 size) {
+#if defined(_M_SSE)
+	return QuickTexHashSSE2(checkp, size);
+#elif PPSSPP_ARCH(ARM_NEON)
+	return QuickTexHashNEON(checkp, size);
+#else
+	return QuickTexHashNonSSE(checkp, size);
 #endif
+}
 
 void DoSwizzleTex16(const u32 *ysrcp, u8 *texptr, int bxc, int byc, u32 pitch) {
 	// ysrcp is in 32-bits, so this is convenient.
@@ -252,11 +347,12 @@ void DoSwizzleTex16(const u32 *ysrcp, u8 *texptr, int bxc, int byc, u32 pitch) {
 	}
 }
 
-void DoUnswizzleTex16Basic(const u8 *texptr, u32 *ydestp, int bxc, int byc, u32 pitch) {
+void DoUnswizzleTex16(const u8 *texptr, u32 *ydestp, int bxc, int byc, u32 pitch) {
 	// ydestp is in 32-bits, so this is convenient.
 	const u32 pitchBy32 = pitch >> 2;
 
 #ifdef _M_SSE
+	// This check is pretty much a given, right?
 	if (((uintptr_t)ydestp & 0xF) == 0 && (pitch & 0xF) == 0) {
 		const __m128i *src = (const __m128i *)texptr;
 		// The pitch parameter is in bytes, so shift down for 128-bit.
@@ -287,6 +383,34 @@ void DoUnswizzleTex16Basic(const u8 *texptr, u32 *ydestp, int bxc, int byc, u32 
 			ydestp += pitchBy32 * 8;
 		}
 	} else
+#elif PPSSPP_ARCH(ARM_NEON)
+	if (((uintptr_t)ydestp & 0xF) == 0 && (pitch & 0xF) == 0) {
+		const u32 *src = (const u32 *)texptr;
+		for (int by = 0; by < byc; by++) {
+			u32 *xdest = ydestp;
+			for (int bx = 0; bx < bxc; bx++) {
+				u32 *dest = xdest;
+				for (int n = 0; n < 2; n++) {
+					// Textures are always 16-byte aligned so this is fine.
+					uint32x4_t temp1 = vld1q_u32(src);
+					uint32x4_t temp2 = vld1q_u32(src + 4);
+					uint32x4_t temp3 = vld1q_u32(src + 8);
+					uint32x4_t temp4 = vld1q_u32(src + 12);
+					vst1q_u32(dest, temp1);
+					dest += pitchBy32;
+					vst1q_u32(dest, temp2);
+					dest += pitchBy32;
+					vst1q_u32(dest, temp3);
+					dest += pitchBy32;
+					vst1q_u32(dest, temp4);
+					dest += pitchBy32;
+					src += 16;
+				}
+				xdest += 4;
+			}
+			ydestp += pitchBy32 * 8;
+		}
+	} else
 #endif
 	{
 		const u32 *src = (const u32 *)texptr;
@@ -306,23 +430,6 @@ void DoUnswizzleTex16Basic(const u8 *texptr, u32 *ydestp, int bxc, int byc, u32 
 	}
 }
 
-#if !PPSSPP_ARCH(ARM64) && !defined(_M_SSE)
-QuickTexHashFunc DoQuickTexHash = &QuickTexHashBasic;
-QuickTexHashFunc StableQuickTexHash = &QuickTexHashNonSSE;
-UnswizzleTex16Func DoUnswizzleTex16 = &DoUnswizzleTex16Basic;
-#endif
-
-// This has to be done after CPUDetect has done its magic.
-void SetupTextureDecoder() {
-#if PPSSPP_ARCH(ARM_NEON) && !PPSSPP_ARCH(ARM64)
-	if (cpu_info.bNEON) {
-		DoQuickTexHash = &QuickTexHashNEON;
-		StableQuickTexHash = &QuickTexHashNEON;
-		DoUnswizzleTex16 = &DoUnswizzleTex16NEON;
-	}
-#endif
-}
-
 // S3TC / DXT Decoder
 class DXTDecoder {
 public:
@@ -332,9 +439,13 @@ public:
 	inline void WriteColorsDXT3(u32 *dst, const DXT3Block *src, int pitch, int height);
 	inline void WriteColorsDXT5(u32 *dst, const DXT5Block *src, int pitch, int height);
 
+	bool AnyNonFullAlpha() const { return anyNonFullAlpha_; }
+
 protected:
 	u32 colors_[4];
 	u8 alpha_[8];
+	bool alphaMode_ = false;
+	bool anyNonFullAlpha_ = false;
 };
 
 static inline u32 makecol(int r, int g, int b, int a) {
@@ -371,6 +482,9 @@ void DXTDecoder::DecodeColors(const DXT1Block *src, bool ignore1bitAlpha) {
 		int blue3 = (blue1 + blue2) / 2;
 		colors_[2] = makecol(red3, green3, blue3, alpha);
 		colors_[3] = makecol(0, 0, 0, 0);
+		if (alpha == 255) {
+			alphaMode_ = true;
+		}
 	}
 }
 
@@ -408,13 +522,22 @@ void DXTDecoder::DecodeAlphaDXT5(const DXT5Block *src) {
 }
 
 void DXTDecoder::WriteColorsDXT1(u32 *dst, const DXT1Block *src, int pitch, int height) {
+	bool anyColor3 = false;
 	for (int y = 0; y < height; y++) {
 		int colordata = src->lines[y];
 		for (int x = 0; x < 4; x++) {
-			dst[x] = colors_[colordata & 3];
+			int col = colordata & 3;
+			if (col == 3) {
+				anyColor3 = true;
+			}
+			dst[x] = colors_[col];
 			colordata >>= 2;
 		}
 		dst += pitch;
+	}
+
+	if (alphaMode_ && anyColor3) {
+		anyNonFullAlpha_ = true;
 	}
 }
 
@@ -510,10 +633,11 @@ uint32_t GetDXT5Texel(const DXT5Block *src, int x, int y) {
 }
 
 // This could probably be done faster by decoding two or four blocks at a time with SSE/NEON.
-void DecodeDXT1Block(u32 *dst, const DXT1Block *src, int pitch, int height, bool ignore1bitAlpha) {
+void DecodeDXT1Block(u32 *dst, const DXT1Block *src, int pitch, int height, u32 *alpha) {
 	DXTDecoder dxt;
-	dxt.DecodeColors(src, ignore1bitAlpha);
+	dxt.DecodeColors(src, false);
 	dxt.WriteColorsDXT1(dst, src, pitch, height);
+	*alpha &= dxt.AnyNonFullAlpha() ? 0 : 1;
 }
 
 void DecodeDXT3Block(u32 *dst, const DXT3Block *src, int pitch, int height) {
@@ -530,295 +654,173 @@ void DecodeDXT5Block(u32 *dst, const DXT5Block *src, int pitch, int height) {
 }
 
 #ifdef _M_SSE
-static inline u32 CombineSSEBitsToDWORD(const __m128i &v) {
-	__m128i temp;
-	temp = _mm_or_si128(v, _mm_srli_si128(v, 8));
-	temp = _mm_or_si128(temp, _mm_srli_si128(temp, 4));
-	return _mm_cvtsi128_si32(temp);
+inline u32 SSEReduce32And(__m128i value) {
+	// TODO: Should use a shuffle instead of slri, probably.
+	value = _mm_and_si128(value, _mm_srli_si128(value, 64));
+	value = _mm_and_si128(value, _mm_srli_si128(value, 32));
+	return _mm_cvtsi128_si32(value);
 }
-
-CheckAlphaResult CheckAlphaRGBA8888SSE2(const u32 *pixelData, int stride, int w, int h) {
-	const __m128i mask = _mm_set1_epi32(0xFF000000);
-
-	const __m128i *p = (const __m128i *)pixelData;
-	const int w4 = w / 4;
-	const int stride4 = stride / 4;
-
-	__m128i bits = mask;
-	for (int y = 0; y < h; ++y) {
-		for (int i = 0; i < w4; ++i) {
-			const __m128i a = _mm_load_si128(&p[i]);
-			bits = _mm_and_si128(bits, a);
-		}
-
-		__m128i result = _mm_xor_si128(bits, mask);
-		if (CombineSSEBitsToDWORD(result) != 0) {
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride4;
-	}
-
-	return CHECKALPHA_FULL;
-}
-
-CheckAlphaResult CheckAlphaABGR4444SSE2(const u32 *pixelData, int stride, int w, int h) {
-	const __m128i mask = _mm_set1_epi16((short)0x000F);
-
-	const __m128i *p = (const __m128i *)pixelData;
-	const int w8 = w / 8;
-	const int stride8 = stride / 8;
-
-	__m128i bits = mask;
-	for (int y = 0; y < h; ++y) {
-		for (int i = 0; i < w8; ++i) {
-			const __m128i a = _mm_load_si128(&p[i]);
-			bits = _mm_and_si128(bits, a);
-		}
-
-		__m128i result = _mm_xor_si128(bits, mask);
-		if (CombineSSEBitsToDWORD(result) != 0) {
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride8;
-	}
-
-	return CHECKALPHA_FULL;
-}
-
-CheckAlphaResult CheckAlphaABGR1555SSE2(const u32 *pixelData, int stride, int w, int h) {
-	const __m128i mask = _mm_set1_epi16((short)0x0001);
-
-	const __m128i *p = (const __m128i *)pixelData;
-	const int w8 = w / 8;
-	const int stride8 = stride / 8;
-
-	__m128i bits = mask;
-	for (int y = 0; y < h; ++y) {
-		for (int i = 0; i < w8; ++i) {
-			const __m128i a = _mm_load_si128(&p[i]);
-			bits = _mm_and_si128(bits, a);
-		}
-
-		__m128i result = _mm_xor_si128(bits, mask);
-		if (CombineSSEBitsToDWORD(result) != 0) {
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride8;
-	}
-
-	return CHECKALPHA_FULL;
-}
-
-CheckAlphaResult CheckAlphaRGBA4444SSE2(const u32 *pixelData, int stride, int w, int h) {
-	const __m128i mask = _mm_set1_epi16((short)0xF000);
-
-	const __m128i *p = (const __m128i *)pixelData;
-	const int w8 = w / 8;
-	const int stride8 = stride / 8;
-
-	__m128i bits = mask;
-	for (int y = 0; y < h; ++y) {
-		for (int i = 0; i < w8; ++i) {
-			const __m128i a = _mm_load_si128(&p[i]);
-			bits = _mm_and_si128(bits, a);
-		}
-
-		__m128i result = _mm_xor_si128(bits, mask);
-		if (CombineSSEBitsToDWORD(result) != 0) {
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride8;
-	}
-
-	return CHECKALPHA_FULL;
-}
-
-CheckAlphaResult CheckAlphaRGBA5551SSE2(const u32 *pixelData, int stride, int w, int h) {
-	const __m128i mask = _mm_set1_epi16((short)0x8000);
-
-	const __m128i *p = (const __m128i *)pixelData;
-	const int w8 = w / 8;
-	const int stride8 = stride / 8;
-
-	__m128i bits = mask;
-	for (int y = 0; y < h; ++y) {
-		for (int i = 0; i < w8; ++i) {
-			const __m128i a = _mm_load_si128(&p[i]);
-			bits = _mm_and_si128(bits, a);
-		}
-
-		__m128i result = _mm_xor_si128(bits, mask);
-		if (CombineSSEBitsToDWORD(result) != 0) {
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride8;
-	}
-
-	return CHECKALPHA_FULL;
+inline u32 SSEReduce16And(__m128i value) {
+	// TODO: Should use a shuffle instead of slri, probably.
+	value = _mm_and_si128(value, _mm_srli_si128(value, 64));
+	value = _mm_and_si128(value, _mm_srli_si128(value, 32));
+	u32 mask = _mm_cvtsi128_si32(value);
+	return mask & (mask >> 16);
 }
 #endif
 
-CheckAlphaResult CheckAlphaRGBA8888Basic(const u32 *pixelData, int stride, int w, int h) {
-	// Use SIMD if aligned to 16 bytes / 4 pixels (almost always the case.)
-	if ((w & 3) == 0 && (stride & 3) == 0) {
+#if PPSSPP_ARCH(ARM_NEON)
+inline u32 NEONReduce32And(uint32x4_t value) {
+	// TODO: Maybe a shuffle and a vector and, or something?
+	return vgetq_lane_u32(value, 0) & vgetq_lane_u32(value, 1) & vgetq_lane_u32(value, 2) & vgetq_lane_u32(value, 3);
+}
+inline u32 NEONReduce16And(uint16x8_t value) {
+	uint32x4_t value32 = vreinterpretq_u32_u16(value);
+	// TODO: Maybe a shuffle and a vector and, or something?
+	u32 mask = vgetq_lane_u32(value32, 0) & vgetq_lane_u32(value32, 1) & vgetq_lane_u32(value32, 2) & vgetq_lane_u32(value32, 3);
+	return mask & (mask >> 16);
+}
+#endif
+
+// TODO: SSE/SIMD
+// At least on x86, compiler actually SIMDs these pretty well.
+void CopyAndSumMask16(u16 *dst, const u16 *src, int width, u32 *outMask) {
+	u16 mask = 0xFFFF;
 #ifdef _M_SSE
-		return CheckAlphaRGBA8888SSE2(pixelData, stride, w, h);
+	if (width >= 8) {
+		__m128i wideMask = _mm_set1_epi32(0xFFFFFFFF);
+		while (width >= 8) {
+			__m128i color = _mm_loadu_si128((__m128i *)src);
+			wideMask = _mm_and_si128(wideMask, color);
+			_mm_storeu_si128((__m128i *)dst, color);
+			src += 8;
+			dst += 8;
+			width -= 8;
+		}
+		mask = SSEReduce16And(wideMask);
+	}
 #elif PPSSPP_ARCH(ARM_NEON)
-		if (cpu_info.bNEON) {
-			return CheckAlphaRGBA8888NEON(pixelData, stride, w, h);
+	if (width >= 8) {
+		uint16x8_t wideMask = vdupq_n_u16(0xFFFF);
+		while (width >= 8) {
+			uint16x8_t colors = vld1q_u16(src);
+			wideMask = vandq_u16(wideMask, colors);
+			vst1q_u16(dst, colors);
+			src += 8;
+			dst += 8;
+			width -= 8;
 		}
+		mask = NEONReduce16And(wideMask);
+	}
 #endif
+
+	DO_NOT_VECTORIZE_LOOP
+	for (int i = 0; i < width; i++) {
+		u16 color = src[i];
+		mask &= color;
+		dst[i] = color;
 	}
-
-	const u32 *p = pixelData;
-	for (int y = 0; y < h; ++y) {
-		u32 bits = 0xFF000000;
-		for (int i = 0; i < w; ++i) {
-			bits &= p[i];
-		}
-
-		if (bits != 0xFF000000) {
-			// We're done, we hit non-full alpha.
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride;
-	}
-
-	return CHECKALPHA_FULL;
+	*outMask &= (u32)mask;
 }
 
-CheckAlphaResult CheckAlphaABGR4444Basic(const u32 *pixelData, int stride, int w, int h) {
-	// Use SIMD if aligned to 16 bytes / 8 pixels (usually the case.)
-	if ((w & 7) == 0 && (stride & 7) == 0) {
+// Used in video playback so nice to have being fast.
+void CopyAndSumMask32(u32 *dst, const u32 *src, int width, u32 *outMask) {
+	u32 mask = 0xFFFFFFFF;
 #ifdef _M_SSE
-		return CheckAlphaABGR4444SSE2(pixelData, stride, w, h);
+	if (width >= 4) {
+		__m128i wideMask = _mm_set1_epi32(0xFFFFFFFF);
+		while (width >= 4) {
+			__m128i color = _mm_loadu_si128((__m128i *)src);
+			wideMask = _mm_and_si128(wideMask, color);
+			_mm_storeu_si128((__m128i *)dst, color);
+			src += 4;
+			dst += 4;
+			width -= 4;
+		}
+		mask = SSEReduce32And(wideMask);
+	}
 #elif PPSSPP_ARCH(ARM_NEON)
-		if (cpu_info.bNEON) {
-			return CheckAlphaABGR4444NEON(pixelData, stride, w, h);
+	if (width >= 4) {
+		uint32x4_t wideMask = vdupq_n_u32(0xFFFFFFFF);
+		while (width >= 4) {
+			uint32x4_t colors = vld1q_u32(src);
+			wideMask = vandq_u32(wideMask, colors);
+			vst1q_u32(dst, colors);
+			src += 4;
+			dst += 4;
+			width -= 4;
 		}
+		mask = NEONReduce32And(wideMask);
+	}
 #endif
+
+	DO_NOT_VECTORIZE_LOOP
+	for (int i = 0; i < width; i++) {
+		u32 color = src[i];
+		mask &= color;
+		dst[i] = color;
 	}
-
-	const u32 *p = pixelData;
-	const int w2 = (w + 1) / 2;
-	const int stride2 = (stride + 1) / 2;
-
-	for (int y = 0; y < h; ++y) {
-		u32 bits = 0x000F000F;
-		for (int i = 0; i < w2; ++i) {
-			bits &= p[i];
-		}
-
-		if (bits != 0x000F000F) {
-			// We're done, we hit non-full alpha.
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride2;
-	}
-
-	return CHECKALPHA_FULL;
+	*outMask &= (u32)mask;
 }
 
-CheckAlphaResult CheckAlphaABGR1555Basic(const u32 *pixelData, int stride, int w, int h) {
-	// Use SIMD if aligned to 16 bytes / 8 pixels (usually the case.)
-	if ((w & 7) == 0 && (stride & 7) == 0) {
+void CheckMask16(const u16 *src, int width, u32 *outMask) {
+	u16 mask = 0xFFFF;
 #ifdef _M_SSE
-		return CheckAlphaABGR1555SSE2(pixelData, stride, w, h);
+	if (width >= 8) {
+		__m128i wideMask = _mm_set1_epi32(0xFFFFFFFF);
+		while (width >= 8) {
+			wideMask = _mm_and_si128(wideMask, _mm_loadu_si128((__m128i *)src));
+			src += 8;
+			width -= 8;
+		}
+		mask = SSEReduce16And(wideMask);
+	}
 #elif PPSSPP_ARCH(ARM_NEON)
-		if (cpu_info.bNEON) {
-			return CheckAlphaABGR1555NEON(pixelData, stride, w, h);
+	if (width >= 8) {
+		uint16x8_t wideMask = vdupq_n_u16(0xFFFF);
+		while (width >= 8) {
+			wideMask = vandq_u16(wideMask, vld1q_u16(src));
+			src += 8;
+			width -= 8;
 		}
+		mask = NEONReduce16And(wideMask);
+	}
 #endif
+
+	DO_NOT_VECTORIZE_LOOP
+	for (int i = 0; i < width; i++) {
+		mask &= src[i];
 	}
-
-	const u32 *p = pixelData;
-	const int w2 = (w + 1) / 2;
-	const int stride2 = (stride + 1) / 2;
-
-	for (int y = 0; y < h; ++y) {
-		u32 bits = 0x00010001;
-		for (int i = 0; i < w2; ++i) {
-			bits &= p[i];
-		}
-
-		if (bits != 0x00010001) {
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride2;
-	}
-
-	return CHECKALPHA_FULL;
+	*outMask &= (u32)mask;
 }
 
-CheckAlphaResult CheckAlphaRGBA4444Basic(const u32 *pixelData, int stride, int w, int h) {
-	// Use SSE if aligned to 16 bytes / 8 pixels (usually the case.)
-	if ((w & 7) == 0 && (stride & 7) == 0) {
+void CheckMask32(const u32 *src, int width, u32 *outMask) {
+	u32 mask = 0xFFFFFFFF;
 #ifdef _M_SSE
-		return CheckAlphaRGBA4444SSE2(pixelData, stride, w, h);
+	if (width >= 4) {
+		__m128i wideMask = _mm_set1_epi32(0xFFFFFFFF);
+		while (width >= 4) {
+			wideMask = _mm_and_si128(wideMask, _mm_loadu_si128((__m128i *)src));
+			src += 4;
+			width -= 4;
+		}
+		mask = SSEReduce32And(wideMask);
+	}
 #elif PPSSPP_ARCH(ARM_NEON)
-		if (cpu_info.bNEON) {
-			return CheckAlphaRGBA4444NEON(pixelData, stride, w, h);
+	if (width >= 4) {
+		uint32x4_t wideMask = vdupq_n_u32(0xFFFFFFFF);
+		while (width >= 4) {
+			wideMask = vandq_u32(wideMask, vld1q_u32(src));
+			src += 4;
+			width -= 4;
 		}
+		mask = NEONReduce32And(wideMask);
+	}
 #endif
+
+	DO_NOT_VECTORIZE_LOOP
+	for (int i = 0; i < width; i++) {
+		mask &= src[i];
 	}
-
-	const u32 *p = pixelData;
-	const int w2 = (w + 1) / 2;
-	const int stride2 = (stride + 1) / 2;
-
-	for (int y = 0; y < h; ++y) {
-		u32 bits = 0xF000F000;
-		for (int i = 0; i < w2; ++i) {
-			bits &= p[i];
-		}
-
-		if (bits != 0xF000F000) {
-			// We're done, we hit non-full alpha.
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride2;
-	}
-
-	return CHECKALPHA_FULL;
-}
-
-CheckAlphaResult CheckAlphaRGBA5551Basic(const u32 *pixelData, int stride, int w, int h) {
-	// Use SSE if aligned to 16 bytes / 8 pixels (usually the case.)
-	if ((w & 7) == 0 && (stride & 7) == 0) {
-#ifdef _M_SSE
-		return CheckAlphaRGBA5551SSE2(pixelData, stride, w, h);
-#elif PPSSPP_ARCH(ARM_NEON)
-		if (cpu_info.bNEON) {
-			return CheckAlphaRGBA5551NEON(pixelData, stride, w, h);
-		}
-#endif
-	}
-
-	const u32 *p = pixelData;
-	const int w2 = (w + 1) / 2;
-	const int stride2 = (stride + 1) / 2;
-
-	for (int y = 0; y < h; ++y) {
-		u32 bits = 0x80008000;
-		for (int i = 0; i < w2; ++i) {
-			bits &= p[i];
-		}
-
-		if (bits != 0x80008000) {
-			return CHECKALPHA_ANY;
-		}
-
-		p += stride2;
-	}
-
-	return CHECKALPHA_FULL;
+	*outMask &= (u32)mask;
 }

@@ -155,13 +155,13 @@ static Vec3f ClipToScreen(const Vec4f& coords) {
 	float z = coords.z * zScale / coords.w + zCenter;
 
 	// 16 = 0xFFFF / 4095.9375
-	return Vec3f(x * 16, y * 16, z);
+	return Vec3f(x * 16 - gstate.getOffsetX16(), y * 16 - gstate.getOffsetY16(), z);
 }
 
 static Vec3f ScreenToDrawing(const Vec3f& coords) {
 	Vec3f ret;
-	ret.x = (coords.x - gstate.getOffsetX16()) * (1.0f / 16.0f);
-	ret.y = (coords.y - gstate.getOffsetY16()) * (1.0f / 16.0f);
+	ret.x = coords.x * (1.0f / 16.0f);
+	ret.y = coords.y * (1.0f / 16.0f);
 	ret.z = coords.z;
 	return ret;
 }
@@ -483,33 +483,13 @@ u32 DrawEngineCommon::NormalizeVertices(u8 *outPtr, u8 *bufPtr, const u8 *inPtr,
 	return GE_VTYPE_TC_FLOAT | GE_VTYPE_COL_8888 | GE_VTYPE_NRM_FLOAT | GE_VTYPE_POS_FLOAT | (vertType & (GE_VTYPE_IDX_MASK | GE_VTYPE_THROUGH));
 }
 
-bool DrawEngineCommon::ApplyFramebufferRead(bool *fboTexNeedsBind) {
+void DrawEngineCommon::ApplyFramebufferRead(bool *fboTexNeedsBind) {
 	if (gstate_c.Supports(GPU_SUPPORTS_ANY_FRAMEBUFFER_FETCH)) {
 		*fboTexNeedsBind = false;
-		return true;
 	}
-
-	static const int MAX_REASONABLE_BLITS_PER_FRAME = 24;
-
-	static int lastFrameBlit = -1;
-	static int blitsThisFrame = 0;
-	if (lastFrameBlit != gpuStats.numFlips) {
-		if (blitsThisFrame > MAX_REASONABLE_BLITS_PER_FRAME) {
-			WARN_LOG_REPORT_ONCE(blendingBlit, G3D, "Lots of blits needed for obscure blending: %d per frame, blend %d/%d/%d", blitsThisFrame, gstate.getBlendFuncA(), gstate.getBlendFuncB(), gstate.getBlendEq());
-		}
-		blitsThisFrame = 0;
-		lastFrameBlit = gpuStats.numFlips;
-	}
-	++blitsThisFrame;
-	if (blitsThisFrame > MAX_REASONABLE_BLITS_PER_FRAME * 2) {
-		WARN_LOG_ONCE(blendingBlit2, G3D, "Skipping additional blits needed for obscure blending: %d per frame, blend %d/%d/%d", blitsThisFrame, gstate.getBlendFuncA(), gstate.getBlendFuncB(), gstate.getBlendEq());
-		return false;
-	}
-
 	*fboTexNeedsBind = true;
 
 	gstate_c.Dirty(DIRTY_SHADERBLEND);
-	return true;
 }
 
 void DrawEngineCommon::DecodeVertsStep(u8 *dest, int &i, int &decodedVerts) {
@@ -522,7 +502,7 @@ void DrawEngineCommon::DecodeVertsStep(u8 *dest, int &i, int &decodedVerts) {
 	int indexUpperBound = dc.indexUpperBound;
 
 	if (dc.indexType == GE_VTYPE_IDX_NONE >> GE_VTYPE_IDX_SHIFT) {
-		// Decode the verts and apply morphing. Simple.
+		// Decode the verts (and at the same time apply morphing/skinning). Simple.
 		dec_->DecodeVerts(dest + decodedVerts * (int)dec_->GetDecVtxFmt().stride,
 			dc.verts, indexLowerBound, indexUpperBound);
 		decodedVerts += indexUpperBound - indexLowerBound + 1;
