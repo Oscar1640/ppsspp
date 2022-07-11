@@ -53,7 +53,7 @@ struct ThemeInfo {
 	uint32_t uPopupStyleBg = 0xFF303030;
 	uint32_t uBackgroundColor = 0xFF88375C;
 
-	std::string sUIAtlas = "ui_atlas";
+	std::string sUIAtlas = "ui_atlas_luna";
 
 	bool operator == (const std::string &other) {
 		return name == other;

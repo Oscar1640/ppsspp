@@ -125,5 +125,5 @@ private:
 	std::vector<UITransform> transformStack_;
 
 	std::string lastUIAtlas_;
-	std::string UIAtlas_ = "ui_atlas.zim";
+	std::string UIAtlas_ = "ui_atlas_luna.zim";
 };
