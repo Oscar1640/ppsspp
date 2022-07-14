@@ -97,6 +97,7 @@ struct CompatFlags {
 	bool BlueToAlpha;
 	bool CenteredLines;
 	bool MaliDepthStencilBugWorkaround;
+	bool ZZT3SelectHack;
 };
 
 class IniFile;

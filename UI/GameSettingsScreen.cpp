@@ -1874,20 +1874,23 @@ void DeveloperToolsScreen::CreateViews() {
 	list->Add(new Choice(dev->T("Copy savestates to memstick root")))->OnClick.Handle(this, &DeveloperToolsScreen::OnCopyStatesToRoot);
 #endif
 
+	// Reconsider whenever recreating views.
+	hasTexturesIni_ = HasIni::MAYBE;
+
 	Choice *createTextureIni = list->Add(new Choice(dev->T("Create/Open textures.ini file for current game")));
 	createTextureIni->OnClick.Handle(this, &DeveloperToolsScreen::OnOpenTexturesIniFile);
+	createTextureIni->SetEnabledFunc([&] {
+		if (!PSP_IsInited())
+			return false;
 
-	// Disable the choice to Open/Create if the textures.ini file already exists, and we can't open it due to platform support limitations.
-	if (!System_GetPropertyBool(SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR)) {
-		std::string gameID = g_paramSFO.GetDiscID();
-		if (TextureReplacer::IniExists(gameID)) {
-			createTextureIni->SetEnabled(false);
+		// Disable the choice to Open/Create if the textures.ini file already exists, and we can't open it due to platform support limitations.
+		if (!System_GetPropertyBool(SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR)) {
+			if (hasTexturesIni_ == HasIni::MAYBE)
+				hasTexturesIni_ = TextureReplacer::IniExists(g_paramSFO.GetDiscID()) ? HasIni::YES : HasIni::NO;
+			return hasTexturesIni_ != HasIni::YES;
 		}
-	}
-
-	if (!PSP_IsInited()) {
-		createTextureIni->SetEnabled(false);
-	}
+		return true;
+	});
 }
 
 void DeveloperToolsScreen::onFinish(DialogResult result) {
@@ -2012,8 +2015,6 @@ UI::EventReturn DeveloperToolsScreen::OnOpenTexturesIniFile(UI::EventParams &e) 
 	std::string gameID = g_paramSFO.GetDiscID();
 	Path generatedFilename;
 
-	bool existedBefore = TextureReplacer::IniExists(gameID);
-
 	if (TextureReplacer::GenerateIni(gameID, generatedFilename)) {
 		if (System_GetPropertyBool(SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR)) {
 			File::OpenFileInEditor(generatedFilename);
@@ -2022,6 +2023,8 @@ UI::EventReturn DeveloperToolsScreen::OnOpenTexturesIniFile(UI::EventParams &e) 
 			auto dev = GetI18NCategory("Developer");
 			System_Toast((generatedFilename.ToVisualString() + ": " +  dev->T("Texture ini file created")).c_str());
 		}
+
+		hasTexturesIni_ = HasIni::YES;
 	}
 	return UI::EVENT_DONE;
 }

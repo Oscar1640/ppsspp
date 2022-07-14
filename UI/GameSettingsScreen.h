@@ -182,6 +182,12 @@ private:
 
 	bool allowDebugger_ = false;
 	bool canAllowDebugger_ = true;
+	enum class HasIni {
+		NO,
+		YES,
+		MAYBE,
+	};
+	HasIni hasTexturesIni_ = HasIni::MAYBE;
 };
 
 class OtherSettingsScreen : public UIDialogScreenWithBackground {
