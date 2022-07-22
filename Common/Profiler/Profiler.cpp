@@ -171,7 +171,7 @@ void internal_profiler_leave(int thread_id, int category) {
 	double now = time_now_d();
 
 	depth--;
-	_assert_msg_(depth >= 0, "Profiler enter/leave mismatch!");
+	//_assert_msg_(depth >= 0, "Profiler enter/leave mismatch!");
 
 	int parent = profiler.parentCategory[thread_id][depth];
 	// When there's recursion, we don't suspend or resume.
