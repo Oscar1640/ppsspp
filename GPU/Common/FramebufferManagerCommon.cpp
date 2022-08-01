@@ -69,6 +69,12 @@ FramebufferManagerCommon::~FramebufferManagerCommon() {
 	}
 	bvfbs_.clear();
 
+	// Shouldn't be anything left here in theory, but just in case...
+	for (auto trackedDepth : trackedDepthBuffers_) {
+		delete trackedDepth;
+	}
+	trackedDepthBuffers_.clear();
+
 	delete presentation_;
 }
 
@@ -268,14 +274,25 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(const Frame
 	int drawing_width, drawing_height;
 	EstimateDrawingSize(params.fb_address, params.fmt, params.viewportWidth, params.viewportHeight, params.regionWidth, params.regionHeight, params.scissorWidth, params.scissorHeight, std::max(params.fb_stride, 4), drawing_width, drawing_height);
 
-	gstate_c.SetCurRTOffsetX(0);
+	gstate_c.SetCurRTOffset(0, 0);
 	bool vfbFormatChanged = false;
+
+	if (params.fb_address == params.z_address) {
+		// Most likely Z will not be used in this pass, as that would wreak havoc (undefined behavior for sure)
+		// We probably don't need to do anything about that, but let's log it.
+		WARN_LOG_ONCE(color_equal_z, G3D, "Framebuffer bound with color addr == z addr, likely will not use Z in this pass: %08x", params.fb_address);
+	}
+
+	FramebufferRenderMode mode = FB_MODE_NORMAL;
 
 	// Find a matching framebuffer
 	VirtualFramebuffer *vfb = nullptr;
 	for (size_t i = 0; i < vfbs_.size(); ++i) {
 		VirtualFramebuffer *v = vfbs_[i];
-		if (v->fb_address == params.fb_address) {
+
+		const u32 bpp = v->format == GE_FORMAT_8888 ? 4 : 2;
+
+		if (params.fb_address == v->fb_address) {
 			vfb = v;
 			// Update fb stride in case it changed
 			if (vfb->fb_stride != params.fb_stride) {
@@ -304,21 +321,71 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(const Frame
 				vfb->height = drawing_height;
 			}
 			break;
-		} else if (v->fb_address < params.fb_address && v->fb_address + v->fb_stride * 4 > params.fb_address) {
-			// Possibly a render-to-offset.
-			const u32 bpp = v->format == GE_FORMAT_8888 ? 4 : 2;
-			const int x_offset = (params.fb_address - v->fb_address) / bpp;
-			if (v->format == params.fmt && v->fb_stride == params.fb_stride && x_offset < params.fb_stride && v->height >= drawing_height) {
-				WARN_LOG_REPORT_ONCE(renderoffset, HLE, "Rendering to framebuffer offset: %08x +%dx%d", v->fb_address, x_offset, 0);
-				vfb = v;
-				gstate_c.SetCurRTOffsetX(x_offset);
-				vfb->width = std::max((int)vfb->width, x_offset + drawing_width);
-				// To prevent the newSize code from being confused.
-				drawing_width += x_offset;
+		} else if (params.fb_address == v->z_address && params.fmt != GE_FORMAT_8888 && params.fb_stride == v->z_stride) {
+			// Looks like the game might be intending to use color to write directly to a Z buffer.
+			// This is seen in Kuroyou 2.
+
+			// Ignore this in this loop, BUT, we do a lookup in the depth tracking afterwards to
+			// make sure we get the latest one.
+			WARN_LOG_ONCE(color_matches_z, G3D, "Color framebuffer bound at %08x with likely intent to write explicit Z values using color. fmt = %s", params.fb_address, GeBufferFormatToString(params.fmt));
+			// Seems impractical to use the other 16-bit formats for this due to the limited control over alpha,
+			// so we'll simply only support 565.
+			if (params.fmt == GE_FORMAT_565) {
+				mode = FB_MODE_COLOR_TO_DEPTH;
 				break;
+			}
+		} else if (v->fb_stride == params.fb_stride && v->format == params.fmt) {
+			u32 v_fb_first_line_end_ptr = v->fb_address + v->fb_stride * 4;  // This should be * bpp, but leaving like this until after 1.13 to be safe. The God of War games use this for shadows.
+			u32 v_fb_end_ptr = v->fb_address + v->fb_stride * v->height * bpp;
+
+			if (params.fb_address > v->fb_address && params.fb_address < v_fb_first_line_end_ptr) {
+				const int x_offset = (params.fb_address - v->fb_address) / bpp;
+				if (x_offset < params.fb_stride && v->height >= drawing_height) {
+					// Pretty certainly a pure render-to-X-offset.
+					WARN_LOG_REPORT_ONCE(renderoffset, HLE, "Rendering to framebuffer offset: %08x +%dx%d", v->fb_address, x_offset, 0);
+					vfb = v;
+					gstate_c.SetCurRTOffset(x_offset, 0);
+					vfb->width = std::max((int)vfb->width, x_offset + drawing_width);
+					// To prevent the newSize code from being confused.
+					drawing_width += x_offset;
+					break;
+				}
+			} else if (params.fb_address > v->fb_address && params.fb_address < v_fb_end_ptr && PSP_CoreParameter().compat.flags().AllowLargeFBTextureOffsets) {
+				if (params.fb_address % params.fb_stride == v->fb_address % params.fb_stride) {
+					// Framebuffers are overlapping on the Y axis.
+					const int y_offset = (params.fb_address - v->fb_address) / (bpp * params.fb_stride);
+
+					vfb = v;
+					gstate_c.SetCurRTOffset(0, y_offset);
+					// To prevent the newSize code from being confused.
+					drawing_height += y_offset;
+					break;
+				}
+			} else {
+				// We ignore this match.
+				// TODO: We can allow X/Y overlaps too, but haven't seen any so safer to not.
 			}
 		}
 	}
+
+	if (mode == FB_MODE_COLOR_TO_DEPTH) {
+		// Lookup in the depth tracking to find which VFB has the latest version of this Z buffer.
+		// Then bind it in color-to-depth mode.
+		//
+		// We are going to do this by having a special render mode where we take color and move to
+		// depth in the fragment shader, and set color writes to off.
+		//
+		// We'll need a special fragment shader flag to convert color to depth.
+
+		for (auto &depth : this->trackedDepthBuffers_) {
+			if (depth->z_address == params.fb_address && depth->z_stride == params.fb_stride) {
+				// Found the matching depth buffer. Use this vfb.
+				vfb = depth->vfb;
+			}
+		}
+	}
+
+	gstate_c.SetFramebufferRenderMode(mode);
 
 	if (vfb) {
 		if ((drawing_width != vfb->bufferWidth || drawing_height != vfb->bufferHeight)) {
@@ -381,14 +448,21 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(const Frame
 		ResizeFramebufFBO(vfb, drawing_width, drawing_height, true);
 		NotifyRenderFramebufferCreated(vfb);
 
+		// Looks up by z_address, so if one is found here and not have last pointers equal to this one,
+		// there is another one.
+		TrackedDepthBuffer *prevDepth = GetOrCreateTrackedDepthBuffer(vfb);
+
 		// We might already want to copy depth, in case this is a temp buffer.  See #7810.
-		if (currentRenderVfb_ && !params.isClearingDepth) {
-			BlitFramebufferDepth(currentRenderVfb_, vfb);
+		if (prevDepth->vfb != vfb) {
+			if (!params.isClearingDepth && prevDepth->vfb) {
+				BlitFramebufferDepth(prevDepth->vfb, vfb);
+			}
+			prevDepth->vfb = vfb;
 		}
 
 		SetColorUpdated(vfb, skipDrawReason);
 
-		INFO_LOG(FRAMEBUF, "Creating FBO for %08x (z: %08x) : %i x %i x %i", vfb->fb_address, vfb->z_address, vfb->width, vfb->height, vfb->format);
+		INFO_LOG(FRAMEBUF, "Creating FBO for %08x (z: %08x) : %d x %d x %s", vfb->fb_address, vfb->z_address, vfb->width, vfb->height, GeBufferFormatToString(vfb->format));
 
 		vfb->last_frame_render = gpuStats.numFlips;
 		frameLastFramebufUsed_ = gpuStats.numFlips;
@@ -476,6 +550,13 @@ void FramebufferManagerCommon::DestroyFramebuf(VirtualFramebuffer *v) {
 	if (prevPrevDisplayFramebuf_ == v)
 		prevPrevDisplayFramebuf_ = nullptr;
 
+	// Remove any depth buffer tracking related to this vfb.
+	for (auto it = trackedDepthBuffers_.begin(); it != trackedDepthBuffers_.end(); it++) {
+		if ((*it)->vfb == v) {
+			(*it)->vfb = nullptr;  // Mark for deletion in the next Decimate
+		}
+	}
+
 	delete v;
 }
 
@@ -484,9 +565,10 @@ void FramebufferManagerCommon::BlitFramebufferDepth(VirtualFramebuffer *src, Vir
 
 	// Check that the depth address is even the same before actually blitting.
 	bool matchingDepthBuffer = src->z_address == dst->z_address && src->z_stride != 0 && dst->z_stride != 0;
-	bool matchingSize = src->width == dst->width && src->height == dst->height;
-	if (!matchingDepthBuffer || !matchingSize)
+	bool matchingSize = (src->width == dst->width || src->width == 512 && dst->width == 480) || (src->width == 480 && dst->width == 512) && src->height == dst->height;
+	if (!matchingDepthBuffer || !matchingSize) {
 		return;
+	}
 
 	// Copy depth value from the previously bound framebuffer to the current one.
 	bool hasNewerDepth = src->last_frame_depth_render != 0 && src->last_frame_depth_render >= dst->last_frame_depth_updated;
@@ -496,10 +578,14 @@ void FramebufferManagerCommon::BlitFramebufferDepth(VirtualFramebuffer *src, Vir
 		return;
 	}
 
+	gpuStats.numDepthCopies++;
+
 	int w = std::min(src->renderWidth, dst->renderWidth);
 	int h = std::min(src->renderHeight, dst->renderHeight);
 
-	// Note: We prefer Blit ahead of Copy here, since at least on GL, Copy will always also copy stencil which we don't want. See #9740.
+	// Note: We prefer Blit ahead of Copy here, since at least on GL, Copy will always also copy stencil which we don't want.
+	// See #9740.
+	// TODO: This ordering should probably apply to GL only, since in Vulkan you can totally copy just the depth aspect.
 	if (gstate_c.Supports(GPU_SUPPORTS_FRAMEBUFFER_BLIT_TO_DEPTH)) {
 		draw_->BlitFramebuffer(src->fbo, 0, 0, w, h, dst->fbo, 0, 0, w, h, Draw::FB_DEPTH_BIT, Draw::FB_BLIT_NEAREST, "BlitFramebufferDepth");
 		RebindFramebuffer("After BlitFramebufferDepth");
@@ -508,6 +594,34 @@ void FramebufferManagerCommon::BlitFramebufferDepth(VirtualFramebuffer *src, Vir
 		RebindFramebuffer("After BlitFramebufferDepth");
 	}
 	dst->last_frame_depth_updated = gpuStats.numFlips;
+}
+
+TrackedDepthBuffer *FramebufferManagerCommon::GetOrCreateTrackedDepthBuffer(VirtualFramebuffer *vfb) {
+	for (auto tracked : trackedDepthBuffers_) {
+		// Disable tracking if color of the new vfb is clashing with tracked depth.
+		if (vfb->fb_address == tracked->z_address) {
+			tracked->vfb = nullptr;  // this is checked for. Cheaper than deleting.
+			continue;
+		}
+
+		if (vfb->z_address == tracked->z_address) {
+			if (vfb->z_stride == tracked->z_stride) {
+				return tracked;
+			} else {
+				// Stride has changed, mark as bad.
+				tracked->vfb = nullptr;
+			}
+		}
+	}
+
+	TrackedDepthBuffer *tracked = new TrackedDepthBuffer();
+	tracked->vfb = vfb;
+	tracked->z_address = vfb->z_address;
+	tracked->z_stride = vfb->z_stride;
+
+	trackedDepthBuffers_.push_back(tracked);
+
+	return tracked;
 }
 
 void FramebufferManagerCommon::NotifyRenderFramebufferCreated(VirtualFramebuffer *vfb) {
@@ -717,8 +831,14 @@ void FramebufferManagerCommon::NotifyRenderFramebufferSwitched(VirtualFramebuffe
 	shaderManager_->DirtyLastShader();
 
 	// Copy depth between the framebuffers, if the z_address is the same (checked inside.)
-	if (prevVfb && !isClearingDepth) {
-		BlitFramebufferDepth(prevVfb, vfb);
+	TrackedDepthBuffer *prevDepth = GetOrCreateTrackedDepthBuffer(vfb);
+
+	// We might already want to copy depth, in case this is a temp buffer.  See #7810.
+	if (prevDepth->vfb != vfb) {
+		if (!isClearingDepth && prevDepth->vfb) {
+			BlitFramebufferDepth(prevDepth->vfb, vfb);
+		}
+		prevDepth->vfb = vfb;
 	}
 
 	if (vfb->drawnFormat != vfb->format) {
@@ -854,7 +974,7 @@ void FramebufferManagerCommon::DrawPixels(VirtualFramebuffer *vfb, int dstX, int
 		draw_->SetScissorRect(0, 0, pixelWidth_, pixelHeight_);
 	}
 
-	Draw::Texture *pixelsTex = MakePixelTexture(srcPixels, srcPixelFormat, srcStride, width, height, u1, v1);
+	Draw::Texture *pixelsTex = MakePixelTexture(srcPixels, srcPixelFormat, srcStride, width, height);
 	if (pixelsTex) {
 		draw_->BindTextures(0, 1, &pixelsTex);
 		Bind2DShader();
@@ -936,7 +1056,7 @@ void FramebufferManagerCommon::CopyFramebufferForColorTexture(VirtualFramebuffer
 	}
 }
 
-Draw::Texture *FramebufferManagerCommon::MakePixelTexture(const u8 *srcPixels, GEBufferFormat srcPixelFormat, int srcStride, int width, int height, float &u1, float &v1) {
+Draw::Texture *FramebufferManagerCommon::MakePixelTexture(const u8 *srcPixels, GEBufferFormat srcPixelFormat, int srcStride, int width, int height) {
 	// TODO: We can just change the texture format and flip some bits around instead of this.
 	// Could share code with the texture cache perhaps.
 	auto generateTexture = [&](uint8_t *data, const uint8_t *initData, uint32_t w, uint32_t h, uint32_t d, uint32_t byteStride, uint32_t sliceByteStride) {
@@ -1011,7 +1131,7 @@ void FramebufferManagerCommon::DrawFramebufferToOutput(const u8 *srcPixels, GEBu
 
 	float u0 = 0.0f, u1 = 480.0f / 512.0f;
 	float v0 = 0.0f, v1 = 1.0f;
-	Draw::Texture *pixelsTex = MakePixelTexture(srcPixels, srcPixelFormat, srcStride, 512, 272, u1, v1);
+	Draw::Texture *pixelsTex = MakePixelTexture(srcPixels, srcPixelFormat, srcStride, 512, 272);
 	if (!pixelsTex)
 		return;
 
@@ -1243,6 +1363,16 @@ void FramebufferManagerCommon::DecimateFBOs() {
 			INFO_LOG(FRAMEBUF, "Decimating FBO for %08x (%i x %i x %i), age %i", vfb->fb_address, vfb->width, vfb->height, vfb->format, age);
 			DestroyFramebuf(vfb);
 			bvfbs_.erase(bvfbs_.begin() + i--);
+		}
+	}
+
+	// Also clean up the TrackedDepthBuffer array...
+	for (auto it = trackedDepthBuffers_.begin(); it != trackedDepthBuffers_.end(); it) {
+		if ((*it)->vfb == nullptr) {
+			delete *it;
+			it = trackedDepthBuffers_.erase(it);
+		} else {
+			it++;
 		}
 	}
 }
@@ -1696,7 +1826,7 @@ void FramebufferManagerCommon::ApplyClearToMemory(int x1, int y1, int x2, int y2
 		return;
 	}
 
-	u8 *addr = Memory::GetPointerUnchecked(gstate.getFrameBufAddress());
+	u8 *addr = Memory::GetPointerWriteUnchecked(gstate.getFrameBufAddress());
 	const int bpp = gstate_c.framebufFormat == GE_FORMAT_8888 ? 4 : 2;
 
 	u32 clearBits = clearColor;
@@ -2035,7 +2165,7 @@ bool FramebufferManagerCommon::GetFramebuffer(u32 fb_address, int fb_stride, GEB
 		if (!Memory::IsValidAddress(fb_address))
 			return false;
 		// If there's no vfb and we're drawing there, must be memory?
-		buffer = GPUDebugBuffer(Memory::GetPointer(fb_address), fb_stride, 512, format);
+		buffer = GPUDebugBuffer(Memory::GetPointerWriteUnchecked(fb_address), fb_stride, 512, format);
 		return true;
 	}
 
@@ -2092,7 +2222,7 @@ bool FramebufferManagerCommon::GetDepthbuffer(u32 fb_address, int fb_stride, u32
 		if (!Memory::IsValidAddress(z_address))
 			return false;
 		// If there's no vfb and we're drawing there, must be memory?
-		buffer = GPUDebugBuffer(Memory::GetPointer(z_address), z_stride, 512, GPU_DBG_FORMAT_16BIT);
+		buffer = GPUDebugBuffer(Memory::GetPointerWriteUnchecked(z_address), z_stride, 512, GPU_DBG_FORMAT_16BIT);
 		return true;
 	}
 
@@ -2130,7 +2260,7 @@ bool FramebufferManagerCommon::GetStencilbuffer(u32 fb_address, int fb_stride, G
 			return false;
 		// If there's no vfb and we're drawing there, must be memory?
 		// TODO: Actually get the stencil.
-		buffer = GPUDebugBuffer(Memory::GetPointer(fb_address), fb_stride, 512, GPU_DBG_FORMAT_8888);
+		buffer = GPUDebugBuffer(Memory::GetPointerWrite(fb_address), fb_stride, 512, GPU_DBG_FORMAT_8888);
 		return true;
 	}
 
@@ -2195,7 +2325,7 @@ void FramebufferManagerCommon::PackFramebufferSync_(VirtualFramebuffer *vfb, int
 		return;
 	}
 
-	u8 *destPtr = Memory::GetPointer(fb_address + dstByteOffset);
+	u8 *destPtr = Memory::GetPointerWriteUnchecked(fb_address + dstByteOffset);
 
 	// We always need to convert from the framebuffer native format.
 	// Right now that's always 8888.

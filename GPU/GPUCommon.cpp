@@ -1566,11 +1566,19 @@ void GPUCommon::Execute_TexLevel(u32 op, u32 diff) {
 	// TODO: If you change the rules here, don't forget to update the inner interpreter in Execute_Prim.
 	if (diff == 0xFFFFFFFF)
 		return;
+
 	gstate.texlevel ^= diff;
+
+	if (diff & 0xFF0000) {
+		// Piggyback on this flag for 3D textures.
+		gstate_c.Dirty(DIRTY_MIPBIAS);
+	}
 	if (gstate.getTexLevelMode() != GE_TEXLEVEL_MODE_AUTO && (0x00FF0000 & gstate.texlevel) != 0) {
 		Flush();
 	}
+
 	gstate.texlevel ^= diff;
+
 	gstate_c.Dirty(DIRTY_TEXTURE_PARAMS | DIRTY_FRAGMENTSHADER_STATE);
 }
 
@@ -1683,8 +1691,8 @@ void GPUCommon::Execute_Prim(u32 op, u32 diff) {
 		return;
 	}
 
-	void *verts = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
-	void *inds = nullptr;
+	const void *verts = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
+	const void *inds = nullptr;
 	u32 vertexType = gstate.vertType;
 	if ((vertexType & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
 		u32 indexAddr = gstate_c.indexAddr;
@@ -1892,8 +1900,8 @@ void GPUCommon::Execute_Bezier(u32 op, u32 diff) {
 		return;
 	}
 
-	void *control_points = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
-	void *indices = NULL;
+	const void *control_points = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
+	const void *indices = NULL;
 	if ((gstate.vertType & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
 		if (!Memory::IsValidAddress(gstate_c.indexAddr)) {
 			ERROR_LOG_REPORT(G3D, "Bad index address %08x!", gstate_c.indexAddr);
@@ -1962,8 +1970,8 @@ void GPUCommon::Execute_Spline(u32 op, u32 diff) {
 		return;
 	}
 
-	void *control_points = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
-	void *indices = NULL;
+	const void *control_points = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
+	const void *indices = NULL;
 	if ((gstate.vertType & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
 		if (!Memory::IsValidAddress(gstate_c.indexAddr)) {
 			ERROR_LOG_REPORT(G3D, "Bad index address %08x!", gstate_c.indexAddr);
@@ -2024,7 +2032,7 @@ void GPUCommon::Execute_BoundingBox(u32 op, u32 diff) {
 		return;
 	}
 	if (((count & 7) == 0) && count <= 64) {  // Sanity check
-		void *control_points = Memory::GetPointer(gstate_c.vertexAddr);
+		const void *control_points = Memory::GetPointer(gstate_c.vertexAddr);
 		if (!control_points) {
 			ERROR_LOG_REPORT_ONCE(boundingbox, G3D, "Invalid verts in bounding box check");
 			currentList->bboxResult = true;
@@ -2655,6 +2663,7 @@ void GPUCommon::ResetListPC(int listID, u32 pc) {
 		return;
 	}
 
+	Reporting::NotifyDebugger();
 	dls[listID].pc = pc;
 	downcount = 0;
 }
@@ -2665,6 +2674,7 @@ void GPUCommon::ResetListStall(int listID, u32 stall) {
 		return;
 	}
 
+	Reporting::NotifyDebugger();
 	dls[listID].stall = stall;
 	downcount = 0;
 }
@@ -2675,6 +2685,7 @@ void GPUCommon::ResetListState(int listID, DisplayListState state) {
 		return;
 	}
 
+	Reporting::NotifyDebugger();
 	dls[listID].state = state;
 	downcount = 0;
 }
@@ -2732,6 +2743,7 @@ void GPUCommon::SetCmdValue(u32 op) {
 	u32 cmd = op >> 24;
 	u32 diff = op ^ gstate.cmdmem[cmd];
 
+	Reporting::NotifyDebugger();
 	PreExecuteOp(op, diff);
 	gstate.cmdmem[cmd] = op;
 	ExecuteOp(op, diff);
@@ -2801,7 +2813,7 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 			u32 srcLineStartAddr = srcBasePtr + (srcY * srcStride + srcX) * bpp;
 			u32 dstLineStartAddr = dstBasePtr + (dstY * dstStride + dstX) * bpp;
 			const u8 *src = Memory::GetPointerUnchecked(srcLineStartAddr);
-			u8 *dst = Memory::GetPointerUnchecked(dstLineStartAddr);
+			u8 *dst = Memory::GetPointerWriteUnchecked(dstLineStartAddr);
 			memcpy(dst, src, width * height * bpp);
 			GPURecord::NotifyMemcpy(dstLineStartAddr, srcLineStartAddr, width * height * bpp);
 		} else {
@@ -2810,7 +2822,7 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 				u32 dstLineStartAddr = dstBasePtr + ((y + dstY) * dstStride + dstX) * bpp;
 
 				const u8 *src = Memory::GetPointerUnchecked(srcLineStartAddr);
-				u8 *dst = Memory::GetPointerUnchecked(dstLineStartAddr);
+				u8 *dst = Memory::GetPointerWriteUnchecked(dstLineStartAddr);
 				memcpy(dst, src, width * bpp);
 				GPURecord::NotifyMemcpy(dstLineStartAddr, srcLineStartAddr, width * bpp);
 			}
@@ -3039,7 +3051,7 @@ size_t GPUCommon::FormatGPUStatsCommon(char *buffer, size_t size) {
 		"Vertices: %d cached: %d uncached: %d\n"
 		"FBOs active: %d (evaluations: %d)\n"
 		"Textures: %d, dec: %d, invalidated: %d, hashed: %d kB\n"
-		"Readbacks: %d, uploads: %d\n"
+		"Readbacks: %d, uploads: %d, depth copies: %d\n"
 		"GPU cycles executed: %d (%f per vertex)\n",
 		gpuStats.msProcessingDisplayLists * 1000.0f,
 		gpuStats.numDrawCalls,
@@ -3059,6 +3071,7 @@ size_t GPUCommon::FormatGPUStatsCommon(char *buffer, size_t size) {
 		gpuStats.numTextureDataBytesHashed / 1024,
 		gpuStats.numReadbacks,
 		gpuStats.numUploads,
+		gpuStats.numDepthCopies,
 		gpuStats.vertexGPUCycles + gpuStats.otherGPUCycles,
 		vertexAverageCycles
 	);

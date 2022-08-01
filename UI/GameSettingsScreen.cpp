@@ -392,6 +392,7 @@ void GameSettingsScreen::CreateViews() {
 		}
 	}
 
+#ifndef OPENXR
 	graphicsSettings->Add(new ItemHeader(gr->T("Screen layout")));
 #if !defined(MOBILE_DEVICE)
 	graphicsSettings->Add(new CheckBox(&g_Config.bFullScreen, gr->T("FullScreen", "Full Screen")))->OnClick.Handle(this, &GameSettingsScreen::OnFullscreenChange);
@@ -423,6 +424,7 @@ void GameSettingsScreen::CreateViews() {
 		graphicsSettings->Add(new CheckBox(&g_Config.bImmersiveMode, gr->T("FullScreen", "Full Screen")))->OnClick.Handle(this, &GameSettingsScreen::OnImmersiveModeChange);
 	}
 #endif
+#endif
 
 	graphicsSettings->Add(new ItemHeader(gr->T("Performance")));
 #ifndef MOBILE_DEVICE
@@ -437,7 +439,8 @@ void GameSettingsScreen::CreateViews() {
 	});
 
 #if PPSSPP_PLATFORM(ANDROID)
-	if (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) != DEVICE_TYPE_TV) {
+	int deviceType = System_GetPropertyInt(SYSPROP_DEVICE_TYPE);
+	if ((deviceType != DEVICE_TYPE_TV) && (deviceType != DEVICE_TYPE_VR)) {
 		static const char *deviceResolutions[] = { "Native device resolution", "Auto (same as Rendering)", "1x PSP", "2x PSP", "3x PSP", "4x PSP", "5x PSP" };
 		int max_res_temp = std::max(System_GetPropertyInt(SYSPROP_DISPLAY_XRES), System_GetPropertyInt(SYSPROP_DISPLAY_YRES)) / 480 + 2;
 		if (max_res_temp == 3)
@@ -598,7 +601,9 @@ void GameSettingsScreen::CreateViews() {
 	static const char *bufFilters[] = { "Linear", "Nearest", };
 	graphicsSettings->Add(new PopupMultiChoice(&g_Config.iBufFilter, gr->T("Screen Scaling Filter"), bufFilters, 1, ARRAY_SIZE(bufFilters), gr->GetName(), screenManager()));
 
-#if PPSSPP_PLATFORM(ANDROID) || PPSSPP_PLATFORM(IOS)
+#ifdef OPENXR
+	bool showCardboardSettings = false;
+#elif PPSSPP_PLATFORM(ANDROID) || PPSSPP_PLATFORM(IOS)
 	bool showCardboardSettings = true;
 #else
 	// If you enabled it through the ini, you can see this. Useful for testing.
@@ -744,6 +749,7 @@ void GameSettingsScreen::CreateViews() {
 		});
 	}
 
+#ifndef OPENXR
 	// TVs don't have touch control, at least not yet.
 	if (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) != DEVICE_TYPE_TV) {
 		controlsSettings->Add(new ItemHeader(co->T("OnScreen", "On-Screen Touch Controls")));
@@ -815,6 +821,7 @@ void GameSettingsScreen::CreateViews() {
 	controlsSettings->Add(new CheckBox(&g_Config.bMouseConfine, co->T("Confine Mouse", "Trap mouse within window/display area")))->SetEnabledPtr(&g_Config.bMouseControl);
 	controlsSettings->Add(new PopupSliderChoiceFloat(&g_Config.fMouseSensitivity, 0.01f, 1.0f, co->T("Mouse sensitivity"), 0.01f, screenManager(), "x"))->SetEnabledPtr(&g_Config.bMouseControl);
 	controlsSettings->Add(new PopupSliderChoiceFloat(&g_Config.fMouseSmoothing, 0.0f, 0.95f, co->T("Mouse smoothing"), 0.05f, screenManager(), "x"))->SetEnabledPtr(&g_Config.bMouseControl);
+#endif
 #endif
 
 	LinearLayout *networkingSettings = AddTab("GameSettingsNetworking", ms->T("Networking"));
@@ -1123,20 +1130,23 @@ if (!g_Config.bSimpleUI) {
 	systemSettings->Add(new PopupMultiChoice(&g_Config.iButtonPreference, sy->T("Confirmation Button"), buttonPref, 0, 2, sy->GetName(), screenManager()));
 
 #if !defined(MOBILE_DEVICE) || PPSSPP_PLATFORM(ANDROID)
-	// Search
-	LinearLayout *searchSettings = AddTab("GameSettingsSearch", ms->T("Search"), true);
+	// Hide search if screen is too small.
+	if (dp_xres < dp_yres || dp_yres >= 500) {
+		// Search
+		LinearLayout *searchSettings = AddTab("GameSettingsSearch", ms->T("Search"), true);
 
-	searchSettings->Add(new ItemHeader(se->T("Find settings")));
-	if (System_GetPropertyBool(SYSPROP_HAS_KEYBOARD)) {
-		searchSettings->Add(new ChoiceWithValueDisplay(&searchFilter_, se->T("Filter"), (const char*)nullptr))->OnClick.Handle(this, &GameSettingsScreen::OnChangeSearchFilter);
-	} else {
-		searchSettings->Add(new PopupTextInputChoice(&searchFilter_, se->T("Filter"), "", 64, screenManager()))->OnChange.Handle(this, &GameSettingsScreen::OnChangeSearchFilter);
+		searchSettings->Add(new ItemHeader(se->T("Find settings")));
+		if (System_GetPropertyBool(SYSPROP_HAS_KEYBOARD)) {
+			searchSettings->Add(new ChoiceWithValueDisplay(&searchFilter_, se->T("Filter"), (const char *)nullptr))->OnClick.Handle(this, &GameSettingsScreen::OnChangeSearchFilter);
+		} else {
+			searchSettings->Add(new PopupTextInputChoice(&searchFilter_, se->T("Filter"), "", 64, screenManager()))->OnChange.Handle(this, &GameSettingsScreen::OnChangeSearchFilter);
+		}
+		clearSearchChoice_ = searchSettings->Add(new Choice(se->T("Clear filter")));
+		clearSearchChoice_->OnClick.Handle(this, &GameSettingsScreen::OnClearSearchFilter);
+		noSearchResults_ = searchSettings->Add(new TextView(se->T("No settings matched '%1'"), new LinearLayoutParams(Margins(20, 5))));
+
+		ApplySearchFilter();
 	}
-	clearSearchChoice_ = searchSettings->Add(new Choice(se->T("Clear filter")));
-	clearSearchChoice_->OnClick.Handle(this, &GameSettingsScreen::OnClearSearchFilter);
-	noSearchResults_ = searchSettings->Add(new TextView(se->T("No settings matched '%1'"), new LinearLayoutParams(Margins(20, 5))));
-
-	ApplySearchFilter();
 #endif
 }
 }
@@ -1677,7 +1687,17 @@ UI::EventReturn GameSettingsScreen::OnChangeproAdhocServerAddress(UI::EventParam
 }
 
 UI::EventReturn GameSettingsScreen::OnChangeMacAddress(UI::EventParams &e) {
-	g_Config.sMACAddress = CreateRandMAC();
+	auto n = GetI18NCategory("Networking");
+	auto di = GetI18NCategory("Dialog");
+
+	auto confirmScreen = new PromptScreen(
+		n->T("Change Mac Address"), di->T("Yes"), di->T("No"),
+		[&](bool success) {
+		if (success) {
+			g_Config.sMACAddress = CreateRandMAC();
+		}}
+	);
+	screenManager()->push(confirmScreen);
 
 	return UI::EVENT_DONE;
 }

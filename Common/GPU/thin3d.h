@@ -453,13 +453,11 @@ public:
 
 class RasterState : public RefCountedObject {};
 
-struct StencilSide {
+struct StencilSetup {
 	StencilOp failOp;
 	StencilOp passOp;
 	StencilOp depthFailOp;
 	Comparison compareOp;
-	uint8_t compareMask;
-	uint8_t writeMask;
 };
 
 struct DepthStencilStateDesc {
@@ -467,8 +465,7 @@ struct DepthStencilStateDesc {
 	bool depthWriteEnabled;
 	Comparison depthCompare;
 	bool stencilEnabled;
-	StencilSide front;
-	StencilSide back;
+	StencilSetup stencil;
 };
 
 struct BlendStateDesc {
@@ -535,6 +532,8 @@ struct DeviceCaps {
 	bool framebufferDepthCopySupported;
 	bool framebufferDepthBlitSupported;
 	bool framebufferFetchSupported;
+	bool texture3DSupported;
+
 	std::string deviceName;  // The device name to use when creating the thin3d context, to get the same one.
 };
 
@@ -652,7 +651,7 @@ public:
 	virtual void SetScissorRect(int left, int top, int width, int height) = 0;
 	virtual void SetViewports(int count, Viewport *viewports) = 0;
 	virtual void SetBlendFactor(float color[4]) = 0;
-	virtual void SetStencilRef(uint8_t ref) = 0;
+	virtual void SetStencilParams(uint8_t refValue, uint8_t writeMask, uint8_t compareMask) = 0;
 
 	virtual void BindSamplerStates(int start, int count, SamplerState **state) = 0;
 	virtual void BindTextures(int start, int count, Texture **textures) = 0;

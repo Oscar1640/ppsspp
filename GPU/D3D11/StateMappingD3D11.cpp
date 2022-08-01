@@ -283,7 +283,14 @@ void DrawEngineD3D11::ApplyDrawState(int prim) {
 		GenericStencilFuncState stencilState;
 		ConvertStencilFuncState(stencilState);
 
-		if (gstate.isModeClear()) {
+		if (gstate_c.renderMode == FB_MODE_COLOR_TO_DEPTH) {
+			// Enforce plain depth writing.
+			keys_.depthStencil.value = 0;
+			keys_.depthStencil.depthTestEnable = true;
+			keys_.depthStencil.depthWriteEnable = true;
+			keys_.depthStencil.stencilTestEnable = false;
+			keys_.depthStencil.depthCompareOp = D3D11_COMPARISON_ALWAYS;
+		} else if (gstate.isModeClear()) {
 			keys_.depthStencil.value = 0;
 			keys_.depthStencil.depthTestEnable = true;
 			keys_.depthStencil.depthCompareOp = D3D11_COMPARISON_ALWAYS;
@@ -393,17 +400,10 @@ void DrawEngineD3D11::ApplyDrawState(int prim) {
 		}
 
 		D3D11_RECT &scissor = dynState_.scissor;
-		if (vpAndScissor.scissorEnable) {
-			scissor.left = vpAndScissor.scissorX;
-			scissor.top = vpAndScissor.scissorY;
-			scissor.right = vpAndScissor.scissorX + std::max(0, vpAndScissor.scissorW);
-			scissor.bottom = vpAndScissor.scissorY + std::max(0, vpAndScissor.scissorH);
-		} else {
-			scissor.left = 0;
-			scissor.top = 0;
-			scissor.right = framebufferManager_->GetRenderWidth();
-			scissor.bottom = framebufferManager_->GetRenderHeight();
-		}
+		scissor.left = vpAndScissor.scissorX;
+		scissor.top = vpAndScissor.scissorY;
+		scissor.right = vpAndScissor.scissorX + std::max(0, vpAndScissor.scissorW);
+		scissor.bottom = vpAndScissor.scissorY + std::max(0, vpAndScissor.scissorH);
 	}
 
 	if (gstate_c.IsDirty(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS) && !gstate.isModeClear() && gstate.isTextureMapEnabled()) {

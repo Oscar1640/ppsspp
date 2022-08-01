@@ -259,15 +259,16 @@ struct GLRInitStep {
 			GLRTexture *texture;
 			Draw::DataFormat format;
 			int level;
-			int width;
-			int height;
+			uint16_t width;
+			uint16_t height;
+			uint16_t depth;
 			GLRAllocType allocType;
 			bool linearFilter;
 			uint8_t *data;  // owned, delete[]-d
 		} texture_image;
 		struct {
 			GLRTexture *texture;
-			int maxLevel;
+			int loadedLevels;
 			bool genMips;
 		} texture_finalize;
 	};

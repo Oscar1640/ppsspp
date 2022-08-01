@@ -135,7 +135,6 @@ VULKAN_FILES := \
   $(SRC)/GPU/Vulkan/StateMappingVulkan.cpp \
   $(SRC)/GPU/Vulkan/StencilBufferVulkan.cpp \
   $(SRC)/GPU/Vulkan/TextureCacheVulkan.cpp \
-  $(SRC)/GPU/Vulkan/TextureScalerVulkan.cpp \
   $(SRC)/GPU/Vulkan/DepalettizeShaderVulkan.cpp \
   $(SRC)/GPU/Vulkan/VulkanUtil.cpp \
   $(SRC)/GPU/Vulkan/DebugVisVulkan.cpp
@@ -358,7 +357,6 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/GPU/GLES/StateMappingGLES.cpp.arm \
   $(SRC)/GPU/GLES/ShaderManagerGLES.cpp.arm \
   $(SRC)/GPU/GLES/FragmentTestCacheGLES.cpp.arm \
-  $(SRC)/GPU/GLES/TextureScalerGLES.cpp \
   $(SRC)/GPU/Software/BinManager.cpp \
   $(SRC)/GPU/Software/Clipper.cpp \
   $(SRC)/GPU/Software/DrawPixel.cpp.arm \
@@ -734,6 +732,7 @@ ifeq ($(UNITTEST),1)
   LOCAL_MODULE := ppsspp_unittest
   LOCAL_SRC_FILES := \
     $(SRC)/unittest/JitHarness.cpp \
+    $(SRC)/unittest/TestIRPassSimplify.cpp \
     $(SRC)/unittest/TestShaderGenerators.cpp \
     $(SRC)/unittest/TestSoftwareGPUJit.cpp \
     $(SRC)/unittest/TestThreadManager.cpp \

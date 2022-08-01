@@ -481,7 +481,7 @@ struct Atrac {
 	}
 
 	u8 *BufferStart() {
-		return ignoreDataBuf_ ? Memory::GetPointer(first_.addr) : dataBuf_;
+		return ignoreDataBuf_ ? Memory::GetPointerWrite(first_.addr) : dataBuf_;
 	}
 
 	void SeekToSample(int sample) {
@@ -1352,7 +1352,7 @@ static u32 sceAtracDecodeData(int atracID, u32 outAddr, u32 numSamplesAddr, u32 
 	u32 numSamples = 0;
 	u32 finish = 0;
 	int remains = 0;
-	int ret = _AtracDecodeData(atracID, Memory::GetPointer(outAddr), outAddr, &numSamples, &finish, &remains);
+	int ret = _AtracDecodeData(atracID, Memory::GetPointerWrite(outAddr), outAddr, &numSamples, &finish, &remains);
 	if (ret != (int)ATRAC_ERROR_BAD_ATRACID && ret != (int)ATRAC_ERROR_NO_DATA) {
 		if (Memory::IsValidAddress(numSamplesAddr))
 			Memory::Write_U32(numSamples, numSamplesAddr);

@@ -116,6 +116,14 @@ include(GNUInstallDirs)
 
 add_definitions(-DASSETS_DIR="${CMAKE_INSTALL_FULL_DATADIR}/ppsspp/assets/")
 
+if(OPENXR)
+	add_definitions(-DOPENXR)
+	add_library(openxr SHARED IMPORTED)
+	include_directories(ext/openxr)
+	set_property(TARGET openxr PROPERTY IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/ext/openxr/libs/arm64-v8a/libopenxr_loader.so")
+	message("OpenXR enabled")
+endif()
+
 if(GOLD)
 	add_definitions(-DGOLD)
 	message("Gold Build")
@@ -1056,6 +1064,20 @@ if(ANDROID)
 		android/jni/OpenSLContext.cpp
 		android/jni/OpenSLContext.h
 	)
+
+	if (OPENXR)
+		set(nativeExtra ${nativeExtra}
+			Common/VR/VRBase.cpp
+			Common/VR/VRBase.h
+			Common/VR/VRFramebuffer.cpp
+			Common/VR/VRFramebuffer.h
+			Common/VR/VRInput.cpp
+			Common/VR/VRInput.h
+			Common/VR/VRRenderer.cpp
+			Common/VR/VRRenderer.h
+		)
+		set(nativeExtraLibs ${nativeExtraLibs} openxr)
+	endif()
 	# No target
 elseif(IOS)
 	set(nativeExtra ${nativeExtra}
@@ -1436,8 +1458,6 @@ set(GPU_GLES
 	GPU/GLES/StencilBufferGLES.cpp
 	GPU/GLES/TextureCacheGLES.cpp
 	GPU/GLES/TextureCacheGLES.h
-	GPU/GLES/TextureScalerGLES.cpp
-	GPU/GLES/TextureScalerGLES.h
 	GPU/GLES/DrawEngineGLES.cpp
 	GPU/GLES/DrawEngineGLES.h
 )
@@ -1462,8 +1482,6 @@ set(GPU_VULKAN
 	GPU/Vulkan/StencilBufferVulkan.cpp
 	GPU/Vulkan/TextureCacheVulkan.cpp
 	GPU/Vulkan/TextureCacheVulkan.h
-	GPU/Vulkan/TextureScalerVulkan.cpp
-	GPU/Vulkan/TextureScalerVulkan.h
 	GPU/Vulkan/VulkanUtil.cpp
 	GPU/Vulkan/VulkanUtil.h
 )
@@ -1484,8 +1502,6 @@ set(GPU_D3D9
 	GPU/Directx9/StencilBufferDX9.cpp
 	GPU/Directx9/TextureCacheDX9.cpp
 	GPU/Directx9/TextureCacheDX9.h
-	GPU/Directx9/TextureScalerDX9.cpp
-	GPU/Directx9/TextureScalerDX9.h
 )
 
 set(GPU_D3D11
@@ -1506,8 +1522,6 @@ set(GPU_D3D11
 	GPU/D3D11/StencilBufferD3D11.cpp
 	GPU/D3D11/TextureCacheD3D11.cpp
 	GPU/D3D11/TextureCacheD3D11.h
-	GPU/D3D11/TextureScalerD3D11.cpp
-	GPU/D3D11/TextureScalerD3D11.h
 )
 
 # We build Vulkan even on Apple to avoid annoying build differences.
@@ -2321,6 +2335,7 @@ if(UNITTEST)
 		unittest/TestShaderGenerators.cpp
 		unittest/TestArmEmitter.cpp
 		unittest/TestArm64Emitter.cpp
+		unittest/TestIRPassSimplify.cpp
 		unittest/TestX64Emitter.cpp
 		unittest/TestVertexJit.cpp
 		unittest/TestSoftwareGPUJit.cpp

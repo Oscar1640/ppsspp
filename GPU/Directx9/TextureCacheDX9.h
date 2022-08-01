@@ -21,7 +21,6 @@
 
 #include "GPU/GPU.h"
 #include "GPU/GPUInterface.h"
-#include "GPU/Directx9/TextureScalerDX9.h"
 #include "GPU/Common/TextureCacheCommon.h"
 
 struct VirtualFramebuffer;
@@ -62,7 +61,6 @@ protected:
 private:
 	void ApplySamplingParams(const SamplerCacheKey &key);
 
-	void LoadTextureLevel(TexCacheEntry &entry, ReplacedTexture &replaced, int level, int maxLevel, int scaleFactor, u32 dstFmt);
 	D3DFORMAT GetDestFormat(GETextureFormat format, GEPaletteFormat clutFormat) const;
 	static CheckAlphaResult CheckAlpha(const u32 *pixelData, u32 dstFmt, int w);
 	void UpdateCurrentClut(GEPaletteFormat clutFormat, u32 clutBase, bool clutIndexIsSimple) override;
@@ -70,18 +68,16 @@ private:
 	void ApplyTextureFramebuffer(VirtualFramebuffer *framebuffer, GETextureFormat texFormat, FramebufferNotificationChannel channel) override;
 	void BuildTexture(TexCacheEntry *const entry) override;
 
-	LPDIRECT3DTEXTURE9 &DxTex(TexCacheEntry *entry) {
-		return *(LPDIRECT3DTEXTURE9 *)&entry->texturePtr;
+	LPDIRECT3DBASETEXTURE9 &DxTex(TexCacheEntry *entry) {
+		return *(LPDIRECT3DBASETEXTURE9 *)&entry->texturePtr;
 	}
 
 	LPDIRECT3DDEVICE9 device_;
 	LPDIRECT3DDEVICE9EX deviceEx_;
 
-	TextureScalerDX9 scaler;
-
 	LPDIRECT3DVERTEXDECLARATION9 pFramebufferVertexDecl;
 
-	LPDIRECT3DTEXTURE9 lastBoundTexture;
+	LPDIRECT3DBASETEXTURE9 lastBoundTexture;
 	float maxAnisotropyLevel;
 
 	FramebufferManagerDX9 *framebufferManagerDX9_;

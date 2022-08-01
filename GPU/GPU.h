@@ -24,6 +24,11 @@ class GPUInterface;
 class GPUDebugInterface;
 class GraphicsContext;
 
+enum FramebufferRenderMode {
+	FB_MODE_NORMAL = 0,
+	FB_MODE_COLOR_TO_DEPTH = 1,
+};
+
 enum SkipDrawReasonFlags {
 	SKIPDRAW_SKIPFRAME = 1,
 	SKIPDRAW_NON_DISPLAYED_FB = 2,   // Skip drawing to FBO:s that have not been displayed.
@@ -75,6 +80,7 @@ struct GPUStatistics {
 		numReadbacks = 0;
 		numUploads = 0;
 		numClears = 0;
+		numDepthCopies = 0;
 		msProcessingDisplayLists = 0;
 		vertexGPUCycles = 0;
 		otherGPUCycles = 0;
@@ -100,6 +106,7 @@ struct GPUStatistics {
 	int numReadbacks;
 	int numUploads;
 	int numClears;
+	int numDepthCopies;
 	double msProcessingDisplayLists;
 	int vertexGPUCycles;
 	int otherGPUCycles;

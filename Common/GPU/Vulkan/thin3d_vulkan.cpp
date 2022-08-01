@@ -283,8 +283,6 @@ public:
 	int dynamicUniformSize = 0;
 
 	bool usesStencil = false;
-	uint8_t stencilWriteMask = 0xFF;
-	uint8_t stencilTestMask = 0xFF;
 
 private:
 	VulkanContext *vulkan_;
@@ -407,7 +405,7 @@ public:
 	void SetScissorRect(int left, int top, int width, int height) override;
 	void SetViewports(int count, Viewport *viewports) override;
 	void SetBlendFactor(float color[4]) override;
-	void SetStencilRef(uint8_t stencilRef) override;
+	void SetStencilParams(uint8_t refValue, uint8_t writeMask, uint8_t compareMask) override;
 
 	void BindSamplerStates(int start, int count, SamplerState **state) override;
 	void BindTextures(int start, int count, Texture **textures) override;
@@ -554,6 +552,8 @@ private:
 	DeviceCaps caps_{};
 
 	uint8_t stencilRef_ = 0;
+	uint8_t stencilWriteMask_ = 0xFF;
+	uint8_t stencilCompareMask_ = 0xFF;
 };
 
 static int GetBpp(VkFormat format) {
@@ -640,7 +640,7 @@ VulkanTexture *VKContext::GetNullTexture() {
 		nullTexture_->SetTag("Null");
 		int w = 8;
 		int h = 8;
-		nullTexture_->CreateDirect(cmdInit, w, h, 1, VK_FORMAT_A8B8G8R8_UNORM_PACK32, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		nullTexture_->CreateDirect(cmdInit, w, h, 1, 1, VK_FORMAT_A8B8G8R8_UNORM_PACK32, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 		uint32_t bindOffset;
 		VkBuffer bindBuf;
@@ -651,7 +651,7 @@ VulkanTexture *VKContext::GetNullTexture() {
 				data[y*w + x] = 0;  // black
 			}
 		}
-		nullTexture_->UploadMip(cmdInit, 0, w, h, bindBuf, bindOffset, w);
+		nullTexture_->UploadMip(cmdInit, 0, w, h, 0, bindBuf, bindOffset, w);
 		nullTexture_->EndCreate(cmdInit, false, VK_PIPELINE_STAGE_TRANSFER_BIT);
 	} else {
 		nullTexture_->Touch();
@@ -733,7 +733,7 @@ bool VKTexture::Create(VkCommandBuffer cmd, VulkanPushBuffer *push, const Textur
 		usageBits |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	}
 
-	if (!vkTex_->CreateDirect(cmd, width_, height_, mipLevels_, vulkanFormat, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, usageBits)) {
+	if (!vkTex_->CreateDirect(cmd, width_, height_, 1, mipLevels_, vulkanFormat, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, usageBits)) {
 		ERROR_LOG(G3D,  "Failed to create VulkanTexture: %dx%dx%d fmt %d, %d levels", width_, height_, depth_, (int)vulkanFormat, mipLevels_);
 		return false;
 	}
@@ -755,7 +755,7 @@ bool VKTexture::Create(VkCommandBuffer cmd, VulkanPushBuffer *push, const Textur
 			} else {
 				offset = push->PushAligned((const void *)desc.initData[i], size, 16, &buf);
 			}
-			vkTex_->UploadMip(cmd, i, w, h, buf, offset, w);
+			vkTex_->UploadMip(cmd, i, w, h, 0, buf, offset, w);
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
 			d = (d + 1) / 2;
@@ -787,6 +787,7 @@ VKContext::VKContext(VulkanContext *vulkan, bool splitSubmit)
 	caps_.framebufferDepthBlitSupported = false;  // Can be checked for.
 	caps_.framebufferDepthCopySupported = true;   // Will pretty much always be the case.
 	caps_.preferredDepthBufferFormat = DataFormat::D24_S8;  // TODO: Ask vulkan.
+	caps_.texture3DSupported = true;
 
 	auto deviceProps = vulkan->GetPhysicalDeviceProperties(vulkan_->GetCurrentPhysicalDeviceIndex()).properties;
 	switch (deviceProps.vendorID) {
@@ -1131,8 +1132,6 @@ Pipeline *VKContext::CreateGraphicsPipeline(const PipelineDesc &desc) {
 	}
 	if (depth->info.stencilTestEnable) {
 		pipeline->usesStencil = true;
-		pipeline->stencilTestMask = depth->info.front.compareMask;
-		pipeline->stencilWriteMask = depth->info.front.writeMask;
 	}
 	return pipeline;
 }
@@ -1160,10 +1159,12 @@ void VKContext::SetBlendFactor(float color[4]) {
 	renderManager_.SetBlendFactor(col);
 }
 
-void VKContext::SetStencilRef(uint8_t stencilRef) {
+void VKContext::SetStencilParams(uint8_t refValue, uint8_t writeMask, uint8_t compareMask) {
 	if (curPipeline_->usesStencil)
-		renderManager_.SetStencilParams(curPipeline_->stencilWriteMask, curPipeline_->stencilTestMask, stencilRef);
-	stencilRef_ = stencilRef;
+		renderManager_.SetStencilParams(writeMask, compareMask, refValue);
+	stencilRef_ = refValue;
+	stencilWriteMask_ = writeMask;
+	stencilCompareMask_ = compareMask;
 }
 
 InputLayout *VKContext::CreateInputLayout(const InputLayoutDesc &desc) {
@@ -1207,9 +1208,7 @@ Texture *VKContext::CreateTexture(const TextureDesc &desc) {
 	}
 }
 
-static inline void CopySide(VkStencilOpState &dest, const StencilSide &src) {
-	dest.compareMask = src.compareMask;
-	dest.writeMask = src.writeMask;
+static inline void CopySide(VkStencilOpState &dest, const StencilSetup &src) {
 	dest.compareOp = compToVK[(int)src.compareOp];
 	dest.failOp = stencilOpToVK[(int)src.failOp];
 	dest.passOp = stencilOpToVK[(int)src.passOp];
@@ -1224,8 +1223,8 @@ DepthStencilState *VKContext::CreateDepthStencilState(const DepthStencilStateDes
 	ds->info.stencilTestEnable = desc.stencilEnabled;
 	ds->info.depthBoundsTestEnable = false;
 	if (ds->info.stencilTestEnable) {
-		CopySide(ds->info.front, desc.front);
-		CopySide(ds->info.back, desc.back);
+		CopySide(ds->info.front, desc.stencil);
+		CopySide(ds->info.back, desc.stencil);
 	}
 	return ds;
 }
@@ -1313,7 +1312,7 @@ void VKContext::UpdateDynamicUniformBuffer(const void *ub, size_t size) {
 void VKContext::ApplyDynamicState() {
 	// TODO: blend constants, stencil, viewports should be here, after bindpipeline..
 	if (curPipeline_->usesStencil) {
-		renderManager_.SetStencilParams(curPipeline_->stencilWriteMask, curPipeline_->stencilTestMask, stencilRef_);
+		renderManager_.SetStencilParams(stencilWriteMask_, stencilCompareMask_, stencilRef_);
 	}
 }
 

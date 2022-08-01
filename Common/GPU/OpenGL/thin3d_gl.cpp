@@ -175,10 +175,8 @@ public:
 	GLuint stencilZFail;
 	GLuint stencilPass;
 	GLuint stencilCompareOp;
-	uint8_t stencilCompareMask;
-	uint8_t stencilWriteMask;
 
-	void Apply(GLRenderManager *render, uint8_t stencilRef) {
+	void Apply(GLRenderManager *render, uint8_t stencilRef, uint8_t stencilWriteMask, uint8_t stencilCompareMask) {
 		render->SetDepth(depthTestEnabled, depthWriteEnabled, depthComp);
 		render->SetStencilFunc(stencilEnabled, stencilCompareOp, stencilRef, stencilCompareMask);
 		render->SetStencilOp(stencilWriteMask, stencilFail, stencilZFail, stencilPass);
@@ -388,13 +386,21 @@ public:
 		renderManager_.SetBlendFactor(color);
 	}
 
-	void SetStencilRef(uint8_t ref) override {
-		stencilRef_ = ref;
+	void SetStencilParams(uint8_t refValue, uint8_t writeMask, uint8_t compareMask) override {
+		stencilRef_ = refValue;
+		stencilWriteMask_ = writeMask;
+		stencilCompareMask_ = compareMask;
+		// Do we need to update on the fly here?
 		renderManager_.SetStencilFunc(
 			curPipeline_->depthStencil->stencilEnabled,
 			curPipeline_->depthStencil->stencilCompareOp,
-			ref,
-			curPipeline_->depthStencil->stencilCompareMask);
+			refValue,
+			compareMask);
+		renderManager_.SetStencilOp(
+			writeMask,
+			curPipeline_->depthStencil->stencilFail,
+			curPipeline_->depthStencil->stencilZFail,
+			curPipeline_->depthStencil->stencilPass);
 	}
 
 	void BindTextures(int start, int count, Texture **textures) override;
@@ -491,6 +497,8 @@ private:
 	AutoRef<Framebuffer> curRenderTarget_;
 
 	uint8_t stencilRef_ = 0;
+	uint8_t stencilWriteMask_ = 0;
+	uint8_t stencilCompareMask_ = 0;
 
 	// Frames in flight is not such a strict concept as with Vulkan until we start using glBufferStorage and fences.
 	// But might as well have the structure ready, and can't hurt to rotate buffers.
@@ -528,8 +536,10 @@ OpenGLContext::OpenGLContext() {
 		} else {
 			caps_.preferredDepthBufferFormat = DataFormat::D16;
 		}
+		caps_.texture3DSupported = gl_extensions.OES_texture_3D;
 	} else {
 		caps_.preferredDepthBufferFormat = DataFormat::D24_S8;
+		caps_.texture3DSupported = true;
 	}
 	caps_.framebufferBlitSupported = gl_extensions.NV_framebuffer_blit || gl_extensions.ARB_framebuffer_object;
 	caps_.framebufferDepthBlitSupported = caps_.framebufferBlitSupported;
@@ -628,6 +638,7 @@ OpenGLContext::OpenGLContext() {
 			shaderLanguageDesc_.shaderLanguage = ShaderLanguage::GLSL_3xx;
 			shaderLanguageDesc_.fragColor0 = "fragColor0";
 			shaderLanguageDesc_.texture = "texture";
+			shaderLanguageDesc_.texture3D = "texture";
 			shaderLanguageDesc_.glslES30 = true;
 			shaderLanguageDesc_.bitwiseOps = true;
 			shaderLanguageDesc_.texelFetch = "texelFetch";
@@ -651,6 +662,7 @@ OpenGLContext::OpenGLContext() {
 			shaderLanguageDesc_.shaderLanguage = ShaderLanguage::GLSL_3xx;
 			shaderLanguageDesc_.fragColor0 = "fragColor0";
 			shaderLanguageDesc_.texture = "texture";
+			shaderLanguageDesc_.texture3D = "texture";
 			shaderLanguageDesc_.glslES30 = true;
 			shaderLanguageDesc_.bitwiseOps = true;
 			shaderLanguageDesc_.texelFetch = "texelFetch";
@@ -661,6 +673,7 @@ OpenGLContext::OpenGLContext() {
 			shaderLanguageDesc_.shaderLanguage = ShaderLanguage::GLSL_1xx;
 			shaderLanguageDesc_.fragColor0 = "fragColor0";
 			shaderLanguageDesc_.texture = "texture";
+			shaderLanguageDesc_.texture3D = "texture";
 			shaderLanguageDesc_.bitwiseOps = true;
 			shaderLanguageDesc_.texelFetch = "texelFetch";
 			shaderLanguageDesc_.varying_vs = "out";
@@ -784,7 +797,7 @@ OpenGLTexture::OpenGLTexture(GLRenderManager *render, const TextureDesc &desc) :
 	format_ = desc.format;
 	type_ = desc.type;
 	GLenum target = TypeToTarget(desc.type);
-	tex_ = render->CreateTexture(target, desc.width, desc.height, desc.mipLevels);
+	tex_ = render->CreateTexture(target, desc.width, desc.height, 1, desc.mipLevels);
 
 	mipLevels_ = desc.mipLevels;
 	if (desc.initData.empty())
@@ -869,7 +882,7 @@ void OpenGLTexture::SetImageData(int x, int y, int z, int width, int height, int
 		}
 	}
 
-	render_->TextureImage(tex_, level, width, height, format_, texData);
+	render_->TextureImage(tex_, level, width, height, depth, format_, texData);
 }
 
 #ifdef DEBUG_READ_PIXELS
@@ -936,12 +949,10 @@ DepthStencilState *OpenGLContext::CreateDepthStencilState(const DepthStencilStat
 	ds->depthWriteEnabled = desc.depthWriteEnabled;
 	ds->depthComp = compToGL[(int)desc.depthCompare];
 	ds->stencilEnabled = desc.stencilEnabled;
-	ds->stencilCompareOp = compToGL[(int)desc.front.compareOp];
-	ds->stencilPass = stencilOpToGL[(int)desc.front.passOp];
-	ds->stencilFail = stencilOpToGL[(int)desc.front.failOp];
-	ds->stencilZFail = stencilOpToGL[(int)desc.front.depthFailOp];
-	ds->stencilWriteMask = desc.front.writeMask;
-	ds->stencilCompareMask = desc.front.compareMask;
+	ds->stencilCompareOp = compToGL[(int)desc.stencil.compareOp];
+	ds->stencilPass = stencilOpToGL[(int)desc.stencil.passOp];
+	ds->stencilFail = stencilOpToGL[(int)desc.stencil.failOp];
+	ds->stencilZFail = stencilOpToGL[(int)desc.stencil.depthFailOp];
 	return ds;
 }
 
@@ -1185,7 +1196,7 @@ void OpenGLContext::BindPipeline(Pipeline *pipeline) {
 		return;
 	}
 	curPipeline_->blend->Apply(&renderManager_);
-	curPipeline_->depthStencil->Apply(&renderManager_, stencilRef_);
+	curPipeline_->depthStencil->Apply(&renderManager_, stencilRef_, stencilWriteMask_, stencilCompareMask_);
 	curPipeline_->raster->Apply(&renderManager_);
 	renderManager_.BindProgram(curPipeline_->program_);
 }

@@ -25,7 +25,6 @@
 
 #pragma once
 
-#include <set>
 #include <vector>
 #include <unordered_map>
 
@@ -58,6 +57,11 @@ namespace Draw {
 
 class VulkanFBO;
 
+// We have to track VFBs and depth buffers together, since bits are shared between the color alpha channel
+// and the stencil buffer on the PSP.
+// Sometimes, virtual framebuffers need to share a Z buffer. We emulate this by copying from on to the next
+// when such a situation is detected. In order to reliably detect this, we separately track depth buffers,
+// and they know which color buffer they were used with last.
 struct VirtualFramebuffer {
 	u32 fb_address;
 	u32 z_address;  // If 0, it's a "RAM" framebuffer.
@@ -112,6 +116,18 @@ struct VirtualFramebuffer {
 	u32 clutUpdatedBytes;
 	bool memoryUpdated;
 	bool firstFrameSaved;
+};
+
+struct TrackedDepthBuffer {
+	u32 z_address;
+	int z_stride;
+
+	// Really need to make sure we're killing these TrackedDepthBuffer's off when the VirtualFrameBuffers die.
+	VirtualFramebuffer *vfb;
+
+	// Could do full tracking of which framebuffers are used with this depth buffer,
+	// but probably not necessary.
+	// std::set<std::pair<u32, u32>> seen_fbs;
 };
 
 struct FramebufferHeuristicParams {
@@ -208,7 +224,7 @@ public:
 	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format);
 	void DestroyFramebuf(VirtualFramebuffer *v);
 
-	VirtualFramebuffer *DoSetRenderFrameBuffer(const FramebufferHeuristicParams &params, u32 skipDrawReason);	
+	VirtualFramebuffer *DoSetRenderFrameBuffer(const FramebufferHeuristicParams &params, u32 skipDrawReason);
 	VirtualFramebuffer *SetRenderFrameBuffer(bool framebufChanged, int skipDrawReason) {
 		// Inlining this part since it's so frequent.
 		if (!framebufChanged && currentRenderVfb_) {
@@ -249,6 +265,8 @@ public:
 
 	void DownloadFramebufferForClut(u32 fb_address, u32 loadBytes);
 	void DrawFramebufferToOutput(const u8 *srcPixels, GEBufferFormat srcPixelFormat, int srcStride);
+
+	TrackedDepthBuffer *GetOrCreateTrackedDepthBuffer(VirtualFramebuffer *vfb);
 
 	void DrawPixels(VirtualFramebuffer *vfb, int dstX, int dstY, const u8 *srcPixels, GEBufferFormat srcPixelFormat, int srcStride, int width, int height);
 
@@ -336,7 +354,7 @@ public:
 protected:
 	virtual void PackFramebufferSync_(VirtualFramebuffer *vfb, int x, int y, int w, int h);
 	void SetViewport2D(int x, int y, int w, int h);
-	Draw::Texture *MakePixelTexture(const u8 *srcPixels, GEBufferFormat srcPixelFormat, int srcStride, int width, int height, float &u1, float &v1);
+	Draw::Texture *MakePixelTexture(const u8 *srcPixels, GEBufferFormat srcPixelFormat, int srcStride, int width, int height);
 	virtual void DrawActiveTexture(float x, float y, float w, float h, float destW, float destH, float u0, float v0, float u1, float v1, int uvRotation, int flags) = 0;
 	virtual void Bind2DShader() = 0;
 
@@ -411,6 +429,8 @@ protected:
 
 	std::vector<VirtualFramebuffer *> vfbs_;
 	std::vector<VirtualFramebuffer *> bvfbs_; // blitting framebuffers (for download)
+
+	std::vector<TrackedDepthBuffer *> trackedDepthBuffers_;
 
 	bool gameUsesSequentialCopies_ = false;
 
