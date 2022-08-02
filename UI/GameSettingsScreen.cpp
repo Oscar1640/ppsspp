@@ -459,11 +459,6 @@ void GameSettingsScreen::CreateViews() {
 		return UI::EVENT_CONTINUE;
 	});
 #endif
-	CheckBox *mipMap = graphicsSettings->Add(new CheckBox(&g_Config.bMipMap, gr->T("Mipmapping")));
-	mipMap->OnClick.Add([=](EventParams &e) {
-		settingInfo_->Show(gr->T("MipMap Tip", "Currently buggy in some games."), e.v);
-		return UI::EVENT_CONTINUE;
-	});
 	CheckBox *frameDuplication = graphicsSettings->Add(new CheckBox(&g_Config.bRenderDuplicateFrames, gr->T("Render duplicate frames to 60hz")));
 	frameDuplication->OnClick.Add([=](EventParams &e) {
 		settingInfo_->Show(gr->T("RenderDuplicateFrames Tip", "Can make framerate smoother in games that run at lower framerates"), e.v);
@@ -1947,7 +1942,7 @@ void OtherSettingsScreen::CreateViews() {
 	list->Add(new CheckBox(&g_Config.bEnableStateUndo, gr->T("Backup existing state on save")));
 	list->Add(new CheckBox(&g_Config.bFuncHashMap, gr->T("Save hash of a renamed function to knownfuncs.ini")));
 	list->Add(new CheckBox(&g_Config.bDiscordPresence, n->T("Send Discord(3rd party software) Presence information")));
-	list->Add(new CheckBox(&g_Config.bUnlockCachedScaling, n->T("Disable texture scaling limiters. Only for testing, this WILL cause stutter even at max FPS! Strongly recommend real time(D3D11) or hardware(Vulkan) scaling instead!")));
+	list->Add(new CheckBox(&g_Config.bUnlockCachedScaling, n->T("Disable texture scaling limiters. Only for testing and in some light cases on powerful desktops, this WILL cause stutter even at max FPS! Strongly recommend hardware(Vulkan) scaling instead!")));
 #if defined(USING_WIN_UI)
 	list->Add(new CheckBox(&g_Config.bDisableWinMenu, n->T("Disable Windows menu bar")))->OnClick.Handle(this, &OtherSettingsScreen::OnDisableWinBorders);
 	list->Add(new CheckBox(&g_Config.bDisableWinBorders, n->T("Disable Windows borders")))->OnClick.Handle(this, &OtherSettingsScreen::OnDisableWinBorders);
