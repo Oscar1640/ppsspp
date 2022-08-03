@@ -23,6 +23,9 @@
 #include "Common/GPU/OpenGL/GLFeatures.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/Data/Text/I18n.h"
+#include "Common/Math/lin/matrix4x4.h"
+#include "Common/Math/math_util.h"
+#include "Common/System/Display.h"
 #include "Common/CommonTypes.h"
 #include "Core/Config.h"
 #include "Core/ConfigValues.h"
@@ -44,8 +47,7 @@
 #include "GPU/GPUState.h"
 
 FramebufferManagerCommon::FramebufferManagerCommon(Draw::DrawContext *draw)
-	: draw_(draw),
-		displayFormat_(GE_FORMAT_565) {
+	: draw_(draw), displayFormat_(GE_FORMAT_565) {
 	presentation_ = new PresentationCommon(draw);
 }
 
@@ -471,7 +473,7 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(const Frame
 
 		if (useBufferedRendering_ && !g_Config.bDisableSlowFramebufEffects) {
 			gpu->PerformMemoryUpload(params.fb_address, byteSize);
-			NotifyStencilUpload(params.fb_address, byteSize, StencilUpload::STENCIL_IS_ZERO);
+			PerformStencilUpload(params.fb_address, byteSize, StencilUpload::STENCIL_IS_ZERO);
 			// TODO: Is it worth trying to upload the depth buffer (only if it wasn't copied above..?)
 		}
 
@@ -583,14 +585,15 @@ void FramebufferManagerCommon::BlitFramebufferDepth(VirtualFramebuffer *src, Vir
 	int w = std::min(src->renderWidth, dst->renderWidth);
 	int h = std::min(src->renderHeight, dst->renderHeight);
 
-	// Note: We prefer Blit ahead of Copy here, since at least on GL, Copy will always also copy stencil which we don't want.
-	// See #9740.
-	// TODO: This ordering should probably apply to GL only, since in Vulkan you can totally copy just the depth aspect.
-	if (gstate_c.Supports(GPU_SUPPORTS_FRAMEBUFFER_BLIT_TO_DEPTH)) {
-		draw_->BlitFramebuffer(src->fbo, 0, 0, w, h, dst->fbo, 0, 0, w, h, Draw::FB_DEPTH_BIT, Draw::FB_BLIT_NEAREST, "BlitFramebufferDepth");
-		RebindFramebuffer("After BlitFramebufferDepth");
-	} else if (gstate_c.Supports(GPU_SUPPORTS_COPY_IMAGE)) {
+	// TODO: It might even be advantageous on some GPUs to do this copy using a fragment shader that writes to Z, that way upcoming commands can just continue that render pass.
+
+	// Some GPUs can copy depth but only if stencil gets to come along for the ride. We only want to use this if there is no blit functionality.
+	if (draw_->GetDeviceCaps().framebufferSeparateDepthCopySupported || !draw_->GetDeviceCaps().framebufferDepthBlitSupported) {
 		draw_->CopyFramebufferImage(src->fbo, 0, 0, 0, 0, dst->fbo, 0, 0, 0, 0, w, h, 1, Draw::FB_DEPTH_BIT, "BlitFramebufferDepth");
+		RebindFramebuffer("After BlitFramebufferDepth");
+	} else if (draw_->GetDeviceCaps().framebufferDepthBlitSupported) {
+		// We'll accept whether we get a separate depth blit or not...
+		draw_->BlitFramebuffer(src->fbo, 0, 0, w, h, dst->fbo, 0, 0, w, h, Draw::FB_DEPTH_BIT, Draw::FB_BLIT_NEAREST, "BlitFramebufferDepth");
 		RebindFramebuffer("After BlitFramebufferDepth");
 	}
 	dst->last_frame_depth_updated = gpuStats.numFlips;
@@ -695,7 +698,7 @@ void FramebufferManagerCommon::ReinterpretFramebuffer(VirtualFramebuffer *vfb, G
 	bool doReinterpret = PSP_CoreParameter().compat.flags().ReinterpretFramebuffers &&
 		(lang == HLSL_D3D11 || lang == GLSL_VULKAN || lang == GLSL_3xx);
 	// Copy image required for now.
-	if (!gstate_c.Supports(GPU_SUPPORTS_COPY_IMAGE))
+	if (!draw_->GetDeviceCaps().framebufferCopySupported)
 		doReinterpret = false;
 	if (!doReinterpret) {
 		// Fake reinterpret - just clear the way we always did on Vulkan. Just clear color and stencil.
@@ -2489,6 +2492,15 @@ void FramebufferManagerCommon::DeviceLost() {
 	DoRelease(reinterpretVBuf_);
 	DoRelease(reinterpretSampler_);
 	DoRelease(reinterpretVS_);
+	DoRelease(stencilUploadFs_);
+	DoRelease(stencilUploadVs_);
+	DoRelease(stencilUploadSampler_);
+	DoRelease(stencilUploadPipeline_);
+	DoRelease(draw2DPipelineLinear_);
+	DoRelease(draw2DSamplerNearest_);
+	DoRelease(draw2DSamplerLinear_);
+	DoRelease(draw2DVs_);
+	DoRelease(draw2DFs_);
 	presentation_->DeviceLost();
 	draw_ = nullptr;
 }
@@ -2496,4 +2508,57 @@ void FramebufferManagerCommon::DeviceLost() {
 void FramebufferManagerCommon::DeviceRestore(Draw::DrawContext *draw) {
 	draw_ = draw;
 	presentation_->DeviceRestore(draw);
+}
+
+void FramebufferManagerCommon::DrawActiveTexture(float x, float y, float w, float h, float destW, float destH, float u0, float v0, float u1, float v1, int uvRotation, int flags) {
+	// Will be drawn as a strip.
+	Draw2DVertex coord[4] = {
+		{x,     y,     u0, v0},
+		{x + w, y,     u1, v0},
+		{x + w, y + h, u1, v1},
+		{x,     y + h, u0, v1},
+	};
+
+	if (uvRotation != ROTATION_LOCKED_HORIZONTAL) {
+		float temp[8];
+		int rotation = 0;
+		switch (uvRotation) {
+		case ROTATION_LOCKED_HORIZONTAL180: rotation = 2; break;
+		case ROTATION_LOCKED_VERTICAL: rotation = 1; break;
+		case ROTATION_LOCKED_VERTICAL180: rotation = 3; break;
+		}
+		for (int i = 0; i < 4; i++) {
+			temp[i * 2] = coord[((i + rotation) & 3)].u;
+			temp[i * 2 + 1] = coord[((i + rotation) & 3)].v;
+		}
+
+		for (int i = 0; i < 4; i++) {
+			coord[i].u = temp[i * 2];
+			coord[i].v = temp[i * 2 + 1];
+		}
+	}
+
+	const float invDestW = 2.0f / destW;
+	const float invDestH = 2.0f / destH;
+	for (int i = 0; i < 4; i++) {
+		coord[i].x = coord[i].x * invDestW - 1.0f;
+		coord[i].y = coord[i].y * invDestH - 1.0f;
+	}
+
+	if ((flags & DRAWTEX_TO_BACKBUFFER) && g_display_rotation != DisplayRotation::ROTATE_0) {
+		for (int i = 0; i < 4; i++) {
+			// backwards notation, should fix that...
+			Lin::Vec3 pos = Lin::Vec3(coord[i].x, coord[i].y, 0.0);
+			pos = pos * g_display_rot_matrix;
+			coord[i].x = pos.x;
+			coord[i].y = pos.y;
+		}
+	}
+
+	// Rearrange to strip form.
+	std::swap(coord[2], coord[3]);
+
+	DrawStrip2D(nullptr, coord, 4, (flags & DRAWTEX_LINEAR) != 0);
+
+	gstate_c.Dirty(DIRTY_BLEND_STATE | DIRTY_RASTER_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS | DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE);
 }

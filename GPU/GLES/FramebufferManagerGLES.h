@@ -40,17 +40,12 @@ public:
 	void SetShaderManager(ShaderManagerGLES *sm);
 	void SetDrawEngine(DrawEngineGLES *td);
 
-	// x,y,w,h are relative to destW, destH which fill out the target completely.
-	void DrawActiveTexture(float x, float y, float w, float h, float destW, float destH, float u0, float v0, float u1, float v1, int uvRotation, int flags) override;
-
 	virtual void Init() override;
 	void EndFrame();
 	void Resized() override;
 
 	void DeviceLost() override;
 	void DeviceRestore(Draw::DrawContext *draw) override;
-
-	bool NotifyStencilUpload(u32 addr, int size, StencilUpload flags = StencilUpload::NEEDS_CLEAR) override;
 
 	bool GetOutputFramebuffer(GPUDebugBuffer &buffer) override;
 
@@ -75,10 +70,6 @@ private:
 	u32 convBufSize_ = 0;
 
 	GLRProgram *draw2dprogram_ = nullptr;
-
-	GLRProgram *stencilUploadProgram_ = nullptr;
-	int u_stencilUploadTex = -1;
-	int u_stencilValue = -1;
 
 	GLRProgram *depthDownloadProgram_ = nullptr;
 	int u_depthDownloadTex = -1;
