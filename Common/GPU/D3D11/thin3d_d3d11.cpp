@@ -82,9 +82,9 @@ public:
 	SamplerState *CreateSamplerState(const SamplerStateDesc &desc) override;
 	RasterState *CreateRasterState(const RasterStateDesc &desc) override;
 	Buffer *CreateBuffer(size_t size, uint32_t usageFlags) override;
-	Pipeline *CreateGraphicsPipeline(const PipelineDesc &desc) override;
+	Pipeline *CreateGraphicsPipeline(const PipelineDesc &desc, const char *tag) override;
 	Texture *CreateTexture(const TextureDesc &desc) override;
-	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const std::string &tag) override;
+	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const char *tag) override;
 	Framebuffer *CreateFramebuffer(const FramebufferDesc &desc) override;
 
 	void UpdateBuffer(Buffer *buffer, const uint8_t *data, size_t offset, size_t size, UpdateBufferFlags flags) override;
@@ -99,8 +99,6 @@ public:
 		return curRenderTarget_;
 	}
 	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int attachment) override;
-
-	uintptr_t GetFramebufferAPITexture(Framebuffer *fbo, int channelBit, int attachment) override;
 
 	void GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) override;
 
@@ -163,30 +161,7 @@ public:
 		}
 	}
 
-	uint64_t GetNativeObject(NativeObject obj) override {
-		switch (obj) {
-		case NativeObject::DEVICE:
-			return (uint64_t)(uintptr_t)device_;
-		case NativeObject::CONTEXT:
-			return (uint64_t)(uintptr_t)context_;
-		case NativeObject::DEVICE_EX:
-			return (uint64_t)(uintptr_t)device1_;
-		case NativeObject::CONTEXT_EX:
-			return (uint64_t)(uintptr_t)context1_;
-		case NativeObject::BACKBUFFER_COLOR_TEX:
-			return (uint64_t)(uintptr_t)bbRenderTargetTex_;
-		case NativeObject::BACKBUFFER_DEPTH_TEX:
-			return (uint64_t)(uintptr_t)bbDepthStencilTex_;
-		case NativeObject::BACKBUFFER_COLOR_VIEW:
-			return (uint64_t)(uintptr_t)bbRenderTargetView_;
-		case NativeObject::BACKBUFFER_DEPTH_VIEW:
-			return (uint64_t)(uintptr_t)bbDepthStencilView_;
-		case NativeObject::FEATURE_LEVEL:
-			return (uint64_t)(uintptr_t)featureLevel_;
-		default:
-			return 0;
-		}
-	}
+	uint64_t GetNativeObject(NativeObject obj, void *srcObject) override;
 
 	void HandleEvent(Event ev, int width, int height, void *param1, void *param2) override;
 
@@ -288,17 +263,23 @@ D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *de
 	caps_.framebufferStencilBlitSupported = false;
 	caps_.framebufferDepthCopySupported = true;
 	caps_.framebufferSeparateDepthCopySupported = false;  // Though could be emulated with a draw.
+	caps_.textureDepthSupported = true;
 	caps_.texture3DSupported = true;
+	caps_.fragmentShaderInt32Supported = true;
+	caps_.anisoSupported = true;
+	caps_.textureNPOTFullySupported = true;
+	caps_.fragmentShaderDepthWriteSupported = true;
 
 	D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
 	HRESULT result = device_->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options));
 	if (SUCCEEDED(result)) {
 		if (options.OutputMergerLogicOp) {
 			// Actually, need to check that the format supports logic ops as well.
-			// Which normal UNORM formats don't seem to do. So meh.
+			// Which normal UNORM formats don't seem to do in D3D11. So meh. We can't enable logicOp support.
 			// caps_.logicOpSupported = true;
 		}
 	}
+
 	IDXGIDevice* dxgiDevice = nullptr;
 	IDXGIAdapter* adapter = nullptr;
 	HRESULT hr = device_->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgiDevice));
@@ -939,7 +920,7 @@ Texture *D3D11DrawContext::CreateTexture(const TextureDesc &desc) {
 	return tex;
 }
 
-ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const std::string &tag) {
+ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const char *tag) {
 	if (language != ShaderLanguage::HLSL_D3D11) {
 		ERROR_LOG(G3D, "Unsupported shader language");
 		return nullptr;
@@ -984,7 +965,7 @@ ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLang
 	}
 	if (errorMsgs) {
 		errors = std::string((const char *)errorMsgs->GetBufferPointer(), errorMsgs->GetBufferSize());
-		ERROR_LOG(G3D, "Failed compiling:\n%s\n%s", data, errors.c_str());
+		ERROR_LOG(G3D, "Failed compiling %s:\n%s\n%s", tag, data, errors.c_str());
 		errorMsgs->Release();
 	}
 
@@ -1022,7 +1003,7 @@ ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLang
 	return nullptr;
 }
 
-Pipeline *D3D11DrawContext::CreateGraphicsPipeline(const PipelineDesc &desc) {
+Pipeline *D3D11DrawContext::CreateGraphicsPipeline(const PipelineDesc &desc, const char *tag) {
 	D3D11Pipeline *dPipeline = new D3D11Pipeline();
 	dPipeline->blend = (D3D11BlendState *)desc.blend;
 	dPipeline->depthStencil = (D3D11DepthStencilState *)desc.depthStencil;
@@ -1701,16 +1682,28 @@ void D3D11DrawContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, F
 	}
 }
 
-uintptr_t D3D11DrawContext::GetFramebufferAPITexture(Framebuffer *fbo, int channelBit, int attachment) {
-	D3D11Framebuffer *fb = (D3D11Framebuffer *)fbo;
-	switch (channelBit) {
-	case FB_COLOR_BIT: return (uintptr_t)fb->colorTex;
-	case FB_DEPTH_BIT: return (uintptr_t)fb->depthStencilTex;
-	case FB_COLOR_BIT | FB_VIEW_BIT: return (uintptr_t)fb->colorRTView;
-	case FB_DEPTH_BIT | FB_VIEW_BIT: return (uintptr_t)fb->depthStencilRTView;
-	case FB_COLOR_BIT | FB_FORMAT_BIT: return (uintptr_t)fb->colorFormat;
-	case FB_DEPTH_BIT | FB_FORMAT_BIT: return (uintptr_t)fb->depthStencilFormat;
-	case FB_STENCIL_BIT | FB_FORMAT_BIT: return (uintptr_t)fb->depthStencilFormat;
+uint64_t D3D11DrawContext::GetNativeObject(NativeObject obj, void *srcObject) {
+	switch (obj) {
+	case NativeObject::DEVICE:
+		return (uint64_t)(uintptr_t)device_;
+	case NativeObject::CONTEXT:
+		return (uint64_t)(uintptr_t)context_;
+	case NativeObject::DEVICE_EX:
+		return (uint64_t)(uintptr_t)device1_;
+	case NativeObject::CONTEXT_EX:
+		return (uint64_t)(uintptr_t)context1_;
+	case NativeObject::BACKBUFFER_COLOR_TEX:
+		return (uint64_t)(uintptr_t)bbRenderTargetTex_;
+	case NativeObject::BACKBUFFER_DEPTH_TEX:
+		return (uint64_t)(uintptr_t)bbDepthStencilTex_;
+	case NativeObject::BACKBUFFER_COLOR_VIEW:
+		return (uint64_t)(uintptr_t)bbRenderTargetView_;
+	case NativeObject::BACKBUFFER_DEPTH_VIEW:
+		return (uint64_t)(uintptr_t)bbDepthStencilView_;
+	case NativeObject::FEATURE_LEVEL:
+		return (uint64_t)(uintptr_t)featureLevel_;
+	case NativeObject::TEXTURE_VIEW:
+		return (uint64_t)(((D3D11Texture *)srcObject)->view);
 	default:
 		return 0;
 	}

@@ -7,7 +7,9 @@
 #include "Common/GPU/OpenGL/GLCommon.h"
 #include "Common/GPU/DataFormat.h"
 #include "Common/GPU/Shader.h"
+#include "Common/GPU/thin3d.h"
 #include "Common/Data/Collections/TinySet.h"
+
 
 struct GLRViewport {
 	float x, y, w, h, minZ, maxZ;
@@ -45,6 +47,7 @@ enum class GLRRenderCommand : uint8_t {
 	UNIFORM4UI,
 	UNIFORM4F,
 	UNIFORMMATRIX,
+	UNIFORMSTEREOMATRIX,
 	TEXTURESAMPLER,
 	TEXTURELOD,
 	VIEWPORT,
@@ -126,7 +129,7 @@ struct GLRRenderData {
 		struct {
 			const char *name;  // if null, use loc
 			const GLint *loc;
-			float m[16];
+			float m[32];
 		} uniformMatrix4;
 		struct {
 			uint32_t clearColor;
@@ -146,11 +149,12 @@ struct GLRRenderData {
 		struct {
 			GLRTexture *texture;
 			Draw::DataFormat format;
-			int level;
-			int x;
-			int y;
-			int width;
-			int height;
+			uint8_t slot;
+			uint8_t level;
+			uint16_t width;
+			uint16_t height;
+			uint16_t x;
+			uint16_t y;
 			GLRAllocType allocType;
 			uint8_t *data;  // owned, delete[]-d
 		} texture_subimage;
@@ -350,9 +354,16 @@ public:
 		errorCallbackUserData_ = userdata;
 	}
 
+	void SetDeviceCaps(const Draw::DeviceCaps &caps) {
+		caps_ = caps;
+	}
+
+	int GetStereoBufferIndex(const char *uniformName);
+	std::string GetStereoBufferLayout(const char *uniformName);
+
 	void RunInitSteps(const std::vector<GLRInitStep> &steps, bool skipGLCalls);
 
-	void RunSteps(const std::vector<GLRStep *> &steps, bool skipGLCalls);
+	void RunSteps(const std::vector<GLRStep *> &steps, bool skipGLCalls, bool keepSteps = false);
 	void LogSteps(const std::vector<GLRStep *> &steps);
 
 	void CreateDeviceObjects();
@@ -388,14 +399,6 @@ private:
 	void PerformReadback(const GLRStep &pass);
 	void PerformReadbackImage(const GLRStep &pass);
 
-	void LogRenderPass(const GLRStep &pass);
-	void LogCopy(const GLRStep &pass);
-	void LogBlit(const GLRStep &pass);
-	void LogReadback(const GLRStep &pass);
-	void LogReadbackImage(const GLRStep &pass);
-
-	void ResizeReadbackBuffer(size_t requiredSize);
-
 	void fbo_ext_create(const GLRInitStep &step);
 	void fbo_bind_fb_target(bool read, GLuint name);
 	GLenum fbo_get_fb_target(bool read, GLuint **cached);
@@ -404,6 +407,8 @@ private:
 	GLRFramebuffer *curFB_ = nullptr;
 
 	GLuint globalVAO_ = 0;
+
+	Draw::DeviceCaps caps_{};  // For sanity checks.
 
 	int curFBWidth_ = 0;
 	int curFBHeight_ = 0;

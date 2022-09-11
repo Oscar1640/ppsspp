@@ -4,7 +4,7 @@
 #include <mutex>
 #include <condition_variable>
 
-
+#include "Common/Thread/Promise.h"
 #include "Common/Data/Collections/Hashmaps.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/Vulkan/VulkanBarrier.h"
@@ -26,7 +26,6 @@ enum {
 
 enum class VKRRenderCommand : uint8_t {
 	REMOVED,
-	BIND_PIPELINE,  // raw pipeline
 	BIND_GRAPHICS_PIPELINE,  // async
 	BIND_COMPUTE_PIPELINE,  // async
 	STENCIL,
@@ -47,20 +46,30 @@ enum PipelineFlags {
 	PIPELINE_FLAG_USES_DEPTH_STENCIL = (1 << 4),  // Reads or writes the depth buffer.
 };
 
+// Pipelines need to be created for the right type of render pass.
+enum RenderPassType {
+	RP_TYPE_BACKBUFFER,
+	RP_TYPE_COLOR_DEPTH,
+	// Later will add pure-color render passes.
+	RP_TYPE_COUNT,
+};
+
 struct VkRenderData {
 	VKRRenderCommand cmd;
 	union {
 		struct {
 			VkPipeline pipeline;
+			VkPipelineLayout pipelineLayout;
 		} pipeline;
 		struct {
 			VKRGraphicsPipeline *pipeline;
+			VkPipelineLayout pipelineLayout;
 		} graphics_pipeline;
 		struct {
 			VKRComputePipeline *pipeline;
+			VkPipelineLayout pipelineLayout;
 		} compute_pipeline;
 		struct {
-			VkPipelineLayout pipelineLayout;
 			VkDescriptorSet ds;
 			int numUboOffsets;
 			uint32_t uboOffsets[3];
@@ -70,17 +79,16 @@ struct VkRenderData {
 			uint32_t offset;
 		} draw;
 		struct {
-			VkPipelineLayout pipelineLayout;
 			VkDescriptorSet ds;
 			int numUboOffsets;
 			uint32_t uboOffsets[3];
 			VkBuffer vbuffer;  // might need to increase at some point
-			VkDeviceSize voffset;
 			VkBuffer ibuffer;
-			VkDeviceSize ioffset;
+			uint32_t voffset;
+			uint32_t ioffset;
 			uint32_t count;
 			int16_t instances;
-			VkIndexType indexType;
+			int16_t indexType;
 		} drawIndexed;
 		struct {
 			uint32_t clearColor;
@@ -103,7 +111,6 @@ struct VkRenderData {
 			uint32_t color;
 		} blendColor;
 		struct {
-			VkPipelineLayout pipelineLayout;
 			VkShaderStageFlags stages;
 			uint8_t offset;
 			uint8_t size;
@@ -121,15 +128,21 @@ enum class VKRStepType : uint8_t {
 	READBACK_IMAGE,
 };
 
+// Must be the same order as Draw::RPAction
 enum class VKRRenderPassLoadAction : uint8_t {
-	DONT_CARE,
+	KEEP,  // default. avoid when possible.
 	CLEAR,
-	KEEP,
+	DONT_CARE,
+};
+
+enum class VKRRenderPassStoreAction : uint8_t {
+	STORE,  // default. avoid when possible.
+	DONT_CARE,
 };
 
 struct TransitionRequest {
-	VkImageAspectFlags aspect;  // COLOR or DEPTH
 	VKRFramebuffer *fb;
+	VkImageAspectFlags aspect;  // COLOR or DEPTH
 	VkImageLayout targetLayout;
 };
 
@@ -141,21 +154,27 @@ struct QueueProfileContext {
 	double cpuEndTime;
 };
 
+class VKRRenderPass;
+
 struct VKRStep {
 	VKRStep(VKRStepType _type) : stepType(_type) {}
 	~VKRStep() {}
 
 	VKRStepType stepType;
 	std::vector<VkRenderData> commands;
-	std::vector<TransitionRequest> preTransitions;
+	TinySet<TransitionRequest, 4> preTransitions;
 	TinySet<VKRFramebuffer *, 8> dependencies;
 	const char *tag;
 	union {
 		struct {
 			VKRFramebuffer *framebuffer;
+			// TODO: Look these up through renderPass?
 			VKRRenderPassLoadAction colorLoad;
 			VKRRenderPassLoadAction depthLoad;
 			VKRRenderPassLoadAction stencilLoad;
+			VKRRenderPassStoreAction colorStore;
+			VKRRenderPassStoreAction depthStore;
+			VKRRenderPassStoreAction stencilStore;
 			u8 clearStencil;
 			uint32_t clearColor;
 			float clearDepth;
@@ -166,6 +185,9 @@ struct VKRStep {
 			VkImageLayout finalDepthStencilLayout;
 			u32 pipelineFlags;
 			VkRect2D renderArea;
+			// Render pass type. Deduced after finishing recording the pass, from the used pipelines.
+			// NOTE: Storing the render pass here doesn't do much good, we change the compatible parameters (load/store ops) during step optimization.
+			RenderPassType renderPassType;
 		} render;
 		struct {
 			VKRFramebuffer *src;
@@ -195,9 +217,38 @@ struct VKRStep {
 	};
 };
 
+struct RPKey {
+	// Only render-pass-compatibility-volatile things can be here.
+	VKRRenderPassLoadAction colorLoadAction;
+	VKRRenderPassLoadAction depthLoadAction;
+	VKRRenderPassLoadAction stencilLoadAction;
+	VKRRenderPassStoreAction colorStoreAction;
+	VKRRenderPassStoreAction depthStoreAction;
+	VKRRenderPassStoreAction stencilStoreAction;
+};
+
+class VKRRenderPass {
+public:
+	VKRRenderPass(const RPKey &key) : key_(key) {}
+
+	VkRenderPass Get(VulkanContext *vulkan, RenderPassType rpType);
+	void Destroy(VulkanContext *vulkan) {
+		for (int i = 0; i < RP_TYPE_COUNT; i++) {
+			if (pass[i]) {
+				vulkan->Delete().QueueDeleteRenderPass(pass[i]);
+			}
+		}
+	}
+
+private:
+	VkRenderPass pass[RP_TYPE_COUNT]{};
+	RPKey key_;
+};
+
 class VulkanQueueRunner {
 public:
 	VulkanQueueRunner(VulkanContext *vulkan) : vulkan_(vulkan), renderPasses_(16) {}
+
 	void SetBackbuffer(VkFramebuffer fb, VkImage img) {
 		backbuffer_ = fb;
 		backbufferImage_ = img;
@@ -212,14 +263,10 @@ public:
 	void CreateDeviceObjects();
 	void DestroyDeviceObjects();
 
-	VkRenderPass GetBackbufferRenderPass() const {
-		return backbufferRenderPass_;
-	}
-
 	// Get a render pass that's compatible with all our framebuffers.
 	// Note that it's precached, cannot look up in the map as this might be on another thread.
-	VkRenderPass GetFramebufferRenderPass() const {
-		return framebufferRenderPass_;
+	VKRRenderPass *GetCompatibleRenderPass() const {
+		return compatibleRenderPass_;
 	}
 
 	inline int RPIndex(VKRRenderPassLoadAction color, VKRRenderPassLoadAction depth) {
@@ -228,24 +275,11 @@ public:
 
 	void CopyReadbackBuffer(int width, int height, Draw::DataFormat srcFormat, Draw::DataFormat destFormat, int pixelStride, uint8_t *pixels);
 
-	struct RPKey {
-		VKRRenderPassLoadAction colorLoadAction;
-		VKRRenderPassLoadAction depthLoadAction;
-		VKRRenderPassLoadAction stencilLoadAction;
-	};
+	VKRRenderPass *GetRenderPass(const RPKey &key);
 
-	// Only call this from the render thread! Also ok during initialization (LoadCache).
-	VkRenderPass GetRenderPass(
-		VKRRenderPassLoadAction colorLoadAction, VKRRenderPassLoadAction depthLoadAction, VKRRenderPassLoadAction stencilLoadAction) {
-		RPKey key{ colorLoadAction, depthLoadAction, stencilLoadAction };
-		return GetRenderPass(key);
-	}
-
-	VkRenderPass GetRenderPass(const RPKey &key);
-
-	bool GetRenderPassKey(VkRenderPass passToFind, RPKey *outKey) const {
+	bool GetRenderPassKey(VKRRenderPass *passToFind, RPKey *outKey) const {
 		bool found = false;
-		renderPasses_.Iterate([passToFind, &found, outKey](const RPKey &rpkey, VkRenderPass pass) {
+		renderPasses_.Iterate([passToFind, &found, outKey](const RPKey &rpkey, const VKRRenderPass *pass) {
 			if (pass == passToFind) {
 				found = true;
 				*outKey = rpkey;
@@ -268,9 +302,7 @@ public:
 	}
 
 private:
-	void InitBackbufferRenderPass();
-
-	void PerformBindFramebufferAsRenderTarget(const VKRStep &pass, VkCommandBuffer cmd);
+	VKRRenderPass *PerformBindFramebufferAsRenderTarget(const VKRStep &pass, VkCommandBuffer cmd);
 	void PerformRenderPass(const VKRStep &pass, VkCommandBuffer cmd);
 	void PerformCopy(const VKRStep &pass, VkCommandBuffer cmd);
 	void PerformBlit(const VKRStep &pass, VkCommandBuffer cmd);
@@ -297,14 +329,12 @@ private:
 	VkFramebuffer backbuffer_ = VK_NULL_HANDLE;
 	VkImage backbufferImage_ = VK_NULL_HANDLE;
 
-	VkRenderPass backbufferRenderPass_ = VK_NULL_HANDLE;
-
-	// The "Compatible" render pass. Used when creating pipelines that render to "normal" framebuffers.
-	VkRenderPass framebufferRenderPass_ = VK_NULL_HANDLE;
+	// The "Compatible" render pass. Should be able to get rid of this soon.
+	VKRRenderPass *compatibleRenderPass_ = nullptr;
 
 	// Renderpasses, all combinations of preserving or clearing or dont-care-ing fb contents.
-	// TODO: Create these on demand.
-	DenseHashMap<RPKey, VkRenderPass, (VkRenderPass)VK_NULL_HANDLE> renderPasses_;
+	// Each VKRRenderPass contains all compatibility classes (which attachments they have, etc).
+	DenseHashMap<RPKey, VKRRenderPass *, nullptr> renderPasses_;
 
 	// Readback buffer. Currently we only support synchronous readback, so we only really need one.
 	// We size it generously.

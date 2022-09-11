@@ -61,10 +61,8 @@
     <ClCompile Include="XAudioSoundStream.cpp" />
     <ClCompile Include="PPSSPP_UWPMain.cpp" />
     <ClCompile Include="NKCodeFromWindowsSystem.cpp" />
-    <ClCompile Include="StorageFileLoader.cpp" />
     <ClCompile Include="UWPHost.cpp" />
     <ClCompile Include="..\Windows\XinputDevice.cpp" />
-    <ClCompile Include="StorageFolderBrowser.cpp" />
     <ClCompile Include="..\Windows\InputDevice.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -74,11 +72,9 @@
     <ClInclude Include="XAudioSoundStream.h" />
     <ClInclude Include="PPSSPP_UWPMain.h" />
     <ClInclude Include="NKCodeFromWindowsSystem.h" />
-    <ClInclude Include="StorageFileLoader.h" />
     <ClInclude Include="UWPHost.h" />
     <ClInclude Include="..\Windows\XinputDevice.h" />
     <ClInclude Include="UWPUtil.h" />
-    <ClInclude Include="StorageFolderBrowser.h" />
     <ClInclude Include="..\Windows\InputDevice.h" />
   </ItemGroup>
   <ItemGroup>
@@ -86,9 +82,6 @@
       <Filter>Assets</Filter>
     </Image>
     <Image Include="Content\7z.png">
-      <Filter>Content</Filter>
-    </Image>
-    <Image Include="Content\rargray.png">
       <Filter>Content</Filter>
     </Image>
     <Image Include="Content\unknown.png">
@@ -106,12 +99,17 @@
     <Image Include="AssetsGold\StoreLogo.scale-100.png">
       <Filter>Assets</Filter>
     </Image>
+    <Image Include="Content\rargray.png">
+      <Filter>Assets</Filter>
+    </Image>
+    <Image Include="Content\asciifont_atlas.zim">
+      <Filter>Content</Filter>
+    </Image>
   </ItemGroup>
   <ItemGroup>
     <AppxManifest Include="Package.appxmanifest" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="UWP_TemporaryKey.pfx" />
     <None Include="Content\compat.ini">
       <Filter>Content</Filter>
     </None>
@@ -370,6 +368,9 @@
     </None>
     <None Include="..\assets\themes\defaultthemes.ini">
       <Filter>Content\themes</Filter>
+    </None>
+    <None Include="Content\asciifont_atlas.meta">
+      <Filter>Content</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>

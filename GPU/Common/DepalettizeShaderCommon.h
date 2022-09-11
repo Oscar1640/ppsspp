@@ -22,15 +22,19 @@
 #include "Common/GPU/Shader.h"
 #include "GPU/ge_constants.h"
 
+class ShaderWriter;
+
 static const int DEPAL_TEXTURE_OLD_AGE = 120;
 
-void GenerateDepalShader(char *buffer, GEBufferFormat pixelFormat, ShaderLanguage language);
-
-class DepalShaderCacheCommon {
-public:
-	virtual ~DepalShaderCacheCommon() {}
-
-protected:
-	uint32_t GenerateShaderID(uint32_t clutMode, GEBufferFormat pixelFormat) const;
-	uint32_t GetClutID(GEPaletteFormat clutFormat, uint32_t clutHash) const;
+struct DepalConfig {
+	u32 startPos;
+	u8 mask;
+	u8 shift;
+	bool smoothedDepal;
+	u8 depthUpperBits;
+	GEPaletteFormat clutFormat;
+	GETextureFormat textureFormat;
+	GEBufferFormat bufferFormat;
 };
+
+void GenerateDepalFs(ShaderWriter &writer, const DepalConfig &config);

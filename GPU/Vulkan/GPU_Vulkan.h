@@ -25,7 +25,7 @@
 #include "GPU/GPUCommon.h"
 #include "GPU/Vulkan/DrawEngineVulkan.h"
 #include "GPU/Vulkan/PipelineManagerVulkan.h"
-#include "GPU/Vulkan/DepalettizeShaderVulkan.h"
+#include "GPU/Common/TextureShaderCommon.h"
 
 class FramebufferManagerVulkan;
 class ShaderManagerVulkan;
@@ -50,7 +50,6 @@ public:
 	void PreExecuteOp(u32 op, u32 diff) override;
 	void ExecuteOp(u32 op, u32 diff) override;
 
-	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) override;
 	void GetStats(char *buffer, size_t bufsize) override;
 	void ClearCacheNextFrame() override;
 	void DeviceLost() override;  // Only happens on Android. Drop all textures and shaders.
@@ -91,7 +90,6 @@ private:
 
 	FramebufferManagerVulkan *framebufferManagerVulkan_;
 	TextureCacheVulkan *textureCacheVulkan_;
-	DepalShaderCacheVulkan depalShaderCache_;
 	DrawEngineVulkan drawEngine_;
 
 	// Manages shaders and UBO data
@@ -99,9 +97,6 @@ private:
 
 	// Manages state and pipeline objects
 	PipelineManagerVulkan *pipelineManager_;
-
-	// Simple 2D drawing engine.
-	Vulkan2D vulkan2D_;
 
 	struct FrameData {
 		VulkanPushBuffer *push_;

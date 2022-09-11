@@ -24,6 +24,7 @@ const char * const hlsl_preamble_fs =
 "#define vec4 float4\n"
 "#define uvec3 uint3\n"
 "#define uvec4 uint4\n"
+"#define ivec2 int2\n"
 "#define ivec3 int3\n"
 "#define ivec4 int4\n"
 "#define mat4 float4x4\n"
@@ -33,6 +34,7 @@ const char * const hlsl_preamble_fs =
 "#define lowp\n"
 "#define mediump\n"
 "#define highp\n"
+"#define fract frac\n"
 "#define mod(x, y) fmod(x, y)\n";
 
 static const char * const hlsl_d3d11_preamble_fs =
@@ -124,7 +126,9 @@ void ShaderWriter::Preamble(const char **gl_extensions, size_t num_gl_extensions
 			F("%s\n", gl_extensions[i]);
 		}
 		// Print some system info - useful to gather information directly from screenshots.
-		F("// %s\n", lang_.driverInfo);
+		if (strlen(lang_.driverInfo) != 0) {
+			F("// Driver: %s\n", lang_.driverInfo);
+		}
 		switch (stage_) {
 		case ShaderStage::Fragment:
 			C("#define DISCARD discard\n");
@@ -199,7 +203,7 @@ void ShaderWriter::BeginVSMain(Slice<InputDef> inputs, Slice<UniformDef> uniform
 	}
 	default:  // OpenGL
 		for (auto &input : inputs) {
-			F("in %s %s;\n", input.type, input.name);
+			F("%s %s %s;\n", lang_.attribute, input.type, input.name);
 		}
 		for (auto &varying : varyings) {
 			F("%s %s %s %s;  // %s (%d)\n", lang_.varying_vs, varying.precision ? varying.precision : "", varying.type, varying.name, semanticNames[varying.semantic], varying.index);
@@ -209,7 +213,7 @@ void ShaderWriter::BeginVSMain(Slice<InputDef> inputs, Slice<UniformDef> uniform
 	}
 }
 
-void ShaderWriter::BeginFSMain(Slice<UniformDef> uniforms, Slice<VaryingDef> varyings) {
+void ShaderWriter::BeginFSMain(Slice<UniformDef> uniforms, Slice<VaryingDef> varyings, FSFlags flags) {
 	_assert_(this->stage_ == ShaderStage::Fragment);
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
@@ -223,29 +227,56 @@ void ShaderWriter::BeginFSMain(Slice<UniformDef> uniforms, Slice<VaryingDef> var
 			C("};\n");
 		}
 
+		if (flags & FSFLAG_WRITEDEPTH) {
+			C("float gl_FragDepth;\n");
+		}
+
+		C("struct PS_OUT {\n");
+		C("  vec4 target : SV_Target0;\n");
+		if (flags & FSFLAG_WRITEDEPTH) {
+			C("  float depth : SV_Depth;\n");
+		}
+		C("};\n");
+
 		// Let's do the varyings as parameters to main, no struct.
-		C("vec4 main(");
+		C("PS_OUT main(");
 		for (auto &varying : varyings) {
 			F("  %s %s : %s, ", varying.type, varying.name, semanticNames[varying.semantic]);
 		}
 		// Erase the last comma
 		Rewind(2);
 
-		F(") : SV_Target0 {\n");
+		F(") {\n");
+		C("  PS_OUT ps_out;\n");
+		if (flags & FSFLAG_WRITEDEPTH) {
+			C("  float gl_FragDepth;\n");
+		}
 		break;
 	case HLSL_D3D9:
+		C("struct PS_OUT {\n");
+		C("  vec4 target : SV_Target0;\n");
+		if (flags & FSFLAG_WRITEDEPTH) {
+			C("  float depth : DEPTH;\n");
+		}
+		C("};\n");
+
 		for (auto &uniform : uniforms) {
 			F("  %s %s : register(c%d);\n", uniform.type, uniform.name, uniform.index);
 		}
 		// Let's do the varyings as parameters to main, no struct.
-		C("vec4 main(");
+		C("PS_OUT main(");
 		for (auto &varying : varyings) {
 			F("  %s %s : %s, ", varying.type, varying.name, semanticNames[varying.semantic]);
 		}
 		// Erase the last comma
 		Rewind(2);
 
-		F(") : COLOR {\n");
+		F(") {\n");
+		C("  PS_OUT ps_out;\n");
+		if (flags & FSFLAG_WRITEDEPTH) {
+			C("  float gl_FragDepth;\n");
+		}
+
 		break;
 	case GLSL_VULKAN:
 		for (auto &varying : varyings) {
@@ -283,6 +314,9 @@ void ShaderWriter::EndVSMain(Slice<VaryingDef> varyings) {
 	case HLSL_D3D11:
 	case HLSL_D3D9:
 		C("  VS_OUTPUT vs_out;\n");
+		if (strlen(lang_.viewportYSign)) {
+			F("  gl_Position.y *= %s1.0;\n", lang_.viewportYSign);
+		}
 		C("  vs_out.pos = gl_Position;\n");
 		for (auto &varying : varyings) {
 			F("  vs_out.%s = %s;\n", varying.name, varying.name);
@@ -296,12 +330,16 @@ void ShaderWriter::EndVSMain(Slice<VaryingDef> varyings) {
 	C("}\n");
 }
 
-void ShaderWriter::EndFSMain(const char *vec4_color_variable) {
+void ShaderWriter::EndFSMain(const char *vec4_color_variable, FSFlags flags) {
 	_assert_(this->stage_ == ShaderStage::Fragment);
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
 	case HLSL_D3D9:
-		F("  return %s;\n", vec4_color_variable);
+		F("  ps_out.target = %s;\n", vec4_color_variable);
+		if (flags & FSFLAG_WRITEDEPTH) {
+			C("  ps_out.depth = gl_FragDepth;\n");
+		}
+		C("  return ps_out;\n");
 		break;
 	case GLSL_VULKAN:
 	default:  // OpenGL
@@ -314,6 +352,31 @@ void ShaderWriter::EndFSMain(const char *vec4_color_variable) {
 void ShaderWriter::HighPrecisionFloat() {
 	if ((ShaderLanguageIsOpenGL(lang_.shaderLanguage) && lang_.gles) || lang_.shaderLanguage == GLSL_VULKAN) {
 		C("precision highp float;\n");
+	}
+}
+
+void ShaderWriter::LowPrecisionFloat() {
+	if ((ShaderLanguageIsOpenGL(lang_.shaderLanguage) && lang_.gles) || lang_.shaderLanguage == GLSL_VULKAN) {
+		C("precision lowp float;\n");
+	}
+}
+
+void ShaderWriter::ConstFloat(const char *name, float value) {
+	switch (lang_.shaderLanguage) {
+	case HLSL_D3D11:
+	case HLSL_D3D9:
+		F("static const float %s = %f;\n", name, value);
+		break;
+	default:
+		F("#define %s %f\n", name, value);
+		break;
+	}
+}
+
+void ShaderWriter::DeclareSamplers(Slice<SamplerDef> samplers) {
+	for (int i = 0; i < (int)samplers.size(); i++) {
+		DeclareTexture2D(samplers[i].name, i);
+		DeclareSampler2D(samplers[i].name, i);
 	}
 }
 
@@ -339,24 +402,74 @@ void ShaderWriter::DeclareSampler2D(const char *name, int binding) {
 	// We only use separate samplers in HLSL D3D11, where we have no choice.
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
-		F("SamplerState %s : register(s%d);\n", name, binding);
+		F("SamplerState %sSamp : register(s%d);\n", name, binding);
 		break;
 	default:
 		break;
 	}
 }
 
-ShaderWriter &ShaderWriter::SampleTexture2D(const char *texName, const char *samplerName, const char *uv) {
+ShaderWriter &ShaderWriter::SampleTexture2D(const char *sampName, const char *uv) {
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
-		F("%s.Sample(%s, %s)", texName, samplerName, uv);
+		F("%s.Sample(%sSamp, %s)", sampName, sampName, uv);
 		break;
 	case HLSL_D3D9:
-		F("tex2D(%s, %s)", texName, uv);
+		F("tex2D(%s, %s)", sampName, uv);
 		break;
 	default:
 		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.
-		F("%s(%s, %s)", lang_.texture, texName, uv);
+		F("%s(%s, %s)", lang_.texture, sampName, uv);
+		break;
+	}
+	return *this;
+}
+
+ShaderWriter &ShaderWriter::SampleTexture2DOffset(const char *sampName, const char *uv, int offX, int offY) {
+	switch (lang_.shaderLanguage) {
+	case HLSL_D3D11:
+		F("%s.Sample(%sSamp, %s, int2(%d, %d))", sampName, sampName, uv, offX, offY);
+		break;
+	case HLSL_D3D9:
+		// Not supported, we do a normal sample here to not crash or something
+		F("tex2D(%s, %s)", sampName, uv);
+		break;
+	default:
+		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.
+		F("%sOffset(%s, %s, ivec2(%d, %d))", lang_.texture, sampName, uv, offX, offY);
+		break;
+	}
+	return *this;
+}
+
+ShaderWriter &ShaderWriter::LoadTexture2D(const char *sampName, const char *uv, int level) {
+	switch (lang_.shaderLanguage) {
+	case HLSL_D3D11:
+		F("%s.Load(ivec3(%s, %d))", sampName, uv, level);
+		break;
+	case HLSL_D3D9:
+		// Not supported, we return a bad value
+		C("float4(1.0, 0.0, 1.0, 1.0)");
+		break;
+	default:
+		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.
+		F("texelFetch(%s, %s, %d)", sampName, uv, level);
+		break;
+	}
+	return *this;
+}
+
+ShaderWriter &ShaderWriter::GetTextureSize(const char *szVariable, const char *texName) {
+	switch (lang_.shaderLanguage) {
+	case HLSL_D3D11:
+		F("  float2 %s; %s.GetDimensions(%s.x, %s.y);", szVariable, texName, szVariable, szVariable);
+		break;
+	case HLSL_D3D9:
+		F("  float2 %s; %s.GetDimensions(%s.x, %s.y);", szVariable, texName, szVariable, szVariable);
+		break;
+	default:
+		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.
+		F("vec2 %s = textureSize(%s, 0);", szVariable, texName);
 		break;
 	}
 	return *this;

@@ -25,7 +25,6 @@ XrAction vibrateRightFeedback;
 XrActionSet runningActionSet;
 XrSpace leftControllerAimSpace = XR_NULL_HANDLE;
 XrSpace rightControllerAimSpace = XR_NULL_HANDLE;
-int actionsAttached = 0;
 int inputInitialized = 0;
 int useSimpleProfile = 0;
 
@@ -40,9 +39,6 @@ XrActionStateVector2f moveJoystickState[2];
 float vibration_channel_duration[2] = {0.0f, 0.0f};
 float vibration_channel_intensity[2] = {0.0f, 0.0f};
 
-float radians(float deg) {
-	return (deg * M_PI) / 180.0;
-}
 
 unsigned long sys_timeBase = 0;
 int milliseconds(void) {
@@ -58,98 +54,22 @@ int milliseconds(void) {
 	return (tp.tv_sec - sys_timeBase)*1000 + tp.tv_usec/1000;
 }
 
-#ifndef EPSILON
-#define EPSILON 0.001f
-#endif
-
-XrVector3f normalizeVec(XrVector3f vec) {
-	float xxyyzz = vec.x*vec.x + vec.y*vec.y + vec.z*vec.z;
-
-	XrVector3f result;
-	float invLength = 1.0f / sqrtf(xxyyzz);
-	result.x = vec.x * invLength;
-	result.y = vec.y * invLength;
-	result.z = vec.z * invLength;
-	return result;
+XrTime ToXrTime(const double timeInSeconds) {
+	return (timeInSeconds * 1e9);
 }
 
-void GetAnglesFromVectors(const XrVector3f forward, const XrVector3f right, const XrVector3f up, vec3_t angles) {
-	float sr, sp, sy, cr, cp, cy;
-
-	sp = -forward.z;
-
-	float cp_x_cy = forward.x;
-	float cp_x_sy = forward.y;
-	float cp_x_sr = -right.z;
-	float cp_x_cr = up.z;
-
-	float yaw = atan2(cp_x_sy, cp_x_cy);
-	float roll = atan2(cp_x_sr, cp_x_cr);
-
-	cy = cos(yaw);
-	sy = sin(yaw);
-	cr = cos(roll);
-	sr = sin(roll);
-
-	if (fabs(cy) > EPSILON) {
-		cp = cp_x_cy / cy;
-	} else if (fabs(sy) > EPSILON) {
-		cp = cp_x_sy / sy;
-	} else if (fabs(sr) > EPSILON) {
-		cp = cp_x_sr / sr;
-	} else if (fabs(cr) > EPSILON) {
-		cp = cp_x_cr / cr;
-	} else {
-		cp = cos(asin(sp));
-	}
-
-	float pitch = atan2(sp, cp);
-
-	angles[0] = pitch / (M_PI*2.f / 360.f);
-	angles[1] = yaw / (M_PI*2.f / 360.f);
-	angles[2] = roll / (M_PI*2.f / 360.f);
-}
-
-void QuatToYawPitchRoll(XrQuaternionf q, vec3_t rotation, vec3_t out) {
-
-	ovrMatrix4f mat = ovrMatrix4f_CreateFromQuaternion( &q );
-
-	if (rotation[0] != 0.0f || rotation[1] != 0.0f || rotation[2] != 0.0f) {
-		ovrMatrix4f rot = ovrMatrix4f_CreateRotation(radians(rotation[0]), radians(rotation[1]), radians(rotation[2]));
-		mat = ovrMatrix4f_Multiply(&mat, &rot);
-	}
-
-	XrVector4f v1 = {0, 0, -1, 0};
-	XrVector4f v2 = {1, 0, 0, 0};
-	XrVector4f v3 = {0, 1, 0, 0};
-
-	XrVector4f forwardInVRSpace = XrVector4f_MultiplyMatrix4f(&mat, &v1);
-	XrVector4f rightInVRSpace = XrVector4f_MultiplyMatrix4f(&mat, &v2);
-	XrVector4f upInVRSpace = XrVector4f_MultiplyMatrix4f(&mat, &v3);
-
-	XrVector3f forward = {-forwardInVRSpace.z, -forwardInVRSpace.x, forwardInVRSpace.y};
-	XrVector3f right = {-rightInVRSpace.z, -rightInVRSpace.x, rightInVRSpace.y};
-	XrVector3f up = {-upInVRSpace.z, -upInVRSpace.x, upInVRSpace.y};
-
-	XrVector3f forwardNormal = normalizeVec(forward);
-	XrVector3f rightNormal = normalizeVec(right);
-	XrVector3f upNormal = normalizeVec(up);
-
-	GetAnglesFromVectors(forwardNormal, rightNormal, upNormal, out);
-}
-
-void VR_Vibrate( int duration, int chan, float intensity ) {
+void INVR_Vibrate( int duration, int chan, float intensity ) {
 	for (int i = 0; i < 2; ++i) {
-		int channel = (i + 1) & chan;
+		int channel = i & chan;
 		if (channel) {
-			if (vibration_channel_duration[channel-1] > 0.0f)
+			if (vibration_channel_duration[channel] > 0.0f)
 				return;
 
-			if (vibration_channel_duration[channel-1] == -1.0f && duration != 0.0f)
+			if (vibration_channel_duration[channel] == -1.0f && duration != 0.0f)
 				return;
 
-			vibration_channel_duration[channel-1] = duration;
-			vibration_channel_intensity[channel-1] = intensity;
+			vibration_channel_duration[channel] = duration;
+			vibration_channel_intensity[channel] = intensity;
 		}
 	}
 }
@@ -427,6 +347,14 @@ void IN_VRInit( engine_t *engine ) {
 		suggestedBindings.countSuggestedBindings = currBinding;
 		OXR(xrSuggestInteractionProfileBindings(engine->appState.Instance, &suggestedBindings));
 
+		// Attach actions
+		XrSessionActionSetsAttachInfo attachInfo = {};
+		attachInfo.type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO;
+		attachInfo.next = NULL;
+		attachInfo.countActionSets = 1;
+		attachInfo.actionSets = &runningActionSet;
+		OXR(xrAttachSessionActionSets(engine->appState.Session, &attachInfo));
+
 		// Enumerate actions
 		XrPath actionPathsBuffer[32];
 		char stringBuffer[256];
@@ -449,11 +377,11 @@ void IN_VRInit( engine_t *engine ) {
 				handPoseLeftAction,
 				handPoseRightAction
 		};
-		for (size_t i = 0; i < sizeof(actionsToEnumerate) / sizeof(actionsToEnumerate[0]); ++i) {
+		for (XrAction & i : actionsToEnumerate) {
 			XrBoundSourcesForActionEnumerateInfo enumerateInfo = {};
 			enumerateInfo.type = XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO;
 			enumerateInfo.next = NULL;
-			enumerateInfo.action = actionsToEnumerate[i];
+			enumerateInfo.action = i;
 
 			// Get Count
 			uint32_t countOutput = 0;
@@ -504,16 +432,6 @@ void IN_VRInit( engine_t *engine ) {
 }
 
 void IN_VRInputFrame( engine_t* engine ) {
-	// Attach to session
-	if (!actionsAttached) {
-		XrSessionActionSetsAttachInfo attachInfo = {};
-		attachInfo.type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO;
-		attachInfo.next = NULL;
-		attachInfo.countActionSets = 1;
-		attachInfo.actionSets = &runningActionSet;
-		OXR(xrAttachSessionActionSets(engine->appState.Session, &attachInfo));
-		actionsAttached = 1;
-	}
 
 	// sync action data
 	XrActiveActionSet activeActionSet = {};
@@ -587,4 +505,13 @@ uint32_t IN_VRGetButtonState( int controllerIndex ) {
 
 XrVector2f IN_VRGetJoystickState( int controllerIndex ) {
 	return moveJoystickState[controllerIndex].currentState;
+}
+
+XrPosef IN_VRGetPose( int controllerIndex ) {
+	engine_t* engine = VR_GetEngine();
+	XrSpaceLocation loc = {};
+	loc.type = XR_TYPE_SPACE_LOCATION;
+	XrSpace aimSpace[] = { leftControllerAimSpace, rightControllerAimSpace };
+	xrLocateSpace(aimSpace[controllerIndex], engine->appState.CurrentSpace, engine->predictedDisplayTime, &loc);
+	return loc.pose;
 }

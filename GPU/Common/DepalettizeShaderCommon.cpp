@@ -17,81 +17,55 @@
 
 #include <cstdio>
 
-#include "Common/GPU/OpenGL/GLFeatures.h"
+#include "Common/GPU/Shader.h"
+#include "Common/GPU/ShaderWriter.h"
 
-#include "GPU/Common/ShaderId.h"
 #include "GPU/Common/ShaderCommon.h"
 #include "Common/StringUtils.h"
 #include "Common/Log.h"
 #include "Core/Reporting.h"
-#include "GPU/GPUState.h"
 #include "GPU/Common/GPUStateUtils.h"
 #include "GPU/Common/DepalettizeShaderCommon.h"
+#include "GPU/Common/Draw2D.h"
 
-#define WRITE p+=sprintf
+static const InputDef vsInputs[2] = {
+	{ "vec2", "a_position", Draw::SEM_POSITION, },
+	{ "vec2", "a_texcoord0", Draw::SEM_TEXCOORD0, },
+};
 
-// TODO: Add a compute shader path. Complete waste of time to set up a graphics state.
+// TODO: Deduplicate with TextureShaderCommon.cpp
+static const SamplerDef samplers[2] = {
+	{ "tex" },
+	{ "pal" },
+};
 
-// Uses integer instructions available since OpenGL 3.0. Suitable for ES 3.0 as well.
-void GenerateDepalShader300(char *buffer, GEBufferFormat pixelFormat, ShaderLanguage language) {
-	char *p = buffer;
-	if (language == HLSL_D3D11) {
-		WRITE(p, "SamplerState texSamp : register(s0);\n");
-		WRITE(p, "Texture2D<float4> tex : register(t0);\n");
-		WRITE(p, "Texture2D<float4> pal : register(t3);\n");
-		// Support for depth.
-		if (pixelFormat == GE_FORMAT_DEPTH16) {
-			WRITE(p, "cbuffer params : register(b0) {\n");
-			WRITE(p, "  float z_scale; float z_offset;\n");
-			WRITE(p, "};\n");
-		}
-	} else if (language == GLSL_VULKAN) {
-		WRITE(p, "#version 450\n");
-		WRITE(p, "#extension GL_ARB_separate_shader_objects : enable\n");
-		WRITE(p, "#extension GL_ARB_shading_language_420pack : enable\n");
-		WRITE(p, "layout(set = 0, binding = 0) uniform sampler2D tex;\n");
-		WRITE(p, "layout(set = 0, binding = 1) uniform sampler2D pal;\n");
-		WRITE(p, "layout(location = 0) in vec2 v_texcoord0;\n");
-		WRITE(p, "layout(location = 0) out vec4 fragColor0;\n");
+static const VaryingDef varyings[1] = {
+	{ "vec2", "v_texcoord", Draw::SEM_TEXCOORD0, 0, "highp" },
+};
 
-		// Support for depth.
-		if (pixelFormat == GE_FORMAT_DEPTH16) {
-			WRITE(p, "layout (push_constant) uniform params {\n");
-			WRITE(p, "  float z_scale; float z_offset;\n");
-			WRITE(p, "};\n");
-		}
-	} else {
-		if (gl_extensions.IsGLES) {
-			WRITE(p, "#version 300 es\n");
-			WRITE(p, "precision mediump float;\n");
-			WRITE(p, "precision highp int;\n");
-		} else {
-			WRITE(p, "#version %d\n", gl_extensions.GLSLVersion());
-		}
-		WRITE(p, "in vec2 v_texcoord0;\n");
-		WRITE(p, "out vec4 fragColor0;\n");
-		WRITE(p, "uniform sampler2D tex;\n");
-		WRITE(p, "uniform sampler2D pal;\n");
+// Uses integer instructions available since OpenGL 3.0, ES 3.0 (and 2.0 with extensions), and of course Vulkan and D3D11.
+void GenerateDepalShader300(ShaderWriter &writer, const DepalConfig &config) {
+	const int shift = config.shift;
+	const int mask = config.mask;
 
-		if (pixelFormat == GE_FORMAT_DEPTH16) {
-			DepthScaleFactors factors = GetDepthScaleFactors();
-			WRITE(p, "const float z_scale = %f;\n", factors.scale);
-			WRITE(p, "const float z_offset = %f;\n", factors.offset);
+	writer.C("  vec2 texcoord = v_texcoord;\n");
+
+	// Implement the swizzle we need to simulate, if a game uses 8888 framebuffers and any other mode than "6" to access depth textures.
+	// This implements the "2" mode swizzle (it fixes up the Y direction but not X. See comments on issue #15898)
+	// NOTE: This swizzle can be made to work with any power-of-2 resolution scaleFactor by shifting
+	// the bits around, but not sure how to handle 3x scaling. For now this is 1x-only (rough edges at higher resolutions).
+	if (config.bufferFormat == GE_FORMAT_DEPTH16) {
+		DepthScaleFactors factors = GetDepthScaleFactors();
+		writer.ConstFloat("z_scale", factors.scale);
+		writer.ConstFloat("z_offset", factors.offset);
+		if (config.depthUpperBits == 0x2) {
+			writer.C(R"(
+  int x = int((texcoord.x / scaleFactor) * texSize.x);
+  int temp = (x & 0xFFFFFE0F) | ((x >> 1) & 0xF0) | ((x << 4) & 0x100);
+  texcoord.x = (float(temp) / texSize.x) * scaleFactor;
+)");
 		}
 	}
-
-	if (language == HLSL_D3D11) {
-		WRITE(p, "float4 main(in float2 v_texcoord0 : TEXCOORD0) : SV_Target {\n");
-		WRITE(p, "  float4 color = tex.Sample(texSamp, v_texcoord0);\n");
-	} else {
-		WRITE(p, "void main() {\n");
-		WRITE(p, "  vec4 color = texture(tex, v_texcoord0);\n");
-	}
-
-	int mask = gstate.getClutIndexMask();
-	int shift = gstate.getClutIndexShift();
-	int offset = gstate.getClutIndexStartPos();
-	GEPaletteFormat clutFormat = gstate.getClutPaletteFormat();
 
 	// Sampling turns our texture into floating point. To avoid this, might be able
 	// to declare them as isampler2D objects, but these require integer textures, which needs more work.
@@ -106,87 +80,97 @@ void GenerateDepalShader300(char *buffer, GEBufferFormat pixelFormat, ShaderLang
 	// An alternative would be to have a special mode where we keep some extra precision here and sample the CLUT linearly - works for ramps such
 	// as those that Test Drive uses for its color remapping. But would need game specific flagging.
 
+	writer.C("  vec4 color = ").SampleTexture2D("tex", "texcoord").C(";\n");
+
 	int shiftedMask = mask << shift;
-	switch (pixelFormat) {
+	switch (config.bufferFormat) {
 	case GE_FORMAT_8888:
-		if (shiftedMask & 0xFF) WRITE(p, "  int r = int(color.r * 255.99);\n"); else WRITE(p, "  int r = 0;\n");
-		if (shiftedMask & 0xFF00) WRITE(p, "  int g = int(color.g * 255.99);\n"); else WRITE(p, "  int g = 0;\n");
-		if (shiftedMask & 0xFF0000) WRITE(p, "  int b = int(color.b * 255.99);\n"); else WRITE(p, "  int b = 0;\n");
-		if (shiftedMask & 0xFF000000) WRITE(p, "  int a = int(color.a * 255.99);\n"); else WRITE(p, "  int a = 0;\n");
-		WRITE(p, "  int index = (a << 24) | (b << 16) | (g << 8) | (r);\n");
+		if (shiftedMask & 0xFF) writer.C("  int r = int(color.r * 255.99);\n"); else writer.C("  int r = 0;\n");
+		if (shiftedMask & 0xFF00) writer.C("  int g = int(color.g * 255.99);\n"); else writer.C("  int g = 0;\n");
+		if (shiftedMask & 0xFF0000) writer.C("  int b = int(color.b * 255.99);\n"); else writer.C("  int b = 0;\n");
+		if (shiftedMask & 0xFF000000) writer.C("  int a = int(color.a * 255.99);\n"); else writer.C("  int a = 0;\n");
+		writer.C("  int index = (a << 24) | (b << 16) | (g << 8) | (r);\n");
 		break;
 	case GE_FORMAT_4444:
-		if (shiftedMask & 0xF) WRITE(p, "  int r = int(color.r * 15.99);\n"); else WRITE(p, "  int r = 0;\n");
-		if (shiftedMask & 0xF0) WRITE(p, "  int g = int(color.g * 15.99);\n"); else WRITE(p, "  int g = 0;\n");
-		if (shiftedMask & 0xF00) WRITE(p, "  int b = int(color.b * 15.99);\n"); else WRITE(p, "  int b = 0;\n");
-		if (shiftedMask & 0xF000) WRITE(p, "  int a = int(color.a * 15.99);\n"); else WRITE(p, "  int a = 0;\n");
-		WRITE(p, "  int index = (a << 12) | (b << 8) | (g << 4) | (r);\n");
+		if (shiftedMask & 0xF) writer.C("  int r = int(color.r * 15.99);\n"); else writer.C("  int r = 0;\n");
+		if (shiftedMask & 0xF0) writer.C("  int g = int(color.g * 15.99);\n"); else writer.C("  int g = 0;\n");
+		if (shiftedMask & 0xF00) writer.C("  int b = int(color.b * 15.99);\n"); else writer.C("  int b = 0;\n");
+		if (shiftedMask & 0xF000) writer.C("  int a = int(color.a * 15.99);\n"); else writer.C("  int a = 0;\n");
+		writer.C("  int index = (a << 12) | (b << 8) | (g << 4) | (r);\n");
 		break;
 	case GE_FORMAT_565:
-		if (shiftedMask & 0x1F) WRITE(p, "  int r = int(color.r * 31.99);\n"); else WRITE(p, "  int r = 0;\n");
-		if (shiftedMask & 0x7E0) WRITE(p, "  int g = int(color.g * 63.99);\n"); else WRITE(p, "  int g = 0;\n");
-		if (shiftedMask & 0xF800) WRITE(p, "  int b = int(color.b * 31.99);\n"); else WRITE(p, "  int b = 0;\n");
-		WRITE(p, "  int index = (b << 11) | (g << 5) | (r);\n");
+		if (shiftedMask & 0x1F) writer.C("  int r = int(color.r * 31.99);\n"); else writer.C("  int r = 0;\n");
+		if (shiftedMask & 0x7E0) writer.C("  int g = int(color.g * 63.99);\n"); else writer.C("  int g = 0;\n");
+		if (shiftedMask & 0xF800) writer.C("  int b = int(color.b * 31.99);\n"); else writer.C("  int b = 0;\n");
+		writer.C("  int index = (b << 11) | (g << 5) | (r);\n");
 		break;
 	case GE_FORMAT_5551:
-		if (shiftedMask & 0x1F) WRITE(p, "  int r = int(color.r * 31.99);\n"); else WRITE(p, "  int r = 0;\n");
-		if (shiftedMask & 0x3E0) WRITE(p, "  int g = int(color.g * 31.99);\n"); else WRITE(p, "  int g = 0;\n");
-		if (shiftedMask & 0x7C00) WRITE(p, "  int b = int(color.b * 31.99);\n"); else WRITE(p, "  int b = 0;\n");
-		if (shiftedMask & 0x8000) WRITE(p, "  int a = int(color.a);\n"); else WRITE(p, "  int a = 0;\n");
-		WRITE(p, "  int index = (a << 15) | (b << 10) | (g << 5) | (r);\n");
+		if (shiftedMask & 0x1F) writer.C("  int r = int(color.r * 31.99);\n"); else writer.C("  int r = 0;\n");
+		if (shiftedMask & 0x3E0) writer.C("  int g = int(color.g * 31.99);\n"); else writer.C("  int g = 0;\n");
+		if (shiftedMask & 0x7C00) writer.C("  int b = int(color.b * 31.99);\n"); else writer.C("  int b = 0;\n");
+		if (shiftedMask & 0x8000) writer.C("  int a = int(color.a);\n"); else writer.C("  int a = 0;\n");
+		writer.C("  int index = (a << 15) | (b << 10) | (g << 5) | (r);\n");
 		break;
 	case GE_FORMAT_DEPTH16:
 		// Remap depth buffer.
-		WRITE(p, "  float depth = (color.x - z_offset) * z_scale;\n");
-		WRITE(p, "  int index = int(clamp(depth, 0.0, 65535.0));\n");
+		writer.C("  float depth = (color.x - z_offset) * z_scale;\n");
+
+		if (config.bufferFormat == GE_FORMAT_DEPTH16 && config.textureFormat == GE_TFMT_5650) {
+			// Convert depth to 565, without going through a CLUT.
+			// TODO: Make "depal without a CLUT" a separate concept, to avoid redundantly creating a CLUT texture.
+			writer.C("  int idepth = int(clamp(depth, 0.0, 65535.0));\n");
+			writer.C("  float r = float(idepth & 31) / 31.0f;\n");
+			writer.C("  float g = float((idepth >> 5) & 63) / 63.0f;\n");
+			writer.C("  float b = float((idepth >> 11) & 31) / 31.0f;\n");
+			writer.C("  vec4 outColor = vec4(r, g, b, 1.0);\n");
+			return;
+		}
+
+		writer.C("  int index = int(clamp(depth, 0.0, 65535.0));\n");
 		break;
 	default:
 		break;
 	}
 
-	float texturePixels = 256;
-	if (clutFormat != GE_CMODE_32BIT_ABGR8888) {
-		texturePixels = 512;
+	float texturePixels = 256.0f;
+	if (config.clutFormat != GE_CMODE_32BIT_ABGR8888) {
+		texturePixels = 512.0f;
 	}
 
 	if (shift) {
-		WRITE(p, "  index = (int(uint(index) >> uint(%i)) & 0x%02x)", shift, mask);
+		writer.F("  index = (int(uint(index) >> uint(%d)) & 0x%02x)", shift, mask);
 	} else {
-		WRITE(p, "  index = (index & 0x%02x)", mask);
+		writer.F("  index = (index & 0x%02x)", mask);
 	}
-	if (offset) {
-		WRITE(p, " | %i;\n", offset);  // '|' matches what we have in gstate.h
+	if (config.startPos) {
+		writer.F(" | %d;\n", config.startPos);  // '|' matches what we have in gstate.h
 	} else {
-		WRITE(p, ";\n");
+		writer.F(";\n");
 	}
 
-	if (language == HLSL_D3D11) {
-		WRITE(p, "  return pal.Load(int3(index, 0, 0)).bgra;\n");
-	} else {
-		WRITE(p, "  fragColor0 = texture(pal, vec2((float(index) + 0.5) * (1.0 / %f), 0.0));\n", texturePixels);
-	}
-	WRITE(p, "}\n");
+	writer.F("  vec2 uv = vec2((float(index) + 0.5) * %f, 0.0);\n", 1.0f / texturePixels);
+	writer.C("  vec4 outColor = ").SampleTexture2D("pal", "uv").C(";\n");
 }
 
-// FP only, to suit GL(ES) 2.0
-void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLanguage lang) {
-	char *p = buffer;
-
-	const char *modFunc = lang == HLSL_D3D9 ? "fmod" : "mod";
-
+// FP only, to suit GL(ES) 2.0 and DX9
+void GenerateDepalShaderFloat(ShaderWriter &writer, const DepalConfig &config) {
 	char lookupMethod[128] = "index.r";
-	char offset[128] = "";
 
-	const GEPaletteFormat clutFormat = gstate.getClutPaletteFormat();
-	const u32 clutBase = gstate.getClutIndexStartPos();
+	const int shift = config.shift;
+	const int mask = config.mask;
 
-	const int shift = gstate.getClutIndexShift();
-	const int mask = gstate.getClutIndexMask();
+	if (config.bufferFormat == GE_FORMAT_DEPTH16) {
+		DepthScaleFactors factors = GetDepthScaleFactors();
+		writer.ConstFloat("z_scale", factors.scale);
+		writer.ConstFloat("z_offset", factors.offset);
+	}
+
+	writer.C("  vec4 index = ").SampleTexture2D("tex", "v_texcoord").C(";\n");
 
 	float index_multiplier = 1.0f;
 	// pixelformat is the format of the texture we are sampling.
 	bool formatOK = true;
-	switch (pixelFormat) {
+	switch (config.bufferFormat) {
 	case GE_FORMAT_8888:
 		if ((mask & (mask + 1)) == 0) {
 			// If the value has all bits contiguous (bitmask check above), we can mod by it + 1.
@@ -195,7 +179,7 @@ void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLa
 			if (rgba_shift == 0 && mask == 0xFF) {
 				sprintf(lookupMethod, "index.%c", rgba[shift]);
 			} else {
-				sprintf(lookupMethod, "%s(index.%c * %f, %d.0)", modFunc, rgba[shift], 255.99f / (1 << rgba_shift), mask + 1);
+				sprintf(lookupMethod, "fmod(index.%c * %f, %d.0)", rgba[shift], 255.99f / (1 << rgba_shift), mask + 1);
 				index_multiplier = 1.0f / 256.0f;
 				// Format was OK if there weren't bits from another component.
 				formatOK = mask <= 255 - (1 << rgba_shift);
@@ -213,7 +197,7 @@ void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLa
 				index_multiplier = 15.0f / 256.0f;
 			} else {
 				// Let's divide and mod to get the right bits.  A common case is shift=0, mask=01.
-				sprintf(lookupMethod, "%s(index.%c * %f, %d.0)", modFunc, rgba[shift], 15.99f / (1 << rgba_shift), mask + 1);
+				sprintf(lookupMethod, "fmod(index.%c * %f, %d.0)", rgba[shift], 15.99f / (1 << rgba_shift), mask + 1);
 				index_multiplier = 1.0f / 256.0f;
 				formatOK = mask <= 15 - (1 << rgba_shift);
 			}
@@ -233,7 +217,7 @@ void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLa
 			} else {
 				// We just need to divide the right component by the right value, and then mod against the mask.
 				// A common case is shift=1, mask=0f.
-				sprintf(lookupMethod, "%s(index.%c * %f, %d.0)", modFunc, rgba[shift], ((float)multipliers[shift] + 0.99f) / (1 << rgba_shift), mask + 1);
+				sprintf(lookupMethod, "fmod(index.%c * %f, %d.0)", rgba[shift], ((float)multipliers[shift] + 0.99f) / (1 << rgba_shift), mask + 1);
 				index_multiplier = 1.0f / 256.0f;
 				formatOK = mask <= multipliers[shift] - (1 << rgba_shift);
 			}
@@ -253,7 +237,7 @@ void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLa
 				index_multiplier = 1.0f / 256.0f;
 			} else {
 				// A isn't possible here.
-				sprintf(lookupMethod, "%s(index.%c * %f, %d.0)", modFunc, rgba[shift], 31.99f / (1 << rgba_shift), mask + 1);
+				sprintf(lookupMethod, "fmod(index.%c * %f, %d.0)", rgba[shift], 31.99f / (1 << rgba_shift), mask + 1);
 				index_multiplier = 1.0f / 256.0f;
 				formatOK = mask <= 31 - (1 << rgba_shift);
 			}
@@ -264,9 +248,27 @@ void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLa
 	case GE_FORMAT_DEPTH16:
 	{
 		// TODO: I think we can handle most scenarios here, but texturing from depth buffers requires an extension on ES 2.0 anyway.
-		if ((mask & (mask + 1)) == 0 && shift < 16) {
+		// Not on D3D9 though, so this path is still relevant.
+
+		if (config.bufferFormat == GE_FORMAT_DEPTH16 && config.textureFormat == GE_TFMT_5650) {
+			// Convert depth to 565, without going through a CLUT.
+			writer.C("  float depth = (index.x - z_offset) * z_scale;\n");
+			writer.C("  float idepth = floor(clamp(depth, 0.0, 65535.0));\n");
+			writer.C("  float r = mod(idepth, 32.0) / 31.0f;\n");
+			writer.C("  float g = mod(floor(idepth / 32.0), 64.0) / 63.0f;\n");
+			writer.C("  float b = mod(floor(idepth / 2048.0), 32.0) / 31.0f;\n");
+			writer.C("  vec4 outColor = vec4(r, g, b, 1.0);\n");
+			return;
+		}
+
+		if (shift < 16) {
 			index_multiplier = 1.0f / (float)(1 << shift);
-			truncate_cpy(lookupMethod, "index.r");
+			truncate_cpy(lookupMethod, "((index.x - z_offset) * z_scale)");
+
+			if ((mask & (mask + 1)) != 0) {
+				// But we'll try with the above anyway.
+				formatOK = false;
+			}
 		} else {
 			formatOK = false;
 		}
@@ -277,7 +279,7 @@ void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLa
 	}
 
 	float texturePixels = 256.f;
-	if (clutFormat != GE_CMODE_32BIT_ABGR8888) {
+	if (config.clutFormat != GE_CMODE_32BIT_ABGR8888) {
 		texturePixels = 512.f;
 		index_multiplier *= 0.5f;
 	}
@@ -286,69 +288,75 @@ void GenerateDepalShaderFloat(char *buffer, GEBufferFormat pixelFormat, ShaderLa
 	// index_multiplier -= 0.01f / texturePixels;
 
 	if (!formatOK) {
-		ERROR_LOG_REPORT_ONCE(depal, G3D, "%i depal unsupported: shift=%i mask=%02x offset=%d", pixelFormat, shift, mask, clutBase);
+		ERROR_LOG_REPORT_ONCE(depal, G3D, "%s depal unsupported: shift=%d mask=%02x offset=%d", GeBufferFormatToString(config.bufferFormat), shift, mask, config.startPos);
 	}
 
 	// Offset by half a texel (plus clutBase) to turn NEAREST filtering into FLOOR.
 	// Technically, the clutBase should be |'d, not added, but that's hard with floats.
-	float texel_offset = ((float)clutBase + 0.5f) / texturePixels;
+	float texel_offset = ((float)config.startPos + 0.5f) / texturePixels;
+	char offset[128] = "";
 	sprintf(offset, " + %f", texel_offset);
 
-	if (lang == GLSL_1xx) {
-		if (gl_extensions.IsGLES) {
-			WRITE(p, "#version 100\n");
-			WRITE(p, "precision mediump float;\n");
-		} else {
-			WRITE(p, "#version %d\n", gl_extensions.GLSLVersion());
-			if (gl_extensions.VersionGEThan(3, 0, 0)) {
-				WRITE(p, "#define gl_FragColor fragColor0\n");
-				WRITE(p, "out vec4 fragColor0;\n");
-			}
+	writer.F("  float coord = (%s * %f)%s;\n", lookupMethod, index_multiplier, offset);
+	writer.C("  vec4 outColor = ").SampleTexture2D("pal", "vec2(coord, 0.0)").C(";\n");
+}
+
+void GenerateDepalSmoothed(ShaderWriter &writer, const DepalConfig &config) {
+	const char *sourceChannel = "error";
+	float indexMultiplier = 31.0f;
+
+	if (config.bufferFormat == GE_FORMAT_5551) {
+		_dbg_assert_(config.mask == 0x1F);
+		switch (config.shift) {
+		case 0: sourceChannel = "r"; break;
+		case 5: sourceChannel = "g"; break;
+		case 10: sourceChannel = "b"; break;
+		default: _dbg_assert_(false);
 		}
-		WRITE(p, "varying vec2 v_texcoord0;\n");
-		WRITE(p, "uniform sampler2D tex;\n");
-		WRITE(p, "uniform sampler2D pal;\n");
-		WRITE(p, "void main() {\n");
-		WRITE(p, "  vec4 index = texture2D(tex, v_texcoord0);\n");
-		WRITE(p, "  float coord = (%s * %f)%s;\n", lookupMethod, index_multiplier, offset);
-		WRITE(p, "  gl_FragColor = texture2D(pal, vec2(coord, 0.0));\n");
-		WRITE(p, "}\n");
-	} else if (lang == HLSL_D3D9) {
-		WRITE(p, "sampler tex: register(s0);\n");
-		WRITE(p, "sampler pal: register(s1);\n");
-		WRITE(p, "float4 main(float2 v_texcoord0 : TEXCOORD0) : COLOR0 {\n");
-		WRITE(p, "  float4 index = tex2D(tex, v_texcoord0);\n");
-		WRITE(p, "  float coord = (%s * %f)%s;\n", lookupMethod, index_multiplier, offset);
-		WRITE(p, "  return tex2D(pal, float2(coord, 0.0)).bgra;\n");
-		WRITE(p, "}\n");
+	} else if (config.bufferFormat == GE_FORMAT_565) {
+		_dbg_assert_(config.mask == 0x1F || config.mask == 0x3F);
+		switch (config.shift) {
+		case 0: sourceChannel = "r"; break;
+		case 5: sourceChannel = "g"; indexMultiplier = 63.0f; break;
+		case 11: sourceChannel = "b"; break;
+		default: _dbg_assert_(false);
+		}
+	} else {
+		_dbg_assert_(false);
 	}
-}
 
-void GenerateDepalShader(char *buffer, GEBufferFormat pixelFormat, ShaderLanguage language) {
-	switch (language) {
-	case GLSL_1xx:
-		GenerateDepalShaderFloat(buffer, pixelFormat, language);
-		break;
-	case GLSL_3xx:
-	case GLSL_VULKAN:
-	case HLSL_D3D11:
-		GenerateDepalShader300(buffer, pixelFormat, language);
-		break;
-	case HLSL_D3D9:
-		GenerateDepalShaderFloat(buffer, pixelFormat, language);
-		break;
-	default:
-		_assert_msg_(false, "Depal shader language not supported: %d", (int)language);
+	writer.C("  float index = ").SampleTexture2D("tex", "v_texcoord").F(".%s * %0.1f;\n", sourceChannel, indexMultiplier);
+	float texturePixels = 256.f;
+	if (config.clutFormat != GE_CMODE_32BIT_ABGR8888) {
+		texturePixels = 512.f;
 	}
+
+	writer.F("  float coord = (index + 0.5) * %f;\n", 1.0 / texturePixels);
+	writer.C("  vec4 outColor = ").SampleTexture2D("pal", "vec2(coord, 0.0)").C(";\n");
 }
 
-uint32_t DepalShaderCacheCommon::GenerateShaderID(uint32_t clutMode, GEBufferFormat pixelFormat) const {
-	return (clutMode & 0xFFFFFF) | (pixelFormat << 24);
+void GenerateDepalFs(ShaderWriter &writer, const DepalConfig &config) {
+	writer.DeclareSamplers(samplers);
+	writer.HighPrecisionFloat();
+	writer.BeginFSMain(config.bufferFormat == GE_FORMAT_DEPTH16 ? g_draw2Duniforms : Slice<UniformDef>::empty(), varyings, FSFLAG_NONE);
+	if (config.smoothedDepal) {
+		// Handles a limited set of cases, but doesn't need any integer math so we don't
+		// need two variants.
+		GenerateDepalSmoothed(writer, config);
+	} else {
+		switch (writer.Lang().shaderLanguage) {
+		case HLSL_D3D9:
+		case GLSL_1xx:
+			GenerateDepalShaderFloat(writer, config);
+			break;
+		case GLSL_VULKAN:
+		case GLSL_3xx:
+		case HLSL_D3D11:
+			GenerateDepalShader300(writer, config);
+			break;
+		default:
+			_assert_msg_(false, "Shader language not supported for depal: %d", (int)writer.Lang().shaderLanguage);
+		}
+	}
+	writer.EndFSMain("outColor", FSFLAG_NONE);
 }
-
-uint32_t DepalShaderCacheCommon::GetClutID(GEPaletteFormat clutFormat, uint32_t clutHash) const {
-	// Simplistic.
-	return clutHash ^ (uint32_t)clutFormat;
-}
-
-#undef WRITE

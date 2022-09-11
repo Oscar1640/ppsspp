@@ -141,7 +141,7 @@ public:
 	bool PerformMemorySet(u32 dest, u8 v, int size) override;
 	bool PerformMemoryDownload(u32 dest, int size) override;
 	bool PerformMemoryUpload(u32 dest, int size) override;
-	bool PerformStencilUpload(u32 dest, int size) override;
+	bool PerformStencilUpload(u32 dest, int size, StencilUpload flags) override;
 	void ClearCacheNextFrame() override {}
 
 	void DeviceLost() override;
@@ -216,7 +216,7 @@ private:
 };
 
 // TODO: These shouldn't be global.
-extern u32 clut[4096];
+extern uint8_t clut[1024];
 extern FormatBuffer fb;
 extern FormatBuffer depthbuf;
 

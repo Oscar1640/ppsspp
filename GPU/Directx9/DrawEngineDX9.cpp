@@ -42,8 +42,6 @@
 #include "GPU/Directx9/ShaderManagerDX9.h"
 #include "GPU/Directx9/GPU_DX9.h"
 
-namespace DX9 {
-
 static const D3DPRIMITIVETYPE d3d_prim[8] = {
 	// Points, which are expanded to triangles.
 	D3DPT_TRIANGLELIST,
@@ -248,7 +246,7 @@ void DrawEngineDX9::MarkUnreliable(VertexArrayInfoDX9 *vai) {
 }
 
 void DrawEngineDX9::ClearTrackedVertexArrays() {
-	vai_.Iterate([&](uint32_t hash, DX9::VertexArrayInfoDX9 *vai) {
+	vai_.Iterate([&](uint32_t hash, VertexArrayInfoDX9 *vai) {
 		delete vai;
 	});
 	vai_.Clear();
@@ -264,7 +262,7 @@ void DrawEngineDX9::DecimateTrackedVertexArrays() {
 	const int threshold = gpuStats.numFlips - VAI_KILL_AGE;
 	const int unreliableThreshold = gpuStats.numFlips - VAI_UNRELIABLE_KILL_AGE;
 	int unreliableLeft = VAI_UNRELIABLE_KILL_MAX;
-	vai_.Iterate([&](uint32_t hash, DX9::VertexArrayInfoDX9 *vai) {
+	vai_.Iterate([&](uint32_t hash, VertexArrayInfoDX9 *vai) {
 		bool kill;
 		if (vai->status == VertexArrayInfoDX9::VAI_UNRELIABLE) {
 			// We limit killing unreliable so we don't rehash too often.
@@ -305,6 +303,8 @@ static uint32_t SwapRB(uint32_t c) {
 }
 
 void DrawEngineDX9::BeginFrame() {
+	gpuStats.numTrackedVertexArrays = (int)vai_.size();
+
 	DecimateTrackedVertexArrays();
 
 	lastRenderStepId_ = -1;
@@ -313,7 +313,6 @@ void DrawEngineDX9::BeginFrame() {
 // The inline wrapper in the header checks for numDrawCalls == 0
 void DrawEngineDX9::DoFlush() {
 	gpuStats.numFlushes++;
-	gpuStats.numTrackedVertexArrays = (int)vai_.size();
 
 	// In D3D, we're synchronous and state carries over so all we reset here on a new step is the viewport/scissor.
 	int curRenderStepId = draw_->GetCurrentStepId();
@@ -323,14 +322,23 @@ void DrawEngineDX9::DoFlush() {
 		lastRenderStepId_ = curRenderStepId;
 	}
 
-	// This is not done on every drawcall, we should collect vertex data
-	// until critical state changes. That's when we draw (flush).
+	bool textureNeedsApply = false;
+	if (gstate_c.IsDirty(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS) && !gstate.isModeClear() && gstate.isTextureMapEnabled()) {
+		textureCache_->SetTexture();
+		gstate_c.Clean(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS);
+		textureNeedsApply = true;
+	} else if (gstate.getTextureAddress(0) == ((gstate.getFrameBufRawAddress() | 0x04000000) & 0x3FFFFFFF)) {
+		// This catches the case of clearing a texture. (#10957)
+		gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
+	}
+
 	GEPrimitiveType prim = prevPrim_;
-	ApplyDrawState(prim);
 
-	VSShader *vshader = shaderManager_->ApplyShader(CanUseHardwareTransform(prim), useHWTessellation_, lastVType_, decOptions_.expandAllWeightsToFloat);
+	// Always use software for flat shading to fix the provoking index.
+	bool tess = gstate_c.submitType == SubmitType::HW_BEZIER || gstate_c.submitType == SubmitType::HW_SPLINE;
+	bool useHWTransform = CanUseHardwareTransform(prim) && (tess || gstate.getShadeMode() != GE_SHADE_FLAT);
 
-	if (vshader->UseHWTransform()) {
+	if (useHWTransform) {
 		LPDIRECT3DVERTEXBUFFER9 vb_ = NULL;
 		LPDIRECT3DINDEXBUFFER9 ib_ = NULL;
 
@@ -500,7 +508,6 @@ rotateVBO:
 			prim = indexGen.Prim();
 		}
 
-		VERBOSE_LOG(G3D, "Flush prim %i! %i verts in one go", prim, vertexCount);
 		bool hasColor = (lastVType_ & GE_VTYPE_COL_MASK) != GE_VTYPE_COL_NONE;
 		if (gstate.isModeThrough()) {
 			gstate_c.vertexFullAlpha = gstate_c.vertexFullAlpha && (hasColor || gstate.getMaterialAmbientA() == 255);
@@ -508,8 +515,14 @@ rotateVBO:
 			gstate_c.vertexFullAlpha = gstate_c.vertexFullAlpha && ((hasColor && (gstate.materialupdate & 1)) || gstate.getMaterialAmbientA() == 255) && (!gstate.isLightingEnabled() || gstate.getAmbientA() == 255);
 		}
 
+		if (textureNeedsApply) {
+			textureCache_->ApplyTexture();
+		}
+
+		ApplyDrawState(prim);
 		ApplyDrawStateLate();
-		vshader = shaderManager_->ApplyShader(CanUseHardwareTransform(prim), useHWTessellation_, lastVType_, decOptions_.expandAllWeightsToFloat);
+
+		VSShader *vshader = shaderManager_->ApplyShader(true, useHWTessellation_, lastVType_, decOptions_.expandAllWeightsToFloat, pipelineState_);
 		IDirect3DVertexDeclaration9 *pHardwareVertexDecl = SetupDecFmtForDraw(vshader, dec_->GetDecVtxFmt(), dec_->VertexType());
 
 		if (pHardwareVertexDecl) {
@@ -569,32 +582,38 @@ rotateVBO:
 				framebufferManager_->GetRenderWidth(), framebufferManager_->GetRenderHeight(),
 				framebufferManager_->GetTargetBufferWidth(), framebufferManager_->GetTargetBufferHeight(),
 				vpAndScissor);
+			UpdateCachedViewportState(vpAndScissor);
 		}
 
 		int maxIndex = indexGen.MaxIndex();
 		SoftwareTransform swTransform(params);
 
 		// Half pixel offset hack.
-		float xScale = gstate_c.vpWidth < 0 ? -1.0f : 1.0f;
 		float xOffset = -1.0f / gstate_c.curRTRenderWidth;
-		float yScale = gstate_c.vpHeight > 0 ? -1.0f : 1.0f;
 		float yOffset = 1.0f / gstate_c.curRTRenderHeight;
 
-		const Lin::Vec3 trans(gstate_c.vpXOffset * xScale + xOffset, gstate_c.vpYOffset * yScale + yOffset, gstate_c.vpZOffset * 0.5f + 0.5f);
+		const Lin::Vec3 trans(gstate_c.vpXOffset + xOffset, -gstate_c.vpYOffset + yOffset, gstate_c.vpZOffset * 0.5f + 0.5f);
 		const Lin::Vec3 scale(gstate_c.vpWidthScale, gstate_c.vpHeightScale, gstate_c.vpDepthScale * 0.5f);
 		swTransform.SetProjMatrix(gstate.projMatrix, gstate_c.vpWidth < 0, gstate_c.vpHeight > 0, trans, scale);
 
 		swTransform.Decode(prim, dec_->VertexType(), dec_->GetDecVtxFmt(), maxIndex, &result);
 		if (result.action == SW_NOT_READY) {
 			swTransform.DetectOffsetTexture(maxIndex);
-			swTransform.BuildDrawingParams(prim, indexGen.VertexCount(), dec_->VertexType(), inds, maxIndex, &result);
 		}
 
+		if (textureNeedsApply)
+			textureCache_->ApplyTexture();
+
+		ApplyDrawState(prim);
+
+		if (result.action == SW_NOT_READY)
+			swTransform.BuildDrawingParams(prim, indexGen.VertexCount(), dec_->VertexType(), inds, maxIndex, &result);
 		if (result.setSafeSize)
 			framebufferManager_->SetSafeSize(result.safeWidth, result.safeHeight);
 
 		ApplyDrawStateLate();
-		vshader = shaderManager_->ApplyShader(false, false, lastVType_, decOptions_.expandAllWeightsToFloat);
+
+		VSShader *vshader = shaderManager_->ApplyShader(false, false, lastVType_, decOptions_.expandAllWeightsToFloat, pipelineState_);
 
 		if (result.action == SW_DRAW_PRIMITIVES) {
 			if (result.setStencil) {
@@ -620,9 +639,6 @@ rotateVBO:
 			if (gstate.isClearModeAlphaMask()) mask |= D3DCLEAR_STENCIL;
 			if (gstate.isClearModeDepthMask()) mask |= D3DCLEAR_ZBUFFER;
 
-			if (mask & D3DCLEAR_ZBUFFER) {
-				framebufferManager_->SetDepthUpdated();
-			}
 			if (mask & D3DCLEAR_TARGET) {
 				framebufferManager_->SetColorUpdated(gstate_c.skipDrawReason);
 			}
@@ -664,5 +680,3 @@ rotateVBO:
 void TessellationDataTransferDX9::SendDataToShader(const SimpleVertex *const *points, int size_u, int size_v, u32 vertType, const Spline::Weight2D &weights) {
 	// TODO
 }
-
-}  // namespace

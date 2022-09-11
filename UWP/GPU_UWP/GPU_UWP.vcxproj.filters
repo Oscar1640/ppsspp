@@ -24,7 +24,6 @@
     <ClCompile Include="..\..\GPU\Common\VertexDecoderCommon.cpp" />
     <ClCompile Include="..\..\GPU\Common\VertexDecoderX86.cpp" />
     <ClCompile Include="..\..\GPU\D3D11\D3D11Util.cpp" />
-    <ClCompile Include="..\..\GPU\D3D11\DepalettizeShaderD3D11.cpp" />
     <ClCompile Include="..\..\GPU\D3D11\DrawEngineD3D11.cpp" />
     <ClCompile Include="..\..\GPU\D3D11\FramebufferManagerD3D11.cpp" />
     <ClCompile Include="..\..\GPU\D3D11\GPU_D3D11.cpp" />
@@ -33,6 +32,7 @@
     <ClCompile Include="..\..\GPU\D3D11\TextureCacheD3D11.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Breakpoints.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Debugger.cpp" />
+    <ClCompile Include="..\..\GPU\Debugger\GECommandTable.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Playback.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Record.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Stepping.cpp" />
@@ -58,6 +58,7 @@
     <ClCompile Include="..\..\GPU\Common\VertexShaderGenerator.cpp" />
     <ClCompile Include="..\..\GPU\Common\ReinterpretFramebuffer.cpp" />
     <ClCompile Include="..\..\GPU\Common\Draw2D.cpp" />
+    <ClCompile Include="..\..\GPU\Common\TextureShaderCommon.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\GPU\Common\DepalettizeShaderCommon.h" />
@@ -81,7 +82,6 @@
     <ClInclude Include="..\..\GPU\Common\TransformCommon.h" />
     <ClInclude Include="..\..\GPU\Common\VertexDecoderCommon.h" />
     <ClInclude Include="..\..\GPU\D3D11\D3D11Util.h" />
-    <ClInclude Include="..\..\GPU\D3D11\DepalettizeShaderD3D11.h" />
     <ClInclude Include="..\..\GPU\D3D11\DrawEngineD3D11.h" />
     <ClInclude Include="..\..\GPU\D3D11\FramebufferManagerD3D11.h" />
     <ClInclude Include="..\..\GPU\D3D11\GPU_D3D11.h" />
@@ -90,6 +90,7 @@
     <ClInclude Include="..\..\GPU\D3D11\TextureCacheD3D11.h" />
     <ClInclude Include="..\..\GPU\Debugger\Breakpoints.h" />
     <ClInclude Include="..\..\GPU\Debugger\Debugger.h" />
+    <ClInclude Include="..\..\GPU\Debugger\GECommandTable.h" />
     <ClInclude Include="..\..\GPU\Debugger\Playback.h" />
     <ClInclude Include="..\..\GPU\Debugger\Record.h" />
     <ClInclude Include="..\..\GPU\Debugger\RecordFormat.h" />
@@ -118,5 +119,6 @@
     <ClInclude Include="..\..\GPU\Common\VertexShaderGenerator.h" />
     <ClInclude Include="..\..\GPU\Common\ReinterpretFramebuffer.h" />
     <ClInclude Include="..\..\GPU\Common\Draw2D.h" />
+    <ClInclude Include="..\..\GPU\Common\TextureShaderCommon.h" />
   </ItemGroup>
 </Project>

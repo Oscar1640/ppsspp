@@ -35,7 +35,6 @@
 #include "GPU/GeDisasm.h"
 
 #include "GPU/Common/FramebufferManagerCommon.h"
-#include "GPU/Debugger/Debugger.h"
 #include "GPU/D3D11/ShaderManagerD3D11.h"
 #include "GPU/D3D11/GPU_D3D11.h"
 #include "GPU/D3D11/FramebufferManagerD3D11.h"
@@ -60,11 +59,10 @@ GPU_D3D11::GPU_D3D11(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	shaderManagerD3D11_ = new ShaderManagerD3D11(draw, device_, context_, featureLevel);
 	framebufferManagerD3D11_ = new FramebufferManagerD3D11(draw);
 	framebufferManager_ = framebufferManagerD3D11_;
-	textureCacheD3D11_ = new TextureCacheD3D11(draw);
+	textureCacheD3D11_ = new TextureCacheD3D11(draw, framebufferManager_->GetDraw2D());
 	textureCache_ = textureCacheD3D11_;
 	drawEngineCommon_ = &drawEngine_;
 	shaderManager_ = shaderManagerD3D11_;
-	depalShaderCache_ = new DepalShaderCacheD3D11(draw);
 	drawEngine_.SetShaderManager(shaderManagerD3D11_);
 	drawEngine_.SetTextureCache(textureCacheD3D11_);
 	drawEngine_.SetFramebufferManager(framebufferManagerD3D11_);
@@ -74,7 +72,6 @@ GPU_D3D11::GPU_D3D11(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	framebufferManagerD3D11_->SetDrawEngine(&drawEngine_);
 	framebufferManagerD3D11_->Init();
 	textureCacheD3D11_->SetFramebufferManager(framebufferManagerD3D11_);
-	textureCacheD3D11_->SetDepalShaderCache(depalShaderCache_);
 	textureCacheD3D11_->SetShaderManager(shaderManagerD3D11_);
 
 	// Sanity check gstate
@@ -95,7 +92,6 @@ GPU_D3D11::GPU_D3D11(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 }
 
 GPU_D3D11::~GPU_D3D11() {
-	delete depalShaderCache_;
 	framebufferManagerD3D11_->DestroyAllFBOs();
 	delete framebufferManagerD3D11_;
 	shaderManagerD3D11_->ClearShaders();
@@ -213,7 +209,7 @@ void GPU_D3D11::BeginHostFrame() {
 		CheckGPUFeatures();
 		framebufferManager_->Resized();
 		drawEngine_.Resized();
-		textureCacheD3D11_->NotifyConfigChanged();
+		textureCache_->NotifyConfigChanged();
 		shaderManagerD3D11_->DirtyLastShader();
 		resized_ = false;
 	}
@@ -235,20 +231,11 @@ void GPU_D3D11::BeginFrame() {
 
 	textureCacheD3D11_->StartFrame();
 	drawEngine_.BeginFrame();
-	depalShaderCache_->Decimate();
-	// fragmentTestCache_.Decimate();
 
 	shaderManagerD3D11_->DirtyLastShader();
 
 	framebufferManagerD3D11_->BeginFrame();
 	gstate_c.Dirty(DIRTY_PROJTHROUGHMATRIX);
-}
-
-void GPU_D3D11::SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) {
-	// TODO: Some games like Spongebob - Yellow Avenger, never change framebuffer, they blit to it.
-	// So breaking on frames doesn't work. Might want to move this to sceDisplay vsync.
-	GPUDebug::NotifyDisplay(framebuf, stride, format);
-	framebufferManagerD3D11_->SetDisplayFramebuffer(framebuf, stride, format);
 }
 
 void GPU_D3D11::CopyDisplayToOutput(bool reallyDirty) {
@@ -259,9 +246,7 @@ void GPU_D3D11::CopyDisplayToOutput(bool reallyDirty) {
 	context_->OMSetBlendState(stockD3D11.blendStateDisabledWithColorMask[0xF], blendColor, 0xFFFFFFFF);
 
 	framebufferManagerD3D11_->CopyDisplayToOutput(reallyDirty);
-	framebufferManagerD3D11_->EndFrame();
 
-	// shaderManager_->EndFrame();
 	shaderManagerD3D11_->DirtyLastShader();
 
 	gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
@@ -328,7 +313,6 @@ void GPU_D3D11::DoState(PointerWrap &p) {
 	// None of these are necessary when saving.
 	if (p.mode == p.MODE_READ && !PSP_CoreParameter().frozen) {
 		textureCache_->Clear(true);
-		depalShaderCache_->Clear();
 		drawEngine_.ClearTrackedVertexArrays();
 
 		gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
@@ -340,8 +324,8 @@ std::vector<std::string> GPU_D3D11::DebugGetShaderIDs(DebugShaderType type) {
 	switch (type) {
 	case SHADER_TYPE_VERTEXLOADER:
 		return drawEngine_.DebugGetVertexLoaderIDs();
-	case SHADER_TYPE_DEPAL:
-		return depalShaderCache_->DebugGetShaderIDs(type);
+	case SHADER_TYPE_TEXTURE:
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderIDs(type);
 	default:
 		return shaderManagerD3D11_->DebugGetShaderIDs(type);
 	}
@@ -351,8 +335,8 @@ std::string GPU_D3D11::DebugGetShaderString(std::string id, DebugShaderType type
 	switch (type) {
 	case SHADER_TYPE_VERTEXLOADER:
 		return drawEngine_.DebugGetVertexLoaderString(id, stringType);
-	case SHADER_TYPE_DEPAL:
-		return depalShaderCache_->DebugGetShaderString(id, type, stringType);
+	case SHADER_TYPE_TEXTURE:
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderString(id, type, stringType);
 	default:
 		return shaderManagerD3D11_->DebugGetShaderString(id, type, stringType);
 	}

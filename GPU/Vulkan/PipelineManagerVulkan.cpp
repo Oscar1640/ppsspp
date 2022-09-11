@@ -18,6 +18,10 @@
 
 using namespace PPSSPP_VK;
 
+u32 VulkanPipeline::GetVariantsBitmask() const {
+	return pipeline->GetVariantsBitmask();
+}
+
 PipelineManagerVulkan::PipelineManagerVulkan(VulkanContext *vulkan) : pipelines_(256), vulkan_(vulkan) {
 	// The pipeline cache is created on demand (or explicitly through Load).
 }
@@ -26,24 +30,16 @@ PipelineManagerVulkan::~PipelineManagerVulkan() {
 	Clear();
 	if (pipelineCache_ != VK_NULL_HANDLE)
 		vulkan_->Delete().QueueDeletePipelineCache(pipelineCache_);
+	vulkan_ = nullptr;
 }
 
 void PipelineManagerVulkan::Clear() {
-	// This should kill off all the shaders at once.
-	// This could also be an opportunity to store the whole cache to disk. Will need to also
-	// store the keys.
-
 	pipelines_.Iterate([&](const VulkanPipelineKey &key, VulkanPipeline *value) {
-		if (value->pipeline) {
-			VkPipeline pipeline = value->pipeline->pipeline;
-			vulkan_->Delete().QueueDeletePipeline(pipeline);
-			vulkan_->Delete().QueueCallback([](void *p) {
-				VKRGraphicsPipeline *pipeline = (VKRGraphicsPipeline *)p;
-				delete pipeline;
-			}, value->pipeline);
-		} else {
+		if (!value->pipeline) {
 			// Something went wrong.
 			ERROR_LOG(G3D, "Null pipeline found in PipelineManagerVulkan::Clear - didn't wait for asyncs?");
+		} else {
+			value->pipeline->QueueForDeletion(vulkan_);
 		}
 		delete value;
 	});
@@ -55,6 +51,7 @@ void PipelineManagerVulkan::DeviceLost() {
 	Clear();
 	if (pipelineCache_ != VK_NULL_HANDLE)
 		vulkan_->Delete().QueueDeletePipelineCache(pipelineCache_);
+	vulkan_ = nullptr;
 }
 
 void PipelineManagerVulkan::DeviceRestore(VulkanContext *vulkan) {
@@ -173,9 +170,10 @@ static std::string CutFromMain(std::string str) {
 }
 
 static VulkanPipeline *CreateVulkanPipeline(VulkanRenderManager *renderManager, VkPipelineCache pipelineCache,
-		VkPipelineLayout layout, VkRenderPass renderPass, const VulkanPipelineRasterStateKey &key,
-		const DecVtxFormat *decFmt, VulkanVertexShader *vs, VulkanFragmentShader *fs, bool useHwTransform) {
-	VKRGraphicsPipelineDesc *desc = new VKRGraphicsPipelineDesc();
+		VkPipelineLayout layout, const VulkanPipelineRasterStateKey &key,
+		const DecVtxFormat *decFmt, VulkanVertexShader *vs, VulkanFragmentShader *fs, bool useHwTransform, u32 variantBitmask) {
+	VulkanPipeline *vulkanPipeline = new VulkanPipeline();
+	VKRGraphicsPipelineDesc *desc = &vulkanPipeline->desc;
 	desc->pipelineCache = pipelineCache;
 
 	PROFILE_THIS_SCOPE("pipelinebuild");
@@ -254,28 +252,8 @@ static VulkanPipeline *CreateVulkanPipeline(VulkanRenderManager *renderManager, 
 	ms.pSampleMask = nullptr;
 	ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-	VkPipelineShaderStageCreateInfo *ss = &desc->shaderStageInfo[0];
-	ss[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	ss[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-	ss[0].pSpecializationInfo = nullptr;
-	ss[0].module = vs->GetModule();
-	ss[0].pName = "main";
-	ss[0].flags = 0;
-	ss[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	ss[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-	ss[1].pSpecializationInfo = nullptr;
-	ss[1].module = fs->GetModule();
-	ss[1].pName = "main";
-	ss[1].flags = 0;
-
-	if (!ss[0].module || !ss[1].module) {
-		ERROR_LOG(G3D, "Failed creating graphics pipeline - bad shaders");
-		// Create a placeholder to avoid creating over and over if shader compiler broken.
-		VulkanPipeline *nullPipeline = new VulkanPipeline();
-		nullPipeline->pipeline = VK_NULL_HANDLE;
-		nullPipeline->flags = 0;
-		return nullPipeline;
-	}
+	desc->fragmentShader = fs->GetModule();
+	desc->vertexShader = vs->GetModule();
 
 	VkPipelineInputAssemblyStateCreateInfo &inputAssembly = desc->inputAssembly;
 	inputAssembly.flags = 0;
@@ -316,32 +294,10 @@ static VulkanPipeline *CreateVulkanPipeline(VulkanRenderManager *renderManager, 
 	views.pViewports = nullptr;  // dynamic
 	views.pScissors = nullptr;  // dynamic
 
-	VkGraphicsPipelineCreateInfo &pipe = desc->pipe;
-	pipe.flags = 0;
-	pipe.stageCount = 2;
-	pipe.pStages = ss;
-	pipe.basePipelineIndex = 0;
+	desc->pipelineLayout = layout;
 
-	pipe.pColorBlendState = &desc->cbs;
-	pipe.pDepthStencilState = &desc->dss;
-	pipe.pRasterizationState = &desc->rs;
+	VKRGraphicsPipeline *pipeline = renderManager->CreateGraphicsPipeline(desc, variantBitmask, "game");
 
-	// We will use dynamic viewport state.
-	pipe.pVertexInputState = &desc->vis;
-	pipe.pViewportState = &desc->views;
-	pipe.pTessellationState = nullptr;
-	pipe.pDynamicState = &desc->ds;
-	pipe.pInputAssemblyState = &desc->inputAssembly;
-	pipe.pMultisampleState = &desc->ms;
-	pipe.layout = layout;
-	pipe.basePipelineHandle = VK_NULL_HANDLE;
-	pipe.basePipelineIndex = 0;
-	pipe.renderPass = renderPass;
-	pipe.subpass = 0;
-
-	VKRGraphicsPipeline *pipeline = renderManager->CreateGraphicsPipeline(desc);
-
-	VulkanPipeline *vulkanPipeline = new VulkanPipeline();
 	vulkanPipeline->pipeline = pipeline;
 	vulkanPipeline->flags = 0;
 	if (useBlendConstant)
@@ -354,7 +310,7 @@ static VulkanPipeline *CreateVulkanPipeline(VulkanRenderManager *renderManager, 
 	return vulkanPipeline;
 }
 
-VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *renderManager, VkPipelineLayout layout, VkRenderPass renderPass, const VulkanPipelineRasterStateKey &rasterKey, const DecVtxFormat *decFmt, VulkanVertexShader *vs, VulkanFragmentShader *fs, bool useHwTransform) {
+VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *renderManager, VkPipelineLayout layout, const VulkanPipelineRasterStateKey &rasterKey, const DecVtxFormat *decFmt, VulkanVertexShader *vs, VulkanFragmentShader *fs, bool useHwTransform, u32 variantBitmask) {
 	if (!pipelineCache_) {
 		VkPipelineCacheCreateInfo pc{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
 		VkResult res = vkCreatePipelineCache(vulkan_->GetDevice(), &pc, nullptr, &pipelineCache_);
@@ -362,10 +318,8 @@ VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *
 	}
 
 	VulkanPipelineKey key{};
-	_assert_msg_(renderPass, "Can't create a pipeline with a null renderpass");
 
 	key.raster = rasterKey;
-	key.renderPass = renderPass;
 	key.useHWTransform = useHwTransform;
 	key.vShader = vs->GetModule();
 	key.fShader = fs->GetModule();
@@ -376,8 +330,8 @@ VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *
 		return iter;
 
 	VulkanPipeline *pipeline = CreateVulkanPipeline(
-		renderManager, pipelineCache_, layout, renderPass,
-		rasterKey, decFmt, vs, fs, useHwTransform);
+		renderManager, pipelineCache_, layout,
+		rasterKey, decFmt, vs, fs, useHwTransform, variantBitmask);
 	pipelines_.Insert(key, pipeline);
 
 	// Don't return placeholder null pipelines.
@@ -583,9 +537,8 @@ struct StoredVulkanPipelineKey {
 	VShaderID vShaderID;
 	FShaderID fShaderID;
 	uint32_t vtxFmtId;
-	bool useHWTransform;
-	bool backbufferPass;
-	VulkanQueueRunner::RPKey renderPassKey;
+	uint32_t variants;
+	bool useHWTransform;  // TODO: Still needed?
 
 	// For std::set. Better zero-initialize the struct properly for this to work.
 	bool operator < (const StoredVulkanPipelineKey &other) const {
@@ -631,8 +584,8 @@ void PipelineManagerVulkan::SaveCache(FILE *file, bool saveRawPipelineCache, Sha
 	pipelines_.Iterate([&](const VulkanPipelineKey &pkey, VulkanPipeline *value) {
 		if (failed)
 			return;
-		VulkanVertexShader *vshader = shaderManager->GetVertexShaderFromModule(pkey.vShader);
-		VulkanFragmentShader *fshader = shaderManager->GetFragmentShaderFromModule(pkey.fShader);
+		VulkanVertexShader *vshader = shaderManager->GetVertexShaderFromModule(pkey.vShader->BlockUntilReady());
+		VulkanFragmentShader *fshader = shaderManager->GetFragmentShaderFromModule(pkey.fShader->BlockUntilReady());
 		if (!vshader || !fshader) {
 			failed = true;
 			return;
@@ -642,17 +595,10 @@ void PipelineManagerVulkan::SaveCache(FILE *file, bool saveRawPipelineCache, Sha
 		key.useHWTransform = pkey.useHWTransform;
 		key.fShaderID = fshader->GetID();
 		key.vShaderID = vshader->GetID();
+		key.variants = value->GetVariantsBitmask();
 		if (key.useHWTransform) {
 			// NOTE: This is not a vtype, but a decoded vertex format.
 			key.vtxFmtId = pkey.vtxFmtId;
-		}
-		// Figure out what kind of renderpass this pipeline uses.
-		if (pkey.renderPass == queueRunner->GetBackbufferRenderPass()) {
-			key.backbufferPass = true;
-			key.renderPassKey = {};
-		} else {
-			key.backbufferPass = false;
-			queueRunner->GetRenderPassKey(pkey.renderPass, &key.renderPassKey);
 		}
 		keys.insert(key);
 	});
@@ -759,22 +705,16 @@ bool PipelineManagerVulkan::LoadCache(FILE *file, bool loadRawPipelineCache, Sha
 			continue;
 		}
 
-		VkRenderPass rp;
-		if (key.backbufferPass) {
-			rp = queueRunner->GetBackbufferRenderPass();
-		} else {
-			rp = queueRunner->GetRenderPass(key.renderPassKey);
-		}
-
 		DecVtxFormat fmt;
 		fmt.InitializeFromID(key.vtxFmtId);
-		VulkanPipeline *pipeline = GetOrCreatePipeline(rm, layout, rp, key.raster,
-			key.useHWTransform ? &fmt : 0,
-			vs, fs, key.useHWTransform);
+		VulkanPipeline *pipeline = GetOrCreatePipeline(rm, layout, key.raster, key.useHWTransform ? &fmt : 0, vs, fs, key.useHWTransform, key.variants);
 		if (!pipeline) {
 			pipelineCreateFailCount += 1;
 		}
 	}
+
+	rm->NudgeCompilerThread();
+
 	NOTICE_LOG(G3D, "Recreated Vulkan pipeline cache (%d pipelines, %d failed).", (int)size, pipelineCreateFailCount);
 	return true;
 }

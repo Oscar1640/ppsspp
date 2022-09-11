@@ -38,7 +38,6 @@
 #include "GPU/GeDisasm.h"
 
 #include "GPU/Common/FramebufferManagerCommon.h"
-#include "GPU/Debugger/Debugger.h"
 #include "GPU/Directx9/ShaderManagerDX9.h"
 #include "GPU/Directx9/GPU_DX9.h"
 #include "GPU/Directx9/FramebufferManagerDX9.h"
@@ -49,19 +48,16 @@
 #include "Core/HLE/sceKernelInterrupt.h"
 #include "Core/HLE/sceGe.h"
 
-namespace DX9 {
-
 GPU_DX9::GPU_DX9(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	: GPUCommon(gfxCtx, draw),
-		depalShaderCache_(draw),
-		drawEngine_(draw) {
+	  drawEngine_(draw) {
 	device_ = (LPDIRECT3DDEVICE9)draw->GetNativeObject(Draw::NativeObject::DEVICE);
 	deviceEx_ = (LPDIRECT3DDEVICE9EX)draw->GetNativeObject(Draw::NativeObject::DEVICE_EX);
 
 	shaderManagerDX9_ = new ShaderManagerDX9(draw, device_);
 	framebufferManagerDX9_ = new FramebufferManagerDX9(draw);
 	framebufferManager_ = framebufferManagerDX9_;
-	textureCacheDX9_ = new TextureCacheDX9(draw);
+	textureCacheDX9_ = new TextureCacheDX9(draw, framebufferManager_->GetDraw2D());
 	textureCache_ = textureCacheDX9_;
 	drawEngineCommon_ = &drawEngine_;
 	shaderManager_ = shaderManagerDX9_;
@@ -75,7 +71,6 @@ GPU_DX9::GPU_DX9(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	framebufferManagerDX9_->SetDrawEngine(&drawEngine_);
 	framebufferManagerDX9_->Init();
 	textureCacheDX9_->SetFramebufferManager(framebufferManagerDX9_);
-	textureCacheDX9_->SetDepalShaderCache(&depalShaderCache_);
 	textureCacheDX9_->SetShaderManager(shaderManagerDX9_);
 
 	// Sanity check gstate
@@ -164,6 +159,7 @@ void GPU_DX9::CheckGPUFeatures() {
 	u32 features = 0;
 	features |= GPU_SUPPORTS_16BIT_FORMATS;
 	features |= GPU_SUPPORTS_BLEND_MINMAX;
+	features |= GPU_SUPPORTS_DEPTH_TEXTURE;
 	features |= GPU_SUPPORTS_TEXTURE_LOD_CONTROL;
 
 	// Accurate depth is required because the Direct3D API does not support inverse Z.
@@ -269,7 +265,7 @@ void GPU_DX9::BeginHostFrame() {
 		framebufferManager_->Resized();
 		drawEngine_.Resized();
 		shaderManagerDX9_->DirtyShader();
-		textureCacheDX9_->NotifyConfigChanged();
+		textureCache_->NotifyConfigChanged();
 		resized_ = false;
 	}
 }
@@ -282,18 +278,11 @@ void GPU_DX9::ReapplyGfxState() {
 void GPU_DX9::BeginFrame() {
 	textureCacheDX9_->StartFrame();
 	drawEngine_.BeginFrame();
-	depalShaderCache_.Decimate();
-	// fragmentTestCache_.Decimate();
 
 	GPUCommon::BeginFrame();
 	shaderManagerDX9_->DirtyShader();
 
 	framebufferManager_->BeginFrame();
-}
-
-void GPU_DX9::SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) {
-	GPUDebug::NotifyDisplay(framebuf, stride, format);
-	framebufferManagerDX9_->SetDisplayFramebuffer(framebuf, stride, format);
 }
 
 void GPU_DX9::CopyDisplayToOutput(bool reallyDirty) {
@@ -303,9 +292,7 @@ void GPU_DX9::CopyDisplayToOutput(bool reallyDirty) {
 	drawEngine_.Flush();
 
 	framebufferManagerDX9_->CopyDisplayToOutput(reallyDirty);
-	framebufferManagerDX9_->EndFrame();
 
-	// shaderManager_->EndFrame();
 	shaderManagerDX9_->DirtyLastShader();
 
 	gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
@@ -371,7 +358,6 @@ void GPU_DX9::DoState(PointerWrap &p) {
 	// None of these are necessary when saving.
 	if (p.mode == p.MODE_READ && !PSP_CoreParameter().frozen) {
 		textureCache_->Clear(true);
-		depalShaderCache_.Clear();
 		drawEngine_.ClearTrackedVertexArrays();
 
 		gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
@@ -383,8 +369,8 @@ std::vector<std::string> GPU_DX9::DebugGetShaderIDs(DebugShaderType type) {
 	switch (type) {
 	case SHADER_TYPE_VERTEXLOADER:
 		return drawEngine_.DebugGetVertexLoaderIDs();
-	case SHADER_TYPE_DEPAL:
-		return depalShaderCache_.DebugGetShaderIDs(type);
+	case SHADER_TYPE_TEXTURE:
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderIDs(type);
 	default:
 		return shaderManagerDX9_->DebugGetShaderIDs(type);
 	}
@@ -394,11 +380,9 @@ std::string GPU_DX9::DebugGetShaderString(std::string id, DebugShaderType type, 
 	switch (type) {
 	case SHADER_TYPE_VERTEXLOADER:
 		return drawEngine_.DebugGetVertexLoaderString(id, stringType);
-	case SHADER_TYPE_DEPAL:
-		return depalShaderCache_.DebugGetShaderString(id, type, stringType);
+	case SHADER_TYPE_TEXTURE:
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderString(id, type, stringType);
 	default:
 		return shaderManagerDX9_->DebugGetShaderString(id, type, stringType);
 	}
 }
-
-}  // namespace DX9

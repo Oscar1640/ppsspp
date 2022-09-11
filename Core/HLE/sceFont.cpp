@@ -486,9 +486,8 @@ public:
 		// For save states only.
 	}
 
-	FontLib(u32 paramPtr, u32 errorCodePtr) : fontHRes_(128.0f), fontVRes_(128.0f), altCharCode_(0x5F), charInfoBitmapAddress_(0) {
-		nfl_ = 0;
-		Memory::ReadStruct(paramPtr, &params_);
+	FontLib(FontNewLibParams *params, u32 errorCodePtr) {
+		params_ = *params;
 		if (params_.numFonts > 9) {
 			params_.numFonts = 9;
 		}
@@ -753,14 +752,14 @@ private:
 	std::vector<u32> fontRefCount_;
 
 	FontNewLibParams params_;
-	float fontHRes_;
-	float fontVRes_;
-	int fileFontHandle_;
-	int handle_;
-	int altCharCode_;
+	float fontHRes_ = 128.0f;
+	float fontVRes_ = 128.0f;
+	int fileFontHandle_ = -1;
+	int handle_ = -1;
+	int altCharCode_ = 0x5F;
 	std::vector<u32> openAllocatedAddresses_;
-	u32 charInfoBitmapAddress_;
-	PSPPointer<NativeFontLib> nfl_;
+	u32 charInfoBitmapAddress_ = 0;
+	PSPPointer<NativeFontLib> nfl_{};
 
 	DISALLOW_COPY_AND_ASSIGN(FontLib);
 };
@@ -999,7 +998,7 @@ static u32 sceFontNewLib(u32 paramPtr, u32 errorCodePtr) {
 	INFO_LOG(SCEFONT, "sceFontNewLib(%08x, %08x)", paramPtr, errorCodePtr);
 	*errorCode = 0;
 
-	FontLib *newLib = new FontLib(paramPtr, errorCodePtr);
+	FontLib *newLib = new FontLib(params, errorCodePtr);
 	fontLibList.push_back(newLib);
 	// The game should never see this value, the return value is replaced
 	// by the action. Except if we disable the alloc, in this case we return

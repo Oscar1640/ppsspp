@@ -18,73 +18,36 @@
 #pragma once
 
 #include "Common/GPU/thin3d.h"
-// Keeps track of allocated FBOs.
-// Also provides facilities for drawing and later converting raw
-// pixel data.
-
 #include "GPU/GPUCommon.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
-#include "Common/GPU/OpenGL/GLRenderManager.h"
 
-struct GLSLProgram;
 class TextureCacheGLES;
 class DrawEngineGLES;
 class ShaderManagerGLES;
+class GLRProgram;
 
 class FramebufferManagerGLES : public FramebufferManagerCommon {
 public:
-	FramebufferManagerGLES(Draw::DrawContext *draw, GLRenderManager *render);
+	FramebufferManagerGLES(Draw::DrawContext *draw);
 	~FramebufferManagerGLES();
 
-	void SetTextureCache(TextureCacheGLES *tc);
-	void SetShaderManager(ShaderManagerGLES *sm);
-	void SetDrawEngine(DrawEngineGLES *td);
-
-	virtual void Init() override;
-	void EndFrame();
 	void Resized() override;
-
 	void DeviceLost() override;
-	void DeviceRestore(Draw::DrawContext *draw) override;
 
 	bool GetOutputFramebuffer(GPUDebugBuffer &buffer) override;
 
 protected:
-	// Used by ReadFramebufferToMemory and later framebuffer block copies
-	void BlitFramebuffer(VirtualFramebuffer *dst, int dstX, int dstY, VirtualFramebuffer *src, int srcX, int srcY, int w, int h, int bpp, const char *tag) override;
-
 	void UpdateDownloadTempBuffer(VirtualFramebuffer *nvfb) override;
 
 private:
-	void CreateDeviceObjects();
-	void DestroyDeviceObjects();
-
-	void Bind2DShader() override;
-	void CompileDraw2DProgram();
-
 	void PackDepthbuffer(VirtualFramebuffer *vfb, int x, int y, int w, int h);
-
-	GLRenderManager *render_;
 
 	u8 *convBuf_ = nullptr;
 	u32 convBufSize_ = 0;
-
-	GLRProgram *draw2dprogram_ = nullptr;
 
 	GLRProgram *depthDownloadProgram_ = nullptr;
 	int u_depthDownloadTex = -1;
 	int u_depthDownloadFactor = -1;
 	int u_depthDownloadShift = -1;
 	int u_depthDownloadTo8 = -1;
-	
-	// Cached uniform locs
-	int u_draw2d_tex = -1;
-
-	DrawEngineGLES *drawEngineGL_ = nullptr;
-
-	struct Simple2DVertex {
-		float pos[3];
-		float uv[2];
-	};
-	GLRInputLayout *simple2DInputLayout_ = nullptr;
 };

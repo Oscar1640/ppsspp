@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 enum GECommand {
 	GE_CMD_NOP = 0,
 	GE_CMD_VADDR = 0x1,
@@ -276,8 +278,7 @@ enum GECommand {
 	GE_CMD_NOP_FF = 0xFF,
 };
 
-enum GEBufferFormat
-{
+enum GEBufferFormat : uint8_t {
 	GE_FORMAT_565 = 0,
 	GE_FORMAT_5551 = 1,
 	GE_FORMAT_4444 = 2,
@@ -349,6 +350,15 @@ inline bool IsGeBufferFormat16BitColor(GEBufferFormat fmt) {
 #define GE_CLEARMODE_Z     (1<<10)
 #define GE_CLEARMODE_ALL (GE_CLEARMODE_COLOR|GE_CLEARMODE_ALPHA|GE_CLEARMODE_Z)
 
+#define GE_IMM_ANTIALIAS   0x00000800
+#define GE_IMM_CLIPMASK    0x0003F000
+#define GE_IMM_SHADING     0x00040000
+#define GE_IMM_CULLENABLE  0x00080000
+#define GE_IMM_CULLFACE    0x00100000
+#define GE_IMM_TEXTURE     0x00200000
+#define GE_IMM_FOG         0x00400000
+#define GE_IMM_DITHER      0x00800000
+
 enum GEMatrixType {
 	GE_MTX_BONE0 = 0,
 	GE_MTX_BONE1,
@@ -404,7 +414,7 @@ enum GELightComputation
 	GE_LIGHTCOMP_ONLYPOWDIFFUSE = 2,
 };
 
-enum GETextureFormat
+enum GETextureFormat : uint8_t
 {
 	GE_TFMT_5650 = 0,
 	GE_TFMT_5551 = 1,
@@ -434,6 +444,11 @@ inline bool IsBufferFormat16Bit(GEBufferFormat bfmt) {
 inline bool IsTextureFormat16Bit(GETextureFormat tfmt) {
 	return (int)tfmt < 3;
 }
+
+inline int BufferFormatBytesPerPixel(GEBufferFormat format) {
+	return format == GE_FORMAT_8888 ? 4 : 2;  // applies to depth as well.
+}
+
 inline bool TextureFormatMatchesBufferFormat(GETextureFormat fmt, GEBufferFormat bfmt) {
 	// First four matches perfectly.
 	if ((int)fmt < 4) {

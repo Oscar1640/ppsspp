@@ -115,7 +115,6 @@ public:
 
 protected:
 	bool UpdateUseHWTessellation(bool enable) override;
-	void DecimateTrackedVertexArrays() {}
 
 private:
 	void InitDeviceObjects();
@@ -124,7 +123,6 @@ private:
 	void DoFlush();
 	void ApplyDrawState(int prim);
 	void ApplyDrawStateLate(bool setStencil, int stencilValue);
-	void ResetFramebufferRead();
 
 	GLRInputLayout *SetupDecFmtForDraw(LinkedShader *program, const DecVtxFormat &decFmt);
 

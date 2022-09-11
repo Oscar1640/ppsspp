@@ -44,6 +44,7 @@
 #include "Common/System/System.h"
 #include "Common/StringUtils.h"
 #include "Common/GPU/Vulkan/VulkanLoader.h"
+#include "Common/VR/PPSSPPVR.h"
 #include "Core/Config.h"
 #include "Core/ConfigValues.h"
 #include "Core/Loaders.h"
@@ -331,7 +332,7 @@ struct ConfigSetting {
 			section->Get(ini5_, &ptr_.customButton->repeat, default_.customButton.repeat);
 			return true;
 		default:
-			_dbg_assert_msg_(false, "Unexpected ini setting type");
+			_dbg_assert_msg_(false, "Get(%s): Unexpected ini setting type: %d", iniKey_, (int)type_);
 			return false;
 		}
 	}
@@ -375,7 +376,7 @@ struct ConfigSetting {
 			section->Set(ini5_, ptr_.customButton->repeat);
 			return;
 		default:
-			_dbg_assert_msg_(false, "Unexpected ini setting type");
+			_dbg_assert_msg_(false, "Set(%s): Unexpected ini setting type: %d", iniKey_, (int)type_);
 			return;
 		}
 	}
@@ -406,22 +407,22 @@ struct ConfigSetting {
 			// Doesn't report.
 			return;
 		default:
-			_dbg_assert_msg_(false, "Unexpected ini setting type");
+			_dbg_assert_msg_(false, "Report(%s): Unexpected ini setting type: %d", iniKey_, (int)type_);
 			return;
 		}
 	}
 
-	const char *iniKey_;
-	const char *ini2_;
-	const char *ini3_;
-	const char *ini4_;
-	const char *ini5_;
+	const char *iniKey_ = nullptr;
+	const char *ini2_ = nullptr;
+	const char *ini3_ = nullptr;
+	const char *ini4_ = nullptr;
+	const char *ini5_ = nullptr;
 	Type type_;
 	bool report_;
 	bool save_;
 	bool perGame_;
 	SettingPtr ptr_;
-	DefaultValue default_;
+	DefaultValue default_{};
 	Callback cb_;
 
 	// We only support transform for ints.
@@ -701,9 +702,9 @@ const char * const vulkanDefaultBlacklist[] = {
 };
 
 static int DefaultGPUBackend() {
-#ifdef OPENXR
-	return (int)GPUBackend::OPENGL;
-#endif
+	if (IsVRBuild()) {
+		return (int)GPUBackend::OPENGL;
+	}
 
 #if PPSSPP_PLATFORM(WINDOWS)
 	// If no Vulkan, use Direct3D 11 on Windows 8+ (most importantly 10.)
@@ -754,7 +755,7 @@ int Config::NextValidBackend() {
 	if (failed.count((GPUBackend)iGPUBackend)) {
 		ERROR_LOG(LOADER, "Graphics backend failed for %d, trying another", iGPUBackend);
 
-#if (PPSSPP_PLATFORM(WINDOWS) || PPSSPP_PLATFORM(ANDROID)) && !PPSSPP_PLATFORM(UWP)
+#if !PPSSPP_PLATFORM(UWP)
 		if (!failed.count(GPUBackend::VULKAN) && VulkanMayBeAvailable()) {
 			return (int)GPUBackend::VULKAN;
 		}
@@ -802,6 +803,9 @@ bool Config::IsBackendEnabled(GPUBackend backend, bool validate) {
 
 #if PPSSPP_PLATFORM(UWP)
 	if (backend != GPUBackend::DIRECT3D11)
+		return false;
+#elif PPSSPP_PLATFORM(SWITCH)
+	if (backend != GPUBackend::OPENGL)
 		return false;
 #elif PPSSPP_PLATFORM(WINDOWS)
 	if (validate) {
@@ -939,7 +943,6 @@ static ConfigSetting graphicsSettings[] = {
 	ConfigSetting("ShaderChainRequires60FPS", &g_Config.bShaderChainRequires60FPS, false, true, true),
 
 	ReportedConfigSetting("MemBlockTransferGPU", &g_Config.bBlockTransferGPU, true, true, true),
-	ReportedConfigSetting("DisableSlowFramebufEffects", &g_Config.bDisableSlowFramebufEffects, false, true, true),
 	ReportedConfigSetting("FragmentTestCache", &g_Config.bFragmentTestCache, true, true, true),
 
 	ConfigSetting("GfxDebugOutput", &g_Config.bGfxDebugOutput, false, false, false),
@@ -1125,15 +1128,6 @@ static ConfigSetting networkSettings[] = {
 	ConfigSetting(false),
 };
 
-static int DefaultPSPModel() {
-	// TODO: Can probably default this on, but not sure about its memory differences.
-#if !PPSSPP_ARCH(AMD64) && !defined(_WIN32)
-	return PSP_MODEL_FAT;
-#else
-	return PSP_MODEL_SLIM;
-#endif
-}
-
 static int DefaultSystemParamLanguage() {
 	int defaultLang = PSP_SYSTEMPARAM_LANGUAGE_ENGLISH;
 	if (g_Config.bFirstRun) {
@@ -1147,7 +1141,7 @@ static int DefaultSystemParamLanguage() {
 }
 
 static ConfigSetting systemParamSettings[] = {
-	ReportedConfigSetting("PSPModel", &g_Config.iPSPModel, &DefaultPSPModel, true, true),
+	ReportedConfigSetting("PSPModel", &g_Config.iPSPModel, PSP_MODEL_SLIM, true, true),
 	ReportedConfigSetting("PSPFirmwareVersion", &g_Config.iFirmwareVersion, PSP_DEFAULT_FIRMWARE, true, true),
 	ConfigSetting("NickName", &g_Config.sNickName, "PPSSPP", true, true),
 	ConfigSetting("MacAddress", &g_Config.sMACAddress, "", true, true),
@@ -1183,6 +1177,9 @@ static ConfigSetting debuggerSettings[] = {
 	ConfigSetting("GEWindowY", &g_Config.iGEWindowY, -1),
 	ConfigSetting("GEWindowW", &g_Config.iGEWindowW, -1),
 	ConfigSetting("GEWindowH", &g_Config.iGEWindowH, -1),
+	ConfigSetting("GEWindowTabsBL", &g_Config.uGETabsLeft, (uint32_t)0),
+	ConfigSetting("GEWindowTabsBR", &g_Config.uGETabsRight, (uint32_t)0),
+	ConfigSetting("GEWindowTabsTR", &g_Config.uGETabsTopRight, (uint32_t)0),
 	ConfigSetting("ConsoleWindowX", &g_Config.iConsoleWindowX, -1),
 	ConfigSetting("ConsoleWindowY", &g_Config.iConsoleWindowY, -1),
 	ConfigSetting("FontWidth", &g_Config.iFontWidth, 8),
@@ -1220,6 +1217,18 @@ static ConfigSetting themeSettings[] = {
 	ConfigSetting(false),
 };
 
+
+static ConfigSetting vrSettings[] = {
+	ConfigSetting("VREnable", &g_Config.bEnableVR, true),
+	ConfigSetting("VREnable6DoF", &g_Config.bEnable6DoF, true),
+	ConfigSetting("VREnableStereo", &g_Config.bEnableStereo, false),
+	ConfigSetting("VRCanvasDistance", &g_Config.iCanvasDistance, 6),
+	ConfigSetting("VRFieldOfView", &g_Config.iFieldOfViewPercentage, 100),
+	ConfigSetting("VRStereoSeparation", &g_Config.iStereoSeparation, 10),
+
+	ConfigSetting(false),
+};
+
 static ConfigSectionSettings sections[] = {
 	{"General", generalSettings},
 	{"CPU", cpuSettings},
@@ -1232,6 +1241,7 @@ static ConfigSectionSettings sections[] = {
 	{"JIT", jitSettings},
 	{"Upgrade", upgradeSettings},
 	{"Theme", themeSettings},
+	{"VR", vrSettings},
 };
 
 static void IterateSettings(IniFile &iniFile, std::function<void(Section *section, ConfigSetting *setting)> func) {

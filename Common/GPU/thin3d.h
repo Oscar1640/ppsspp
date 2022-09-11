@@ -15,6 +15,7 @@
 
 #include "Common/GPU/DataFormat.h"
 #include "Common/GPU/Shader.h"
+#include "Common/Data/Collections/Slice.h"
 
 namespace Lin {
 class Matrix4x4;
@@ -238,13 +239,11 @@ enum class NativeObject {
 	BACKBUFFER_COLOR_TEX,
 	BACKBUFFER_DEPTH_TEX,
 	FEATURE_LEVEL,
-	COMPATIBLE_RENDERPASS,
-	BACKBUFFER_RENDERPASS,
-	FRAMEBUFFER_RENDERPASS,
 	INIT_COMMANDBUFFER,
 	BOUND_TEXTURE0_IMAGEVIEW,
 	BOUND_TEXTURE1_IMAGEVIEW,
 	RENDER_MANAGER,
+	TEXTURE_VIEW,
 	NULL_IMAGEVIEW,
 };
 
@@ -257,6 +256,11 @@ enum FBChannel {
 	FB_SURFACE_BIT = 32,  // Used in conjunction with the others in D3D9 to get surfaces through get_api_texture
 	FB_VIEW_BIT = 64,     // Used in conjunction with the others in D3D11 to get shader resource views through get_api_texture
 	FB_FORMAT_BIT = 128,  // Actually retrieves the native format instead. D3D11 only.
+};
+
+enum FBInvalidationStage {
+	FB_INVALIDATION_LOAD = 1,
+	FB_INVALIDATION_STORE = 2,
 };
 
 enum FBBlitFilter {
@@ -339,7 +343,9 @@ public:
 	RefCountedObject() {
 		refcount_ = 1;
 	}
-	virtual ~RefCountedObject() {}
+	RefCountedObject(const RefCountedObject &other) = delete;
+	RefCountedObject& operator=(RefCountedObject const&) = delete;
+	virtual ~RefCountedObject();
 
 	void AddRef() { refcount_++; }
 	bool Release();
@@ -490,7 +496,6 @@ struct SamplerStateDesc {
 	TextureAddressMode wrapU;
 	TextureAddressMode wrapV;
 	TextureAddressMode wrapW;
-	float maxLod;
 	bool shadowCompareEnabled;
 	Comparison shadowCompareFunc;
 	BorderColor borderColor;
@@ -509,6 +514,7 @@ struct PipelineDesc {
 	BlendState *blend;
 	RasterState *raster;
 	const UniformBufferDesc *uniformDesc;
+	const Slice<SamplerDef> samplers;
 };
 
 struct DeviceCaps {
@@ -536,6 +542,10 @@ struct DeviceCaps {
 	bool framebufferStencilBlitSupported;
 	bool framebufferFetchSupported;
 	bool texture3DSupported;
+	bool fragmentShaderInt32Supported;
+	bool textureNPOTFullySupported;
+	bool fragmentShaderDepthWriteSupported;
+	bool textureDepthSupported;
 
 	std::string deviceName;  // The device name to use when creating the thin3d context, to get the same one.
 };
@@ -560,9 +570,9 @@ struct TextureDesc {
 };
 
 enum class RPAction {
-	DONT_CARE,
-	CLEAR,
-	KEEP,
+	KEEP = 0,
+	CLEAR = 1,
+	DONT_CARE = 2,
 };
 
 struct RenderPassInfo {
@@ -599,12 +609,15 @@ public:
 	virtual void SetErrorCallback(ErrorCallbackFn callback, void *userdata) {}
 
 	// Partial pipeline state, used to create pipelines. (in practice, in d3d11 they'll use the native state objects directly).
+	// TODO: Possibly ditch these and just put the descs directly in PipelineDesc since only D3D11 benefits.
 	virtual DepthStencilState *CreateDepthStencilState(const DepthStencilStateDesc &desc) = 0;
 	virtual BlendState *CreateBlendState(const BlendStateDesc &desc) = 0;
 	virtual SamplerState *CreateSamplerState(const SamplerStateDesc &desc) = 0;
 	virtual RasterState *CreateRasterState(const RasterStateDesc &desc) = 0;
 	// virtual ComputePipeline CreateComputePipeline(const ComputePipelineDesc &desc) = 0
 	virtual InputLayout *CreateInputLayout(const InputLayoutDesc &desc) = 0;
+	virtual ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const char *tag = "thin3d") = 0;
+	virtual Pipeline *CreateGraphicsPipeline(const PipelineDesc &desc, const char *tag) = 0;
 
 	// Note that these DO NOT AddRef so you must not ->Release presets unless you manually AddRef them.
 	ShaderModule *GetVshaderPreset(VertexShaderPreset preset) { return vsPresets_[preset]; }
@@ -616,9 +629,6 @@ public:
 	virtual Texture *CreateTexture(const TextureDesc &desc) = 0;
 	// On some hardware, you might get a 24-bit depth buffer even though you only wanted a 16-bit one.
 	virtual Framebuffer *CreateFramebuffer(const FramebufferDesc &desc) = 0;
-
-	virtual ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const std::string &tag = "thin3d") = 0;
-	virtual Pipeline *CreateGraphicsPipeline(const PipelineDesc &desc) = 0;
 
 	// Copies data from the CPU over into the buffer, at a specific offset. This does not change the size of the buffer and cannot write outside it.
 	virtual void UpdateBuffer(Buffer *buffer, const uint8_t *data, size_t offset, size_t size, UpdateBufferFlags flags) = 0;
@@ -640,15 +650,18 @@ public:
 	// binding must be < MAX_TEXTURE_SLOTS (0, 1 are okay if it's 2).
 	virtual void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int attachment) = 0;
 
-	// deprecated
+	// deprecated, only used by D3D9
 	virtual uintptr_t GetFramebufferAPITexture(Framebuffer *fbo, int channelBits, int attachment) {
 		return 0;
 	}
 
 	virtual void GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) = 0;
 
-	// Useful in OpenGL ES to give hints about framebuffers on tiler GPUs.
-	virtual void InvalidateFramebuffer(Framebuffer *fbo) {}
+	// Could be useful in OpenGL ES to give hints about framebuffers on tiler GPUs
+	// using glInvalidateFramebuffer, although drivers are known to botch that so we currently don't use it.
+	// In Vulkan, this sets the LOAD_OP or the STORE_OP (depending on stage) of the current render pass instance to DONT_CARE.
+	// channels is a bitwise combination of FBChannel::COLOR, DEPTH and STENCIL.
+	virtual void InvalidateFramebuffer(FBInvalidationStage stage, uint32_t channels) {}
 
 	// Dynamic state
 	virtual void SetScissorRect(int left, int top, int width, int height) = 0;
@@ -697,7 +710,7 @@ public:
 	}
 
 	virtual std::string GetInfoString(InfoField info) const = 0;
-	virtual uint64_t GetNativeObject(NativeObject obj) = 0;
+	virtual uint64_t GetNativeObject(NativeObject obj, void *srcObject = nullptr) = 0;  // Most uses don't need an srcObject.
 
 	virtual void HandleEvent(Event ev, int width, int height, void *param1 = nullptr, void *param2 = nullptr) = 0;
 

@@ -58,7 +58,6 @@ struct CompatFlags {
 	bool RequireBufferedRendering;
 	bool RequireBlockTransfer;
 	bool RequireDefaultCPUClock;
-	bool DisableReadbacks;
 	bool HackFixVideo;
 	bool HackFixHangs;
 	bool HackLatchedFramebuffer;
@@ -88,7 +87,6 @@ struct CompatFlags {
 	bool ReportSmallMemstick;
 	bool MemstickFixedFree;
 	bool DateLimited;
-	bool ReinterpretFramebuffers;
 	bool ShaderColorBitmask;
 	bool DisableFirstFrameReadback;
 	bool DisableRangeCulling;
@@ -99,6 +97,11 @@ struct CompatFlags {
 	bool MaliDepthStencilBugWorkaround;
 	bool ZZT3SelectHack;
 	bool AllowLargeFBTextureOffsets;
+	bool AtracLoopHack;
+	bool DeswizzleDepth;
+	bool SplitFramebufferMargin;
+	bool ForceLowerResolutionForEffectsOn;
+	bool AllowDownloadCLUT;
 };
 
 class IniFile;

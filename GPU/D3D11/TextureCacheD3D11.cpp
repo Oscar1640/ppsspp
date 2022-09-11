@@ -27,10 +27,11 @@
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"
 #include "GPU/Common/GPUStateUtils.h"
+#include "GPU/Common/DrawEngineCommon.h"
 #include "GPU/D3D11/TextureCacheD3D11.h"
 #include "GPU/D3D11/FramebufferManagerD3D11.h"
 #include "GPU/D3D11/ShaderManagerD3D11.h"
-#include "GPU/D3D11/DepalettizeShaderD3D11.h"
+#include "GPU/Common/TextureShaderCommon.h"
 #include "GPU/D3D11/D3D11Util.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
 #include "GPU/Common/TextureDecoder.h"
@@ -58,7 +59,15 @@ static const D3D11_INPUT_ELEMENT_DESC g_QuadVertexElements[] = {
 
 Draw::DataFormat FromD3D11Format(u32 fmt) {
 	switch (fmt) {
-	case DXGI_FORMAT_B8G8R8A8_UNORM: default: return Draw::DataFormat::R8G8B8A8_UNORM;
+	case DXGI_FORMAT_B4G4R4A4_UNORM:
+		return Draw::DataFormat::A4R4G4B4_UNORM_PACK16;
+	case DXGI_FORMAT_B5G5R5A1_UNORM:
+		return Draw::DataFormat::A1R5G5B5_UNORM_PACK16;
+	case DXGI_FORMAT_B5G6R5_UNORM:
+		return Draw::DataFormat::R5G6B5_UNORM_PACK16;
+	case DXGI_FORMAT_B8G8R8A8_UNORM:
+	default:
+		return Draw::DataFormat::R8G8B8A8_UNORM;
 	}
 }
 
@@ -126,8 +135,8 @@ ID3D11SamplerState *SamplerCacheD3D11::GetOrCreateSampler(ID3D11Device *device, 
 	return sampler;
 }
 
-TextureCacheD3D11::TextureCacheD3D11(Draw::DrawContext *draw)
-	: TextureCacheCommon(draw) {
+TextureCacheD3D11::TextureCacheD3D11(Draw::DrawContext *draw, Draw2D *draw2D)
+	: TextureCacheCommon(draw, draw2D) {
 	device_ = (ID3D11Device *)draw->GetNativeObject(Draw::NativeObject::DEVICE);
 	context_ = (ID3D11DeviceContext *)draw->GetNativeObject(Draw::NativeObject::CONTEXT);
 
@@ -171,8 +180,8 @@ void TextureCacheD3D11::ReleaseTexture(TexCacheEntry *entry, bool delete_them) {
 void TextureCacheD3D11::ForgetLastTexture() {
 	InvalidateLastTexture();
 
-	ID3D11ShaderResourceView *nullTex[2]{};
-	context_->PSSetShaderResources(0, 2, nullTex);
+	ID3D11ShaderResourceView *nullTex[4]{};
+	context_->PSSetShaderResources(0, 4, nullTex);
 }
 
 void TextureCacheD3D11::InvalidateLastTexture() {
@@ -180,6 +189,8 @@ void TextureCacheD3D11::InvalidateLastTexture() {
 }
 
 void TextureCacheD3D11::StartFrame() {
+	TextureCacheCommon::StartFrame();
+
 	InvalidateLastTexture();
 	timesInvalidatedAllThisFrame_ = 0;
 	replacementTimeThisFrame_ = 0.0;
@@ -233,6 +244,11 @@ void TextureCacheD3D11::UpdateCurrentClut(GEPaletteFormat clutFormat, u32 clutBa
 }
 
 void TextureCacheD3D11::BindTexture(TexCacheEntry *entry) {
+	if (!entry) {
+		ID3D11ShaderResourceView *textureView = nullptr;
+		context_->PSSetShaderResources(0, 1, &textureView);
+		return;
+	}
 	ID3D11ShaderResourceView *textureView = DxView(entry);
 	if (textureView != lastBoundTexture) {
 		context_->PSSetShaderResources(0, 1, &textureView);
@@ -242,6 +258,12 @@ void TextureCacheD3D11::BindTexture(TexCacheEntry *entry) {
 	SamplerCacheKey samplerKey = GetSamplingParams(maxLevel, entry);
 	ID3D11SamplerState *state = samplerCache_.GetOrCreateSampler(device_, samplerKey);
 	context_->PSSetSamplers(0, 1, &state);
+	gstate_c.SetUseShaderDepal(ShaderDepalMode::OFF);
+}
+
+void TextureCacheD3D11::ApplySamplingParams(const SamplerCacheKey &key) {
+	ID3D11SamplerState *state = samplerCache_.GetOrCreateSampler(device_, key);
+	context_->PSSetSamplers(0, 1, &state);
 }
 
 void TextureCacheD3D11::Unbind() {
@@ -250,201 +272,10 @@ void TextureCacheD3D11::Unbind() {
 	InvalidateLastTexture();
 }
 
-class TextureShaderApplierD3D11 {
-public:
-	struct Pos {
-		Pos(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {
-		}
-		Pos() {
-		}
-
-		float x;
-		float y;
-		float z;
-	};
-	struct UV {
-		UV(float u_, float v_) : u(u_), v(v_) {
-		}
-		UV() {
-		}
-
-		float u;
-		float v;
-	};
-
-	struct PosUV {
-		Pos pos;
-		UV uv;
-	};
-
-	TextureShaderApplierD3D11(ID3D11DeviceContext *context, ID3D11PixelShader *pshader, ID3D11Buffer *dynamicBuffer, float bufferW, float bufferH, int renderW, int renderH, float xoff, float yoff)
-		: context_(context), pshader_(pshader), vbuffer_(dynamicBuffer), bufferW_(bufferW), bufferH_(bufferH), renderW_(renderW), renderH_(renderH) {
-		static const Pos pos[4] = {
-			{ -1,  1, 0 },
-			{ 1,  1, 0 },
-			{ -1, -1, 0 },
-			{ 1, -1, 0 },
-		};
-		static const UV uv[4] = {
-			{ 0, 0 },
-			{ 1, 0 },
-			{ 0, 1 },
-			{ 1, 1 },
-		};
-
-		for (int i = 0; i < 4; ++i) {
-			verts_[i].pos = pos[i];
-			verts_[i].pos.x += xoff;
-			verts_[i].pos.y += yoff;
-			verts_[i].uv = uv[i];
-		}
-	}
-
-	void ApplyBounds(const KnownVertexBounds &bounds, u32 uoff, u32 voff, float xoff, float yoff) {
-		// If min is not < max, then we don't have values (wasn't set during decode.)
-		if (bounds.minV < bounds.maxV) {
-			const float invWidth = 1.0f / bufferW_;
-			const float invHeight = 1.0f / bufferH_;
-			// Inverse of half = double.
-			const float invHalfWidth = invWidth * 2.0f;
-			const float invHalfHeight = invHeight * 2.0f;
-
-			const int u1 = bounds.minU + uoff;
-			const int v1 = bounds.minV + voff;
-			const int u2 = bounds.maxU + uoff;
-			const int v2 = bounds.maxV + voff;
-
-			const float left = u1 * invHalfWidth - 1.0f + xoff;
-			const float right = u2 * invHalfWidth - 1.0f + xoff;
-			const float top = (bufferH_ - v1) * invHalfHeight - 1.0f + yoff;
-			const float bottom = (bufferH_ - v2) * invHalfHeight - 1.0f + yoff;
-
-			float z = 0.0f;
-			verts_[0].pos = Pos(left, top, z);
-			verts_[1].pos = Pos(right, top, z);
-			verts_[2].pos = Pos(left, bottom, z);
-			verts_[3].pos = Pos(right, bottom, z);
-
-			// And also the UVs, same order.
-			const float uvleft = u1 * invWidth;
-			const float uvright = u2 * invWidth;
-			const float uvtop = v1 * invHeight;
-			const float uvbottom = v2 * invHeight;
-
-			verts_[0].uv = UV(uvleft, uvtop);
-			verts_[1].uv = UV(uvright, uvtop);
-			verts_[2].uv = UV(uvleft, uvbottom);
-			verts_[3].uv = UV(uvright, uvbottom);
-
-			// We need to reapply the texture next time since we cropped UV.
-			gstate_c.Dirty(DIRTY_TEXTURE_PARAMS);
-		}
-
-		D3D11_MAPPED_SUBRESOURCE map;
-		context_->Map(vbuffer_, 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
-		memcpy(map.pData, &verts_[0], 4 * 5 * sizeof(float));
-		context_->Unmap(vbuffer_, 0);
-	}
-
-	void Use(ID3D11VertexShader *vshader, ID3D11InputLayout *decl) {
-		context_->PSSetShader(pshader_, 0, 0);
-		context_->VSSetShader(vshader, 0, 0);
-		context_->IASetInputLayout(decl);
-	}
-
-	void Shade() {
-		D3D11_VIEWPORT vp{ 0.0f, 0.0f, (float)renderW_, (float)renderH_, 0.0f, 1.0f };
-		context_->OMSetBlendState(stockD3D11.blendStateDisabledWithColorMask[0xF], nullptr, 0xFFFFFFFF);
-		context_->OMSetDepthStencilState(stockD3D11.depthStencilDisabled, 0xFF);
-		context_->RSSetState(stockD3D11.rasterStateNoCull);
-		context_->RSSetViewports(1, &vp);
-		context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-		context_->IASetVertexBuffers(0, 1, &vbuffer_, &stride_, &offset_);
-		context_->Draw(4, 0);
-		gstate_c.Dirty(DIRTY_BLEND_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE);
-	}
-
-protected:
-	ID3D11DeviceContext *context_;
-	ID3D11PixelShader *pshader_;
-	ID3D11Buffer *vbuffer_;
-	PosUV verts_[4];
-	UINT stride_ = sizeof(PosUV);
-	UINT offset_ = 0;
-	float bufferW_;
-	float bufferH_;
-	int renderW_;
-	int renderH_;
-};
-
-void TextureCacheD3D11::ApplyTextureFramebuffer(VirtualFramebuffer *framebuffer, GETextureFormat texFormat, FramebufferNotificationChannel channel) {
-	ID3D11PixelShader *pshader = nullptr;
-	uint32_t clutMode = gstate.clutformat & 0xFFFFFF;
-	bool need_depalettize = IsClutFormat(texFormat);
-	bool depth = channel == NOTIFY_FB_DEPTH;
-	if (need_depalettize && !g_Config.bDisableSlowFramebufEffects) {
-		pshader = depalShaderCache_->GetDepalettizePixelShader(clutMode, depth ? GE_FORMAT_DEPTH16 : framebuffer->drawnFormat);
-	}
-
-	if (pshader) {
-		bool expand32 = !gstate_c.Supports(GPU_SUPPORTS_16BIT_FORMATS);
-		const GEPaletteFormat clutFormat = gstate.getClutPaletteFormat();
-		ID3D11ShaderResourceView *clutTexture = depalShaderCache_->GetClutTexture(clutFormat, clutHash_, clutBuf_, expand32);
-
-		Draw::Framebuffer *depalFBO = framebufferManagerD3D11_->GetTempFBO(TempFBO::DEPAL, framebuffer->renderWidth, framebuffer->renderHeight);
-		shaderManager_->DirtyLastShader();
-
-		// Not sure why or if we need this here - we're not about to actually draw using draw_, just use its framebuffer binds.
-		draw_->InvalidateCachedState();
-
-		float xoff = -0.5f / framebuffer->renderWidth;
-		float yoff = 0.5f / framebuffer->renderHeight;
-
-		TextureShaderApplierD3D11 shaderApply(context_, pshader, framebufferManagerD3D11_->GetDynamicQuadBuffer(), framebuffer->bufferWidth, framebuffer->bufferHeight, framebuffer->renderWidth, framebuffer->renderHeight, xoff, yoff);
-		shaderApply.ApplyBounds(gstate_c.vertBounds, gstate_c.curTextureXOffset, gstate_c.curTextureYOffset, xoff, yoff);
-		shaderApply.Use(depalShaderCache_->GetDepalettizeVertexShader(), depalShaderCache_->GetInputLayout());
-
-		ID3D11ShaderResourceView *nullTexture = nullptr;
-		context_->PSSetShaderResources(0, 1, &nullTexture);  // In case the target was used in the last draw call. Happens in Sega Rally.
-		draw_->BindFramebufferAsRenderTarget(depalFBO, { Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE }, "ApplyTextureFramebuffer_DepalShader");
-		context_->PSSetShaderResources(3, 1, &clutTexture);
-		context_->PSSetSamplers(3, 1, &stockD3D11.samplerPoint2DWrap);
-		draw_->BindFramebufferAsTexture(framebuffer->fbo, 0, depth ? Draw::FB_DEPTH_BIT : Draw::FB_COLOR_BIT, 0);
-		context_->PSSetSamplers(0, 1, &stockD3D11.samplerPoint2DWrap);
-
-		if (depth) {
-			DepthScaleFactors scaleFactors = GetDepthScaleFactors();
-			DepthPushConstants push;
-			push.z_scale = scaleFactors.scale;
-			push.z_offset = scaleFactors.offset;
-			D3D11_MAPPED_SUBRESOURCE map;
-			context_->Map(depalConstants_, 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
-			memcpy(map.pData, &push, sizeof(push));
-			context_->Unmap(depalConstants_, 0);
-			context_->PSSetConstantBuffers(0, 1, &depalConstants_);
-		}
-		shaderApply.Shade();
-
-		context_->PSSetShaderResources(0, 1, &nullTexture);  // Make D3D11 validation happy. Really of no consequence since we rebind anyway.
-		framebufferManager_->RebindFramebuffer("RebindFramebuffer - ApplyTextureFramebuffer");
-		draw_->BindFramebufferAsTexture(depalFBO, 0, Draw::FB_COLOR_BIT, 0);
-
-		const u32 bytesPerColor = clutFormat == GE_CMODE_32BIT_ABGR8888 ? sizeof(u32) : sizeof(u16);
-		const u32 clutTotalColors = clutMaxBytes_ / bytesPerColor;
-
-		CheckAlphaResult alphaStatus = CheckAlpha(clutBuf_, GetClutDestFormatD3D11(clutFormat), clutTotalColors);
-		gstate_c.SetTextureFullAlpha(alphaStatus == CHECKALPHA_FULL);
-	} else {
-		gstate_c.SetTextureFullAlpha(gstate.getTextureFormat() == GE_TFMT_5650);
-		framebufferManager_->RebindFramebuffer("RebindFramebuffer - ApplyTextureFramebuffer");
-		framebufferManager_->BindFramebufferAsColorTexture(0, framebuffer, BINDFBCOLOR_MAY_COPY_WITH_UV | BINDFBCOLOR_APPLY_TEX_OFFSET);
-	}
-
-	SamplerCacheKey samplerKey = GetFramebufferSamplingParams(framebuffer->bufferWidth, framebuffer->bufferHeight);
-	ID3D11SamplerState *state = samplerCache_.GetOrCreateSampler(device_, samplerKey);
-	context_->PSSetSamplers(0, 1, &state);
-
-	gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_RASTER_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_BLEND_STATE | DIRTY_FRAGMENTSHADER_STATE);
+void TextureCacheD3D11::BindAsClutTexture(Draw::Texture *tex, bool smooth) {
+	ID3D11ShaderResourceView *clutTexture = (ID3D11ShaderResourceView *)draw_->GetNativeObject(Draw::NativeObject::TEXTURE_VIEW, tex);
+	context_->PSSetShaderResources(TEX_SLOT_CLUT, 1, &clutTexture);
+	context_->PSSetSamplers(3, 1, smooth ? &stockD3D11.samplerLinear2DClamp : &stockD3D11.samplerPoint2DClamp);
 }
 
 void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
@@ -454,26 +285,31 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 		return;
 	}
 
-	int tw = plan.w;
-	int th = plan.h;
-
 	DXGI_FORMAT dstFmt = GetDestFormat(GETextureFormat(entry->format), gstate.getClutPaletteFormat());
-	if (plan.replaced->GetSize(plan.baseLevelSrc, tw, th)) {
+	if (plan.replaceValid) {
 		dstFmt = ToDXGIFormat(plan.replaced->Format(plan.baseLevelSrc));
-	} else if (plan.scaleFactor > 1) {
-		tw *= plan.scaleFactor;
-		th *= plan.scaleFactor;
+	} else if (plan.scaleFactor > 1 || plan.saveTexture) {
 		dstFmt = DXGI_FORMAT_B8G8R8A8_UNORM;
 	}
 
-	// We don't yet have mip generation, so clamp the number of levels to the ones we can load directly.
-	int levels;;
+	int levels;
 
 	ID3D11ShaderResourceView *view;
 	ID3D11Resource *texture = DxTex(entry);
 	_assert_(texture == nullptr);
 
+	int tw;
+	int th;
+	plan.GetMipSize(0, &tw, &th);
+	if (tw > 16384)
+		tw = 16384;
+	if (th > 16384)
+		th = 16384;
+
 	if (plan.depth == 1) {
+		// We don't yet have mip generation, so clamp the number of levels to the ones we can load directly.
+		levels = std::min(plan.levelsToCreate, plan.levelsToLoad);
+
 		ID3D11Texture2D *tex;
 		D3D11_TEXTURE2D_DESC desc{};
 		desc.CPUAccessFlags = 0;
@@ -483,13 +319,11 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 		desc.Width = tw;
 		desc.Height = th;
 		desc.Format = dstFmt;
-		desc.MipLevels = plan.levelsToCreate;
+		desc.MipLevels = levels;
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
 		ASSERT_SUCCESS(device_->CreateTexture2D(&desc, nullptr, &tex));
 		texture = tex;
-
-		levels = std::min(plan.levelsToCreate, plan.levelsToLoad);
 	} else {
 		ID3D11Texture3D *tex;
 		D3D11_TEXTURE3D_DESC desc{};
@@ -516,45 +350,43 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 	for (int i = 0; i < levels; i++) {
 		int srcLevel = (i == 0) ? plan.baseLevelSrc : i;
 
-		int w = gstate.getTextureWidth(srcLevel);
-		int h = gstate.getTextureHeight(srcLevel);
+		int mipWidth;
+		int mipHeight;
+		plan.GetMipSize(i, &mipWidth, &mipHeight);
 
 		u8 *data = nullptr;
 		int stride = 0;
+		int bpp = 0;
 
 		// For UpdateSubresource, we can't decode directly into the texture so we allocate a buffer :(
 		// NOTE: Could reuse it between levels or textures!
-		if (plan.replaced->GetSize(srcLevel, w, h)) {
-			int bpp = (int)Draw::DataFormatSizeInBytes(plan.replaced->Format(srcLevel));
-			stride = w * bpp;
-			data = (u8 *)AllocateAlignedMemory(stride * h, 16);
+		if (plan.replaceValid) {
+			bpp = (int)Draw::DataFormatSizeInBytes(plan.replaced->Format(srcLevel));
 		} else {
 			if (plan.scaleFactor > 1) {
-				data = (u8 *)AllocateAlignedMemory(4 * (w * plan.scaleFactor) * (h * plan.scaleFactor), 16);
-				stride = w * plan.scaleFactor * 4;
+				bpp = 4;
 			} else {
-				int bpp = dstFmt == DXGI_FORMAT_B8G8R8A8_UNORM ? 4 : 2;
-
-				stride = std::max(w * bpp, 16);
-				data = (u8 *)AllocateAlignedMemory(stride * h, 16);
+				bpp = dstFmt == DXGI_FORMAT_B8G8R8A8_UNORM ? 4 : 2;
 			}
 		}
 
+		stride = std::max(mipWidth * bpp, 16);
+		data = (u8 *)AllocateAlignedMemory(stride * mipHeight, 16);
+
 		if (!data) {
-			ERROR_LOG(G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%dx%d)", w, h);
+			ERROR_LOG(G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%dx%d)", mipWidth, mipHeight);
 			return;
 		}
 
 		LoadTextureLevel(*entry, data, stride, *plan.replaced, srcLevel, plan.scaleFactor, texFmt, false);
-
 		if (plan.depth == 1) {
 			context_->UpdateSubresource(texture, i, nullptr, data, stride, 0);
 		} else {
 			D3D11_BOX box{};
 			box.front = i;
 			box.back = i + 1;
-			box.right = w * plan.scaleFactor;
-			box.bottom = h * plan.scaleFactor;
+			box.right = mipWidth;
+			box.bottom = mipHeight;
 			context_->UpdateSubresource(texture, 0, &box, data, stride, 0);
 		}
 		FreeAlignedMemory(data);
@@ -571,7 +403,7 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 		entry->status &= ~TexCacheEntry::STATUS_NO_MIPS;
 	}
 
-	if (plan.replaced->Valid()) {
+	if (plan.replaceValid) {
 		entry->SetAlphaStatus(TexCacheEntry::TexStatus(plan.replaced->AlphaStatus()));
 	}
 }
@@ -643,6 +475,8 @@ bool TextureCacheD3D11::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level
 			gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_BLEND_STATE | DIRTY_DEPTHSTENCIL_STATE);
 			// We may have blitted to a temp FBO.
 			framebufferManager_->RebindFramebuffer("RebindFramebuffer - GetCurrentTextureDebug");
+			if (!retval)
+				ERROR_LOG(G3D, "Failed to get debug texture: copy to memory failed");
 			return retval;
 		} else {
 			return false;

@@ -66,10 +66,15 @@ bool DataFormatIsDepthStencil(DataFormat fmt) {
 	}
 }
 
+RefCountedObject::~RefCountedObject() {
+	_dbg_assert_(refcount_ == 0xDEDEDE);
+}
 
 bool RefCountedObject::Release() {
 	if (refcount_ > 0 && refcount_ < 10000) {
 		if (--refcount_ == 0) {
+			// Make it very obvious if we try to free this again.
+			refcount_ = 0xDEDEDE;
 			delete this;
 			return true;
 		}
@@ -612,6 +617,48 @@ void ConvertToD32F(uint8_t *dst, const uint8_t *src, uint32_t dstStride, uint32_
 			}
 			src32 += srcStride;
 			dst32 += dstStride;
+		}
+	} else {
+		assert(false);
+	}
+}
+
+// TODO: This is missing the conversion to the quarter-range we use if depth clamp is not available.
+// That conversion doesn't necessarily belong here in thin3d, though.
+void ConvertToD16(uint8_t *dst, const uint8_t *src, uint32_t dstStride, uint32_t srcStride, uint32_t width, uint32_t height, DataFormat format) {
+	if (format == Draw::DataFormat::D32F) {
+		const float *src32 = (const float *)src;
+		uint16_t *dst16 = (uint16_t *)dst;
+		if (src == dst) {
+			return;
+		} else {
+			for (uint32_t y = 0; y < height; ++y) {
+				for (uint32_t x = 0; x < width; ++x) {
+					dst16[x] = (uint16_t)(src32[x] * 65535.0f);
+				}
+				src32 += srcStride;
+				dst16 += dstStride;
+			}
+		}
+	} else if (format == Draw::DataFormat::D16) {
+		_assert_(src != dst);
+		const uint16_t *src16 = (const uint16_t *)src;
+		uint16_t *dst16 = (uint16_t *)dst;
+		for (uint32_t y = 0; y < height; ++y) {
+			memcpy(dst16, src16, width * 2);
+			src16 += srcStride;
+			dst16 += dstStride;
+		}
+	} else if (format == Draw::DataFormat::D24_S8) {
+		_assert_(src != dst);
+		const uint32_t *src32 = (const uint32_t *)src;
+		uint16_t *dst16 = (uint16_t *)dst;
+		for (uint32_t y = 0; y < height; ++y) {
+			for (uint32_t x = 0; x < width; ++x) {
+				dst16[x] = (src32[x] & 0x00FFFFFF) >> 8;
+			}
+			src32 += srcStride;
+			dst16 += dstStride;
 		}
 	} else {
 		assert(false);

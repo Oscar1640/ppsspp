@@ -234,6 +234,7 @@ bool DrawEngineCommon::TestBoundingBox(const void* control_points, int vertexCou
 	float worldviewproj[16];
 	ConvertMatrix4x3To4x4(world, gstate.worldMatrix);
 	ConvertMatrix4x3To4x4(view, gstate.viewMatrix);
+	// TODO: Create a Matrix4x3ByMatrix4x3, and Matrix4x4ByMatrix4x3?
 	Matrix4ByMatrix4(worldview, world, view);
 	Matrix4ByMatrix4(worldviewproj, worldview, gstate.projMatrix);
 	PlanesFromMatrix(worldviewproj, planes);
@@ -266,7 +267,7 @@ bool DrawEngineCommon::GetCurrentSimpleVertices(int count, std::vector<GPUDebugV
 	u16 indexLowerBound = 0;
 	u16 indexUpperBound = count - 1;
 
-	if (!Memory::IsValidAddress(gstate_c.vertexAddr))
+	if (!Memory::IsValidAddress(gstate_c.vertexAddr) || count == 0)
 		return false;
 
 	bool savedVertexFullAlpha = gstate_c.vertexFullAlpha;
@@ -486,8 +487,10 @@ u32 DrawEngineCommon::NormalizeVertices(u8 *outPtr, u8 *bufPtr, const u8 *inPtr,
 void DrawEngineCommon::ApplyFramebufferRead(bool *fboTexNeedsBind) {
 	if (gstate_c.Supports(GPU_SUPPORTS_ANY_FRAMEBUFFER_FETCH)) {
 		*fboTexNeedsBind = false;
+	} else {
+		gpuStats.numCopiesForShaderBlend++;
+		*fboTexNeedsBind = true;
 	}
-	*fboTexNeedsBind = true;
 
 	gstate_c.Dirty(DIRTY_SHADERBLEND);
 }
@@ -699,12 +702,11 @@ void DrawEngineCommon::SubmitPrim(const void *verts, const void *inds, GEPrimiti
 	DeferredDrawCall &dc = drawCalls[numDrawCalls];
 	dc.verts = verts;
 	dc.inds = inds;
+	dc.vertexCount = vertexCount;
 	dc.indexType = (vertTypeID & GE_VTYPE_IDX_MASK) >> GE_VTYPE_IDX_SHIFT;
 	dc.prim = prim;
-	dc.vertexCount = vertexCount;
-	dc.uvScale = gstate_c.uv;
 	dc.cullMode = cullMode;
-
+	dc.uvScale = gstate_c.uv;
 	if (inds) {
 		GetIndexBounds(inds, vertexCount, vertTypeID, &dc.indexLowerBound, &dc.indexUpperBound);
 	} else {

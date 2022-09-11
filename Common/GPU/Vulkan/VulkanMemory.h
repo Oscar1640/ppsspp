@@ -101,6 +101,10 @@ public:
 		return offset_;
 	}
 
+	const char *Name() const {
+		return name_;
+	}
+
 	// "Zero-copy" variant - you can write the data directly as you compute it.
 	// Recommended.
 	void *Push(size_t size, uint32_t *bindOffset, VkBuffer *vkbuf) {
@@ -139,8 +143,7 @@ private:
 // Only appropriate for use in a per-frame pool.
 class VulkanDescSetPool {
 public:
-	VulkanDescSetPool(const char *tag, bool grow) : tag_(tag), grow_(grow) {
-	}
+	VulkanDescSetPool(const char *tag, bool grow) : tag_(tag), grow_(grow) {}
 	~VulkanDescSetPool();
 
 	// Must call this before use: defines how to clear cache of ANY returned values from Allocate().

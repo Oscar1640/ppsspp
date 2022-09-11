@@ -36,7 +36,6 @@
 #include "GPU/ge_constants.h"
 #include "GPU/GeDisasm.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
-#include "GPU/Debugger/Debugger.h"
 #include "GPU/GLES/ShaderManagerGLES.h"
 #include "GPU/GLES/GPU_GLES.h"
 #include "GPU/GLES/FramebufferManagerGLES.h"
@@ -53,16 +52,14 @@
 #endif
 
 GPU_GLES::GPU_GLES(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
-	: GPUCommon(gfxCtx, draw), depalShaderCache_(draw), drawEngine_(draw), fragmentTestCache_(draw) {
+	: GPUCommon(gfxCtx, draw), drawEngine_(draw), fragmentTestCache_(draw) {
 	UpdateVsyncInterval(true);
 	CheckGPUFeatures();
 
-	GLRenderManager *render = (GLRenderManager *)draw->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
-
 	shaderManagerGL_ = new ShaderManagerGLES(draw);
-	framebufferManagerGL_ = new FramebufferManagerGLES(draw, render);
+	framebufferManagerGL_ = new FramebufferManagerGLES(draw);
 	framebufferManager_ = framebufferManagerGL_;
-	textureCacheGL_ = new TextureCacheGLES(draw);
+	textureCacheGL_ = new TextureCacheGLES(draw, framebufferManager_->GetDraw2D());
 	textureCache_ = textureCacheGL_;
 	drawEngineCommon_ = &drawEngine_;
 	shaderManager_ = shaderManagerGL_;
@@ -77,9 +74,7 @@ GPU_GLES::GPU_GLES(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	framebufferManagerGL_->SetShaderManager(shaderManagerGL_);
 	framebufferManagerGL_->SetDrawEngine(&drawEngine_);
 	framebufferManagerGL_->Init();
-	depalShaderCache_.Init();
 	textureCacheGL_->SetFramebufferManager(framebufferManagerGL_);
-	textureCacheGL_->SetDepalShaderCache(&depalShaderCache_);
 	textureCacheGL_->SetShaderManager(shaderManagerGL_);
 	textureCacheGL_->SetDrawEngine(&drawEngine_);
 	fragmentTestCache_.SetTextureCache(textureCacheGL_);
@@ -98,7 +93,7 @@ GPU_GLES::GPU_GLES(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	// Update again after init to be sure of any silly driver problems.
 	UpdateVsyncInterval(true);
 
-	textureCacheGL_->NotifyConfigChanged();
+	textureCache_->NotifyConfigChanged();
 
 	// Load shader cache.
 	std::string discID = g_paramSFO.GetDiscID();
@@ -142,7 +137,6 @@ GPU_GLES::~GPU_GLES() {
 
 	framebufferManagerGL_->DestroyAllFBOs();
 	shaderManagerGL_->ClearCache(true);
-	depalShaderCache_.Clear();
 	fragmentTestCache_.Clear();
 	
 	delete shaderManagerGL_;
@@ -152,35 +146,22 @@ GPU_GLES::~GPU_GLES() {
 }
 
 // Take the raw GL extension and versioning data and turn into feature flags.
+// TODO: This should use DrawContext::GetDeviceCaps() more and more, and eventually
+// this can be shared between all the backends.
 void GPU_GLES::CheckGPUFeatures() {
 	u32 features = 0;
 
 	features |= GPU_SUPPORTS_16BIT_FORMATS;
 
-	if (gl_extensions.ARB_blend_func_extended || gl_extensions.EXT_blend_func_extended) {
+	if (draw_->GetDeviceCaps().dualSourceBlend) {
 		if (!g_Config.bVendorBugChecksEnabled || !draw_->GetBugs().Has(Draw::Bugs::DUAL_SOURCE_BLENDING_BROKEN)) {
 			features |= GPU_SUPPORTS_DUALSOURCE_BLEND;
 		}
 	}
 
-	if (gl_extensions.IsGLES) {
-		if (gl_extensions.GLES3) {
-			features |= GPU_SUPPORTS_GLSL_ES_300;
-			// Mali reports 30 but works fine...
-			if (gl_extensions.range[1][5][1] >= 30) {
-				features |= GPU_SUPPORTS_32BIT_INT_FSHADER;
-			}
-		}
-	} else {
-		if (gl_extensions.VersionGEThan(3, 3, 0)) {
-			features |= GPU_SUPPORTS_GLSL_330;
-			features |= GPU_SUPPORTS_32BIT_INT_FSHADER;
-		}
-	}
-
 	if (gl_extensions.EXT_shader_framebuffer_fetch || gl_extensions.ARM_shader_framebuffer_fetch) {
 		// This has caused problems in the past.  Let's only enable on GLES3.
-		if (features & GPU_SUPPORTS_GLSL_ES_300) {
+		if (gl_extensions.GLES3) {
 			features |= GPU_SUPPORTS_ANY_FRAMEBUFFER_FETCH;
 		}
 	}
@@ -188,19 +169,19 @@ void GPU_GLES::CheckGPUFeatures() {
 	if ((gl_extensions.gpuVendor == GPU_VENDOR_NVIDIA) || (gl_extensions.gpuVendor == GPU_VENDOR_AMD))
 		features |= GPU_PREFER_REVERSE_COLOR_ORDER;
 
-	if (gl_extensions.OES_texture_npot)
+	if (draw_->GetDeviceCaps().textureNPOTFullySupported)
 		features |= GPU_SUPPORTS_TEXTURE_NPOT;
 
 	if (gl_extensions.EXT_blend_minmax)
 		features |= GPU_SUPPORTS_BLEND_MINMAX;
 
-	if (!gl_extensions.IsGLES)
+	if (draw_->GetDeviceCaps().logicOpSupported)
 		features |= GPU_SUPPORTS_LOGIC_OP;
 
 	if (gl_extensions.GLES3 || !gl_extensions.IsGLES)
 		features |= GPU_SUPPORTS_TEXTURE_LOD_CONTROL;
 
-	if (gl_extensions.EXT_texture_filter_anisotropic)
+	if (draw_->GetDeviceCaps().anisoSupported)
 		features |= GPU_SUPPORTS_ANISOTROPY;
 
 	bool canUseInstanceID = gl_extensions.EXT_draw_instanced || gl_extensions.ARB_draw_instanced;
@@ -220,9 +201,9 @@ void GPU_GLES::CheckGPUFeatures() {
 		features |= GPU_SUPPORTS_DEPTH_CLAMP | GPU_SUPPORTS_ACCURATE_DEPTH;
 		// Our implementation of depth texturing needs simple Z range, so can't
 		// use the extension hacks (yet).
-		if (gl_extensions.GLES3)
-			features |= GPU_SUPPORTS_DEPTH_TEXTURE;
 	}
+	if (draw_->GetDeviceCaps().textureDepthSupported)
+		features |= GPU_SUPPORTS_DEPTH_TEXTURE;
 	if (draw_->GetDeviceCaps().clipDistanceSupported)
 		features |= GPU_SUPPORTS_CLIP_DISTANCE;
 	if (draw_->GetDeviceCaps().cullDistanceSupported)
@@ -312,7 +293,6 @@ void GPU_GLES::DeviceLost() {
 	shaderManagerGL_->DeviceLost();
 	textureCacheGL_->DeviceLost();
 	fragmentTestCache_.DeviceLost();
-	depalShaderCache_.DeviceLost();
 	drawEngine_.DeviceLost();
 
 	GPUCommon::DeviceLost();
@@ -328,12 +308,10 @@ void GPU_GLES::DeviceRestore() {
 	textureCacheGL_->DeviceRestore(draw_);
 	drawEngine_.DeviceRestore(draw_);
 	fragmentTestCache_.DeviceRestore(draw_);
-	depalShaderCache_.DeviceRestore(draw_);
 }
 
 void GPU_GLES::Reinitialize() {
 	GPUCommon::Reinitialize();
-	depalShaderCache_.Clear();
 }
 
 void GPU_GLES::InitClear() {
@@ -347,7 +325,7 @@ void GPU_GLES::BeginHostFrame() {
 		framebufferManager_->Resized();
 		drawEngine_.Resized();
 		shaderManagerGL_->DirtyShader();
-		textureCacheGL_->NotifyConfigChanged();
+		textureCache_->NotifyConfigChanged();
 		resized_ = false;
 	}
 
@@ -364,7 +342,6 @@ void GPU_GLES::ReapplyGfxState() {
 
 void GPU_GLES::BeginFrame() {
 	textureCacheGL_->StartFrame();
-	depalShaderCache_.Decimate();
 	fragmentTestCache_.Decimate();
 
 	GPUCommon::BeginFrame();
@@ -382,11 +359,6 @@ void GPU_GLES::BeginFrame() {
 	framebufferManagerGL_->BeginFrame();
 }
 
-void GPU_GLES::SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) {
-	GPUDebug::NotifyDisplay(framebuf, stride, format);
-	framebufferManagerGL_->SetDisplayFramebuffer(framebuf, stride, format);
-}
-
 void GPU_GLES::CopyDisplayToOutput(bool reallyDirty) {
 	// Flush anything left over.
 	framebufferManagerGL_->RebindFramebuffer("RebindFramebuffer - CopyDisplayToOutput");
@@ -395,7 +367,6 @@ void GPU_GLES::CopyDisplayToOutput(bool reallyDirty) {
 	shaderManagerGL_->DirtyLastShader();
 
 	framebufferManagerGL_->CopyDisplayToOutput(reallyDirty);
-	framebufferManagerGL_->EndFrame();
 }
 
 void GPU_GLES::FinishDeferred() {
@@ -465,7 +436,6 @@ void GPU_GLES::DoState(PointerWrap &p) {
 	// In Freeze-Frame mode, we don't want to do any of this.
 	if (p.mode == p.MODE_READ && !PSP_CoreParameter().frozen) {
 		textureCache_->Clear(true);
-		depalShaderCache_.Clear();
 		drawEngine_.ClearTrackedVertexArrays();
 
 		gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
@@ -477,8 +447,8 @@ std::vector<std::string> GPU_GLES::DebugGetShaderIDs(DebugShaderType type) {
 	switch (type) {
 	case SHADER_TYPE_VERTEXLOADER:
 		return drawEngine_.DebugGetVertexLoaderIDs();
-	case SHADER_TYPE_DEPAL:
-		return depalShaderCache_.DebugGetShaderIDs(type);
+	case SHADER_TYPE_TEXTURE:
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderIDs(type);
 	default:
 		return shaderManagerGL_->DebugGetShaderIDs(type);
 	}
@@ -488,8 +458,8 @@ std::string GPU_GLES::DebugGetShaderString(std::string id, DebugShaderType type,
 	switch (type) {
 	case SHADER_TYPE_VERTEXLOADER:
 		return drawEngine_.DebugGetVertexLoaderString(id, stringType);
-	case SHADER_TYPE_DEPAL:
-		return depalShaderCache_.DebugGetShaderString(id, type, stringType);
+	case SHADER_TYPE_TEXTURE:
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderString(id, type, stringType);
 	default:
 		return shaderManagerGL_->DebugGetShaderString(id, type, stringType);
 	}

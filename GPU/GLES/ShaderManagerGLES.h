@@ -52,6 +52,7 @@ public:
 	int u_stencilReplaceValue;
 	int u_tex;
 	int u_proj;
+	int u_proj_lens;
 	int u_proj_through;
 	int u_texenv;
 	int u_view;
@@ -62,6 +63,8 @@ public:
 	int u_cullRangeMax;
 	int u_rotation;
 	int u_mipBias;
+	int u_scaleX;
+	int u_scaleY;
 
 #ifdef USE_BONE_ARRAY
 	int u_bone;  // array, size is numBones
@@ -157,7 +160,7 @@ public:
 	// This is the old ApplyShader split into two parts, because of annoying information dependencies.
 	// If you call ApplyVertexShader, you MUST call ApplyFragmentShader soon afterwards.
 	Shader *ApplyVertexShader(bool useHWTransform, bool useHWTessellation, u32 vertType, bool weightsAsFloat, VShaderID *VSID);
-	LinkedShader *ApplyFragmentShader(VShaderID VSID, Shader *vs, u32 vertType, bool useBufferedRendering);
+	LinkedShader *ApplyFragmentShader(VShaderID VSID, Shader *vs, const ComputedPipelineState &pipelineState, u32 vertType, bool useBufferedRendering);
 
 	void DeviceLost();
 	void DeviceRestore(Draw::DrawContext *draw);

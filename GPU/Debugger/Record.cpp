@@ -29,6 +29,7 @@
 #include "Common/Thread/ParallelLoop.h"
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
+#include "Common/System/System.h"
 
 #include "Core/Core.h"
 #include "Core/ELF/ParamSFO.h"
@@ -49,6 +50,7 @@ namespace GPURecord {
 static bool active = false;
 static bool nextFrame = false;
 static int flipLastAction = -1;
+static int flipFinishAt = -1;
 static std::function<void(const Path &)> writeCallback;
 
 static std::vector<u8> pushbuf;
@@ -108,7 +110,7 @@ static void DirtyAllVRAM(DirtyVRAMFlag flag) {
 
 static void DirtyVRAM(u32 start, u32 sz, DirtyVRAMFlag flag) {
 	u32 count = (sz + DIRTY_VRAM_ROUND) >> DIRTY_VRAM_SHIFT;
-	u32 first = (start >> 10) & DIRTY_VRAM_MASK;
+	u32 first = (start >> DIRTY_VRAM_SHIFT) & DIRTY_VRAM_MASK;
 	if (first + count > DIRTY_VRAM_SIZE) {
 		DirtyAllVRAM(flag);
 		return;
@@ -144,6 +146,7 @@ static void BeginRecording() {
 	lastTextures.clear();
 	lastRenderTargets.clear();
 	flipLastAction = gpuStats.numFlips;
+	flipFinishAt = -1;
 
 	u32 ptr = (u32)pushbuf.size();
 	u32 sz = 512 * 4;
@@ -329,10 +332,15 @@ static void EmitTextureData(int level, u32 texaddr) {
 
 		bool isDirtyVRAM = false;
 		bool isDrawnVRAM = false;
+		uint32_t start = (texaddr >> DIRTY_VRAM_SHIFT) & DIRTY_VRAM_MASK;
 		for (uint32_t i = 0; i < (sizeInRAM + DIRTY_VRAM_ROUND) >> DIRTY_VRAM_SHIFT; ++i) {
-			DirtyVRAMFlag flag = dirtyVRAM[(texaddr >> DIRTY_VRAM_SHIFT) + i];
+			DirtyVRAMFlag flag = dirtyVRAM[start + i];
 			isDirtyVRAM = isDirtyVRAM || flag != DirtyVRAMFlag::CLEAN;
 			isDrawnVRAM = isDrawnVRAM || flag == DirtyVRAMFlag::DRAWN;
+
+			// Mark the VRAM clean now that it's been copied to VRAM.
+			if (flag == DirtyVRAMFlag::DIRTY)
+				dirtyVRAM[start + i] = DirtyVRAMFlag::CLEAN;
 		}
 
 		// The isTarget flag is mostly used for replay of dumps on a PSP.
@@ -448,7 +456,9 @@ static void EmitTransfer(u32 op) {
 
 static void EmitClut(u32 op) {
 	u32 addr = gstate.getClutAddress();
-	u32 bytes = (op & 0x3F) * 32;
+	// Actually should only be 0x3F, but we allow enhanced CLUTs.  See #15727.
+	u32 blocks = (op & 0x7F) == 0x40 ? 0x40 : (op & 0x3F);
+	u32 bytes = blocks * 32;
 	bytes = Memory::ValidSize(addr, bytes);
 
 	if (bytes != 0) {
@@ -486,6 +496,7 @@ bool Activate() {
 	if (!nextFrame) {
 		nextFrame = true;
 		flipLastAction = gpuStats.numFlips;
+		flipFinishAt = -1;
 		return true;
 	}
 	return false;
@@ -504,6 +515,7 @@ static void FinishRecording() {
 	NOTICE_LOG(SYSTEM, "Recording finished");
 	active = false;
 	flipLastAction = gpuStats.numFlips;
+	flipFinishAt = -1;
 
 	if (writeCallback)
 		writeCallback(filename);
@@ -665,10 +677,10 @@ void NotifyDisplay(u32 framebuf, int stride, int fmt) {
 	}
 }
 
-void NotifyFrame() {
+void NotifyBeginFrame() {
 	const bool noDisplayAction = flipLastAction + 4 < gpuStats.numFlips;
-	// We do this only to catch things that don't call NotifyFrame.
-	if (active && HasDrawCommands() && noDisplayAction) {
+	// We do this only to catch things that don't call NotifyDisplay.
+	if (active && HasDrawCommands() && (noDisplayAction || gpuStats.numFlips == flipFinishAt)) {
 		NOTICE_LOG(SYSTEM, "Recording complete on frame");
 
 		struct DisplayBufData {
@@ -692,6 +704,8 @@ void NotifyFrame() {
 	if (nextFrame && (gstate_c.skipDrawReason & SKIPDRAW_SKIPFRAME) == 0 && noDisplayAction) {
 		NOTICE_LOG(SYSTEM, "Recording starting on frame...");
 		BeginRecording();
+		// If we began on a BeginFrame, end on a BeginFrame.
+		flipFinishAt = gpuStats.numFlips + 1;
 	}
 }
 

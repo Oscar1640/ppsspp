@@ -182,9 +182,10 @@ public:
 		return stats_;
 	}
 
-	void SetDepalTexture(VkImageView depal) {
+	void SetDepalTexture(VkImageView depal, bool smooth) {
 		if (boundDepal_ != depal) {
 			boundDepal_ = depal;
+			boundDepalSmoothed_ = smooth;
 			gstate_c.Dirty(DIRTY_FRAGMENTSHADER_STATE);
 		}
 	}
@@ -194,7 +195,6 @@ private:
 	void ApplyDrawStateLate(VulkanRenderManager *renderManager, bool applyStencilRef, uint8_t stencilRef, bool useBlendConstant);
 	void ConvertStateToVulkanKey(FramebufferManagerVulkan &fbManager, ShaderManagerVulkan *shaderManager, int prim, VulkanPipelineRasterStateKey &key, VulkanDynamicState &dynState);
 	void BindShaderBlendTex();
-	void ResetFramebufferRead();
 
 	void InitDeviceObjects();
 	void DestroyDeviceObjects();
@@ -217,8 +217,11 @@ private:
 
 	// Secondary texture for shader blending
 	VkImageView boundSecondary_ = VK_NULL_HANDLE;
+	// CLUT texture for shader depal
 	VkImageView boundDepal_ = VK_NULL_HANDLE;
-	VkSampler samplerSecondary_ = VK_NULL_HANDLE;  // This one is actually never used since we use fetch.
+	bool boundDepalSmoothed_ = false;
+	VkSampler samplerSecondaryLinear_ = VK_NULL_HANDLE;
+	VkSampler samplerSecondaryNearest_ = VK_NULL_HANDLE;
 
 	PrehashMap<VertexArrayInfoVulkan *, nullptr> vai_;
 	VulkanPushBuffer *vertexCache_;
@@ -278,6 +281,7 @@ private:
 	VulkanDynamicState dynState_{};
 
 	int tessOffset_ = 0;
+	bool fboTexNeedsBind_ = false;
 
 	// Hardware tessellation
 	TessellationDataTransferVulkan *tessDataTransferVulkan;

@@ -14,6 +14,7 @@
 #include "GPU/Common/VertexShaderGenerator.h"
 #include "GPU/Common/ReinterpretFramebuffer.h"
 #include "GPU/Common/StencilCommon.h"
+#include "GPU/Common/DepalettizeShaderCommon.h"
 
 #if PPSSPP_PLATFORM(WINDOWS)
 #include "GPU/D3D11/D3D11Util.h"
@@ -29,27 +30,27 @@ bool GenerateFShader(FShaderID id, char *buffer, ShaderLanguage lang, Draw::Bugs
 	case ShaderLanguage::GLSL_VULKAN:
 	{
 		ShaderLanguageDesc compat(ShaderLanguage::GLSL_VULKAN);
-		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, errorString);
+		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, nullptr, errorString);
 	}
 	case ShaderLanguage::GLSL_1xx:
 	{
 		ShaderLanguageDesc compat(ShaderLanguage::GLSL_1xx);
-		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, errorString);
+		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, nullptr, errorString);
 	}
 	case ShaderLanguage::GLSL_3xx:
 	{
 		ShaderLanguageDesc compat(ShaderLanguage::GLSL_1xx);
-		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, errorString);
+		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, nullptr, errorString);
 	}
 	case ShaderLanguage::HLSL_D3D9:
 	{
 		ShaderLanguageDesc compat(ShaderLanguage::HLSL_D3D9);
-		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, errorString);
+		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, nullptr, errorString);
 	}
 	case ShaderLanguage::HLSL_D3D11:
 	{
 		ShaderLanguageDesc compat(ShaderLanguage::HLSL_D3D11);
-		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, errorString);
+		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, nullptr, errorString);
 	}
 	default:
 		return false;
@@ -101,7 +102,7 @@ bool TestCompileShader(const char *buffer, ShaderLanguage lang, ShaderStage stag
 	}
 	case ShaderLanguage::HLSL_D3D9:
 	{
-		LPD3DBLOB blob = CompileShaderToByteCodeD3D9(buffer, stage == ShaderStage::Vertex ? "vs_2_0" : "ps_2_0", errorMessage);
+		LPD3DBLOB blob = CompileShaderToByteCodeD3D9(buffer, stage == ShaderStage::Vertex ? "vs_3_0" : "ps_3_0", errorMessage);
 		if (blob) {
 			blob->Release();
 			return true;
@@ -180,43 +181,24 @@ bool TestReinterpretShaders() {
 	bool failed = false;
 
 	for (int k = 0; k < ARRAY_SIZE(languages); k++) {
-		ShaderLanguageDesc desc(languages[k]);
-		if (!GenerateReinterpretVertexShader(buffer, desc)) {
-			printf("Failed!\n%s\n", buffer);
-			failed = true;
-		} else {
-			std::string errorMessage;
-			if (!TestCompileShader(buffer, languages[k], ShaderStage::Vertex, &errorMessage)) {
-				printf("Error compiling fragment shader:\n\n%s\n\n%s\n", LineNumberString(buffer).c_str(), errorMessage.c_str());
-				failed = true;
-				return false;
-			} else {
-				//printf("===\n%s\n===\n", buffer);
-			}
-		}
-	}
-
-	for (int k = 0; k < ARRAY_SIZE(languages); k++) {
 		printf("=== %s ===\n\n", ShaderLanguageToString(languages[k]));
 
 		ShaderLanguageDesc desc(languages[k]);
+
 		std::string errorMessage;
 
 		for (int i = 0; i < 3; i++) {
 			for (int j = 0; j < 3; j++) {
 				if (i == j)
 					continue;  // useless shader!
-				if (!GenerateReinterpretFragmentShader(buffer, fmts[i], fmts[j], desc)) {
-					printf("Failed!\n%s\n", buffer);
+				ShaderWriter writer(buffer, desc, ShaderStage::Fragment, nullptr, 0);
+				GenerateReinterpretFragmentShader(writer, fmts[i], fmts[j]);
+				if (!TestCompileShader(buffer, languages[k], ShaderStage::Fragment, &errorMessage)) {
+					printf("Error compiling fragment shader %d:\n\n%s\n\n%s\n", (int)j, LineNumberString(buffer).c_str(), errorMessage.c_str());
 					failed = true;
+					return false;
 				} else {
-					if (!TestCompileShader(buffer, languages[k], ShaderStage::Fragment, &errorMessage)) {
-						printf("Error compiling fragment shader %d:\n\n%s\n\n%s\n", (int)j, LineNumberString(buffer).c_str(), errorMessage.c_str());
-						failed = true;
-						return false;
-					} else {
-						printf("===\n%s\n===\n", buffer);
-					}
+					printf("===\n%s\n===\n", buffer);
 				}
 			}
 		}
@@ -261,6 +243,55 @@ bool TestStencilShaders() {
 		GenerateStencilVs(buffer, desc);
 		if (!TestCompileShader(buffer, languages[k], ShaderStage::Vertex, &errorMessage)) {
 			printf("Error compiling stencil shader:\n\n%s\n\n%s\n", LineNumberString(buffer).c_str(), errorMessage.c_str());
+			failed = true;
+			return false;
+		} else {
+			printf("===\n%s\n===\n", buffer);
+		}
+	}
+
+	delete[] buffer;
+	return !failed;
+}
+
+bool TestDepalShaders() {
+	Draw::Bugs bugs;
+
+	ShaderLanguage languages[] = {
+#if PPSSPP_PLATFORM(WINDOWS)
+		ShaderLanguage::HLSL_D3D9,
+		ShaderLanguage::HLSL_D3D11,
+#endif
+		ShaderLanguage::GLSL_VULKAN,
+		ShaderLanguage::GLSL_3xx,
+		ShaderLanguage::GLSL_1xx,
+	};
+
+	char *buffer = new char[65536];
+
+	bool failed = false;
+
+	for (int k = 0; k < ARRAY_SIZE(languages); k++) {
+		printf("=== %s ===\n\n", ShaderLanguageToString(languages[k]));
+
+		ShaderLanguageDesc desc(languages[k]);
+		std::string errorMessage;
+
+		// TODO: Try some different configurations of the fragment shader.
+		// But first just try one.
+		DepalConfig config{};
+		config.clutFormat = GE_CMODE_16BIT_ABGR4444;
+		config.shift = 8;
+		config.startPos = 64;
+		config.mask = 0xFF;
+		config.bufferFormat = GE_FORMAT_8888;
+		config.textureFormat = GE_TFMT_CLUT32;
+		config.depthUpperBits = 0;
+
+		ShaderWriter writer(buffer, desc, ShaderStage::Fragment);
+		GenerateDepalFs(writer, config);
+		if (!TestCompileShader(buffer, languages[k], ShaderStage::Fragment, &errorMessage)) {
+			printf("Error compiling depal shader:\n\n%s\n\n%s\n", LineNumberString(buffer).c_str(), errorMessage.c_str());
 			failed = true;
 			return false;
 		} else {
@@ -371,7 +402,6 @@ bool TestFragmentShaders() {
 
 		// bits we don't need to test because they are irrelevant on d3d11
 		id.SetBit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL, false);
-		id.SetBit(FS_BIT_SHADER_DEPAL, false);
 
 		// DX9 disabling:
 		if (static_cast<ReplaceAlphaType>(id.Bits(FS_BIT_STENCIL_TO_ALPHA, 2)) == ReplaceAlphaType::REPLACE_ALPHA_DUALSOURCE)
@@ -424,6 +454,10 @@ bool TestShaderGenerators() {
 	}
 
 	if (!TestReinterpretShaders()) {
+		return false;
+	}
+
+	if (!TestDepalShaders()) {
 		return false;
 	}
 

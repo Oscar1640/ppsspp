@@ -12,6 +12,7 @@
 #include <thread>
 #include <queue>
 
+#include "Common/Thread/Promise.h"
 #include "Common/System/Display.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/Data/Convert/SmallDataConvert.h"
@@ -42,19 +43,26 @@ void CreateImage(VulkanContext *vulkan, VkCommandBuffer cmd, VKRImage &img, int 
 
 class VKRFramebuffer {
 public:
-	VKRFramebuffer(VulkanContext *vk, VkCommandBuffer initCmd, VkRenderPass renderPass, int _width, int _height, const char *tag);
+	VKRFramebuffer(VulkanContext *vk, VkCommandBuffer initCmd, VKRRenderPass *compatibleRenderPass, int _width, int _height, const char *tag);
 	~VKRFramebuffer();
 
-	int numShadows = 1;  // TODO: Support this.
+	VkFramebuffer Get(VKRRenderPass *compatibleRenderPass, RenderPassType rpType);
 
-	VkFramebuffer framebuf = VK_NULL_HANDLE;
-	VKRImage color{};
-	VKRImage depth{};
 	int width = 0;
 	int height = 0;
+	VKRImage color{};
+	VKRImage depth{};
 
+	const char *Tag() const {
+		return tag_.c_str();
+	}
+
+	// TODO: Hide.
 	VulkanContext *vulkan_;
-	std::string tag;
+private:
+	VkFramebuffer framebuf[RP_TYPE_COUNT]{};
+
+	std::string tag_;
 };
 
 enum class VKRRunType {
@@ -123,13 +131,22 @@ struct VKRGraphicsPipelineDesc {
 	VkPipelineDynamicStateCreateInfo ds{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
 	VkPipelineRasterizationStateCreateInfo rs{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
 	VkPipelineMultisampleStateCreateInfo ms{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-	VkPipelineShaderStageCreateInfo shaderStageInfo[2]{};
+
+	// Replaced the ShaderStageInfo with promises here so we can wait for compiles to finish.
+	Promise<VkShaderModule> *vertexShader = nullptr;
+	Promise<VkShaderModule> *fragmentShader = nullptr;
+
 	VkPipelineInputAssemblyStateCreateInfo inputAssembly{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
 	VkVertexInputAttributeDescription attrs[8]{};
 	VkVertexInputBindingDescription ibd{};
 	VkPipelineVertexInputStateCreateInfo vis{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 	VkPipelineViewportStateCreateInfo views{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
-	VkGraphicsPipelineCreateInfo pipe{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+
+	VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+
+	// Does not include the render pass type, it's passed in separately since the
+	// desc is persistent.
+	RPKey rpKey{};
 };
 
 // All the data needed to create a compute pipeline.
@@ -138,18 +155,18 @@ struct VKRComputePipelineDesc {
 	VkComputePipelineCreateInfo pipe{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
 };
 
-// Wrapped pipeline, which will later allow for background compilation while emulating the rest of the frame.
+// Wrapped pipeline. Doesn't own desc.
 struct VKRGraphicsPipeline {
-	VKRGraphicsPipeline() {
-		pipeline = VK_NULL_HANDLE;
-	}
-	VKRGraphicsPipelineDesc *desc = nullptr;  // While non-zero, is pending and pipeline isn't valid.
-	std::atomic<VkPipeline> pipeline;
+	bool Create(VulkanContext *vulkan, VkRenderPass compatibleRenderPass, RenderPassType rpType);
 
-	bool Create(VulkanContext *vulkan);
-	bool Pending() const {
-		return pipeline == VK_NULL_HANDLE && desc != nullptr;
-	}
+	// This deletes the whole VKRGraphicsPipeline, you must remove your last pointer to it when doing this.
+	void QueueForDeletion(VulkanContext *vulkan);
+
+	u32 GetVariantsBitmask() const;
+
+	VKRGraphicsPipelineDesc *desc = nullptr;  // not owned!
+	Promise<VkPipeline> *pipeline[RP_TYPE_COUNT]{};
+	std::string tag;
 };
 
 struct VKRComputePipeline {
@@ -157,7 +174,7 @@ struct VKRComputePipeline {
 		pipeline = VK_NULL_HANDLE;
 	}
 	VKRComputePipelineDesc *desc = nullptr;
-	std::atomic<VkPipeline> pipeline;
+	Promise<VkPipeline> *pipeline;
 
 	bool Create(VulkanContext *vulkan);
 	bool Pending() const {
@@ -166,13 +183,16 @@ struct VKRComputePipeline {
 };
 
 struct CompileQueueEntry {
-	CompileQueueEntry(VKRGraphicsPipeline *p) : type(Type::GRAPHICS), graphics(p) {}
-	CompileQueueEntry(VKRComputePipeline *p) : type(Type::COMPUTE), compute(p) {}
+	CompileQueueEntry(VKRGraphicsPipeline *p, VkRenderPass _compatibleRenderPass, RenderPassType _renderPassType)
+		: type(Type::GRAPHICS), graphics(p), compatibleRenderPass(_compatibleRenderPass), renderPassType(_renderPassType) {}
+	CompileQueueEntry(VKRComputePipeline *p) : type(Type::COMPUTE), compute(p), renderPassType(RP_TYPE_COLOR_DEPTH) {}
 	enum class Type {
 		GRAPHICS,
 		COMPUTE,
 	};
 	Type type;
+	VkRenderPass compatibleRenderPass;
+	RenderPassType renderPassType;
 	VKRGraphicsPipeline *graphics = nullptr;
 	VKRComputePipeline *compute = nullptr;
 };
@@ -224,49 +244,35 @@ public:
 
 	// Deferred creation, like in GL. Unlike GL though, the purpose is to allow background creation and avoiding
 	// stalling the emulation thread as much as possible.
-	VKRGraphicsPipeline *CreateGraphicsPipeline(VKRGraphicsPipelineDesc *desc) {
-		VKRGraphicsPipeline *pipeline = new VKRGraphicsPipeline();
-		pipeline->desc = desc;
+	// We delay creating pipelines until the end of the current render pass, so we can create the right type immediately.
+	// Unless a variantBitmask is passed in, in which case we can just go ahead.
+	// WARNING: desc must stick around during the lifetime of the pipeline! It's not enough to build it on the stack and drop it.
+	VKRGraphicsPipeline *CreateGraphicsPipeline(VKRGraphicsPipelineDesc *desc, uint32_t variantBitmask, const char *tag);
+	VKRComputePipeline *CreateComputePipeline(VKRComputePipelineDesc *desc);
+
+	void NudgeCompilerThread() {
 		compileMutex_.lock();
-		compileQueue_.push_back(CompileQueueEntry(pipeline));
 		compileCond_.notify_one();
 		compileMutex_.unlock();
-		return pipeline;
 	}
 
-	VKRComputePipeline *CreateComputePipeline(VKRComputePipelineDesc *desc) {
-		VKRComputePipeline *pipeline = new VKRComputePipeline();
-		pipeline->desc = desc;
-		compileMutex_.lock();
-		compileQueue_.push_back(CompileQueueEntry(pipeline));
-		compileCond_.notify_one();
-		compileMutex_.unlock();
-		return pipeline;
-	}
-
-	void BindPipeline(VkPipeline pipeline, PipelineFlags flags) {
-		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
-		_dbg_assert_(pipeline != VK_NULL_HANDLE);
-		VkRenderData data{ VKRRenderCommand::BIND_PIPELINE };
-		data.pipeline.pipeline = pipeline;
-		curPipelineFlags_ |= flags;
-		curRenderStep_->commands.push_back(data);
-	}
-
-	void BindPipeline(VKRGraphicsPipeline *pipeline, PipelineFlags flags) {
+	void BindPipeline(VKRGraphicsPipeline *pipeline, PipelineFlags flags, VkPipelineLayout pipelineLayout) {
 		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
 		_dbg_assert_(pipeline != nullptr);
 		VkRenderData data{ VKRRenderCommand::BIND_GRAPHICS_PIPELINE };
+		pipelinesToCheck_.push_back(pipeline);
 		data.graphics_pipeline.pipeline = pipeline;
+		data.graphics_pipeline.pipelineLayout = pipelineLayout;
 		curPipelineFlags_ |= flags;
 		curRenderStep_->commands.push_back(data);
 	}
 
-	void BindPipeline(VKRComputePipeline *pipeline, PipelineFlags flags) {
+	void BindPipeline(VKRComputePipeline *pipeline, PipelineFlags flags, VkPipelineLayout pipelineLayout) {
 		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
 		_dbg_assert_(pipeline != nullptr);
 		VkRenderData data{ VKRRenderCommand::BIND_COMPUTE_PIPELINE };
 		data.compute_pipeline.pipeline = pipeline;
+		data.compute_pipeline.pipelineLayout = pipelineLayout;
 		curPipelineFlags_ |= flags;
 		curRenderStep_->commands.push_back(data);
 	}
@@ -353,7 +359,6 @@ public:
 		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
 		_dbg_assert_(size + offset < 40);
 		VkRenderData data{ VKRRenderCommand::PUSH_CONSTANTS };
-		data.push.pipelineLayout = pipelineLayout;
 		data.push.stages = stages;
 		data.push.offset = offset;
 		data.push.size = size;
@@ -363,12 +368,36 @@ public:
 
 	void Clear(uint32_t clearColor, float clearZ, int clearStencil, int clearMask);
 
-	void Draw(VkPipelineLayout layout, VkDescriptorSet descSet, int numUboOffsets, const uint32_t *uboOffsets, VkBuffer vbuffer, int voffset, int count, int offset = 0) {
+	// Cheaply set that we don't care about the contents of a surface at the start of the current render pass.
+	// This set the corresponding load-op of the current render pass to DONT_CARE.
+	// Useful when we don't know at bind-time whether we will overwrite the surface or not.
+	void SetLoadDontCare(VkImageAspectFlags aspects) {
+		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
+		if (aspects & VK_IMAGE_ASPECT_COLOR_BIT)
+			curRenderStep_->render.colorLoad = VKRRenderPassLoadAction::DONT_CARE;
+		if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+			curRenderStep_->render.depthLoad = VKRRenderPassLoadAction::DONT_CARE;
+		if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+			curRenderStep_->render.stencilLoad = VKRRenderPassLoadAction::DONT_CARE;
+	}
+
+	// Cheaply set that we don't care about the contents of a surface at the end of the current render pass.
+	// This set the corresponding store-op of the current render pass to DONT_CARE.
+	void SetStoreDontCare(VkImageAspectFlags aspects) {
+		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
+		if (aspects & VK_IMAGE_ASPECT_COLOR_BIT)
+			curRenderStep_->render.colorStore = VKRRenderPassStoreAction::DONT_CARE;
+		if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+			curRenderStep_->render.depthStore = VKRRenderPassStoreAction::DONT_CARE;
+		if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+			curRenderStep_->render.stencilStore = VKRRenderPassStoreAction::DONT_CARE;
+	}
+
+	void Draw(VkDescriptorSet descSet, int numUboOffsets, const uint32_t *uboOffsets, VkBuffer vbuffer, int voffset, int count, int offset = 0) {
 		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER && curStepHasViewport_ && curStepHasScissor_);
 		VkRenderData data{ VKRRenderCommand::DRAW };
 		data.draw.count = count;
 		data.draw.offset = offset;
-		data.draw.pipelineLayout = layout;
 		data.draw.ds = descSet;
 		data.draw.vbuffer = vbuffer;
 		data.draw.voffset = voffset;
@@ -380,12 +409,11 @@ public:
 		curRenderStep_->render.numDraws++;
 	}
 
-	void DrawIndexed(VkPipelineLayout layout, VkDescriptorSet descSet, int numUboOffsets, const uint32_t *uboOffsets, VkBuffer vbuffer, int voffset, VkBuffer ibuffer, int ioffset, int count, int numInstances, VkIndexType indexType) {
+	void DrawIndexed(VkDescriptorSet descSet, int numUboOffsets, const uint32_t *uboOffsets, VkBuffer vbuffer, int voffset, VkBuffer ibuffer, int ioffset, int count, int numInstances, VkIndexType indexType) {
 		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER && curStepHasViewport_ && curStepHasScissor_);
 		VkRenderData data{ VKRRenderCommand::DRAW_INDEXED };
 		data.drawIndexed.count = count;
 		data.drawIndexed.instances = numInstances;
-		data.drawIndexed.pipelineLayout = layout;
 		data.drawIndexed.ds = descSet;
 		data.drawIndexed.vbuffer = vbuffer;
 		data.drawIndexed.voffset = voffset;
@@ -401,20 +429,6 @@ public:
 	}
 
 	VkCommandBuffer GetInitCmd();
-
-	VkRenderPass GetBackbufferRenderPass() {
-		return queueRunner_.GetBackbufferRenderPass();
-	}
-	VkRenderPass GetFramebufferRenderPass() {
-		return queueRunner_.GetFramebufferRenderPass();
-	}
-	VkRenderPass GetCompatibleRenderPass() {
-		if (curRenderStep_ && curRenderStep_->render.framebuffer != nullptr) {
-			return queueRunner_.GetFramebufferRenderPass();
-		} else {
-			return queueRunner_.GetBackbufferRenderPass();
-		}
-	}
 
 	// Gets a frame-unique ID of the current step being recorded. Can be used to figure out
 	// when the current step has changed, which means the caller will need to re-record its state.
@@ -551,6 +565,9 @@ private:
 	std::condition_variable compileCond_;
 	std::mutex compileMutex_;
 	std::vector<CompileQueueEntry> compileQueue_;
+
+	// pipelines to check and possibly create at the end of the current render pass.
+	std::vector<VKRGraphicsPipeline *> pipelinesToCheck_;
 
 	// Swap chain management
 	struct SwapchainImageData {

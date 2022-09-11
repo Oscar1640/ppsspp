@@ -37,7 +37,6 @@
 #include "GPU/ge_constants.h"
 #include "GPU/GeDisasm.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
-#include "GPU/Debugger/Debugger.h"
 #include "GPU/Vulkan/ShaderManagerVulkan.h"
 #include "GPU/Vulkan/GPU_Vulkan.h"
 #include "GPU/Vulkan/FramebufferManagerVulkan.h"
@@ -52,10 +51,7 @@
 #include "Core/HLE/sceGe.h"
 
 GPU_Vulkan::GPU_Vulkan(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
-	: GPUCommon(gfxCtx, draw),
-		depalShaderCache_(draw),
-		drawEngine_(draw),
-		vulkan2D_((VulkanContext *)gfxCtx->GetAPIContext()) {
+	: GPUCommon(gfxCtx, draw), drawEngine_(draw) {
 	CheckGPUFeatures();
 
 	VulkanContext *vulkan = (VulkanContext *)gfxCtx->GetAPIContext();
@@ -66,7 +62,7 @@ GPU_Vulkan::GPU_Vulkan(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	pipelineManager_ = new PipelineManagerVulkan(vulkan);
 	framebufferManagerVulkan_ = new FramebufferManagerVulkan(draw);
 	framebufferManager_ = framebufferManagerVulkan_;
-	textureCacheVulkan_ = new TextureCacheVulkan(draw, vulkan);
+	textureCacheVulkan_ = new TextureCacheVulkan(draw, framebufferManager_->GetDraw2D(), vulkan);
 	textureCache_ = textureCacheVulkan_;
 	drawEngineCommon_ = &drawEngine_;
 	shaderManager_ = shaderManagerVulkan_;
@@ -76,16 +72,13 @@ GPU_Vulkan::GPU_Vulkan(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	drawEngine_.SetShaderManager(shaderManagerVulkan_);
 	drawEngine_.SetPipelineManager(pipelineManager_);
 	drawEngine_.Init();
-	framebufferManagerVulkan_->SetVulkan2D(&vulkan2D_);
 	framebufferManagerVulkan_->SetTextureCache(textureCacheVulkan_);
 	framebufferManagerVulkan_->SetDrawEngine(&drawEngine_);
 	framebufferManagerVulkan_->SetShaderManager(shaderManagerVulkan_);
 	framebufferManagerVulkan_->Init();
-	textureCacheVulkan_->SetDepalShaderCache(&depalShaderCache_);
 	textureCacheVulkan_->SetFramebufferManager(framebufferManagerVulkan_);
 	textureCacheVulkan_->SetShaderManager(shaderManagerVulkan_);
 	textureCacheVulkan_->SetDrawEngine(&drawEngine_);
-	textureCacheVulkan_->SetVulkan2D(&vulkan2D_);
 
 	InitDeviceObjects();
 
@@ -98,7 +91,7 @@ GPU_Vulkan::GPU_Vulkan(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	// Update again after init to be sure of any silly driver problems.
 	UpdateVsyncInterval(true);
 
-	textureCacheVulkan_->NotifyConfigChanged();
+	textureCache_->NotifyConfigChanged();
 
 	// Load shader cache.
 	std::string discID = g_paramSFO.GetDiscID();
@@ -182,10 +175,7 @@ GPU_Vulkan::~GPU_Vulkan() {
 	// Note: We save the cache in DeviceLost
 	DestroyDeviceObjects();
 	framebufferManagerVulkan_->DestroyAllFBOs();
-	depalShaderCache_.Clear();
-	depalShaderCache_.DeviceLost();
 	drawEngine_.DeviceLost();
-	vulkan2D_.Shutdown();
 	delete textureCacheVulkan_;
 	delete pipelineManager_;
 	delete shaderManagerVulkan_;
@@ -264,10 +254,10 @@ void GPU_Vulkan::CheckGPUFeatures() {
 			features |= GPU_SUPPORTS_DUALSOURCE_BLEND;
 		}
 	}
-	if (enabledFeatures.logicOp) {
+	if (draw_->GetDeviceCaps().logicOpSupported) {
 		features |= GPU_SUPPORTS_LOGIC_OP;
 	}
-	if (enabledFeatures.samplerAnisotropy) {
+	if (draw_->GetDeviceCaps().anisoSupported) {
 		features |= GPU_SUPPORTS_ANISOTROPY;
 	}
 
@@ -313,7 +303,7 @@ void GPU_Vulkan::BeginHostFrame() {
 		BuildReportingInfo();
 		framebufferManager_->Resized();
 		drawEngine_.Resized();
-		textureCacheVulkan_->NotifyConfigChanged();
+		textureCache_->NotifyConfigChanged();
 		resized_ = false;
 	}
 
@@ -326,12 +316,8 @@ void GPU_Vulkan::BeginHostFrame() {
 	frame.push_->Reset();
 	frame.push_->Begin(vulkan);
 
-	framebufferManagerVulkan_->BeginFrameVulkan();
-	framebufferManagerVulkan_->SetPushBuffer(frameData_[curFrame].push_);
-	depalShaderCache_.SetPushBuffer(frameData_[curFrame].push_);
+	framebufferManagerVulkan_->BeginFrame();
 	textureCacheVulkan_->SetPushBuffer(frameData_[curFrame].push_);
-
-	vulkan2D_.BeginFrame();
 
 	shaderManagerVulkan_->DirtyShader();
 	gstate_c.Dirty(DIRTY_ALL);
@@ -351,10 +337,7 @@ void GPU_Vulkan::EndHostFrame() {
 	FrameData &frame = frameData_[curFrame];
 	frame.push_->End();
 
-	vulkan2D_.EndFrame();
-
 	drawEngine_.EndFrame();
-	framebufferManagerVulkan_->EndFrame();
 	textureCacheVulkan_->EndFrame();
 
 	draw_->InvalidateCachedState();
@@ -439,18 +422,12 @@ void GPU_Vulkan::BuildReportingInfo() {
 
 void GPU_Vulkan::Reinitialize() {
 	GPUCommon::Reinitialize();
-	depalShaderCache_.Clear();
 }
 
 void GPU_Vulkan::InitClear() {
 	if (!framebufferManager_->UseBufferedRendering()) {
 		// TODO?
 	}
-}
-
-void GPU_Vulkan::SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) {
-	GPUDebug::NotifyDisplay(framebuf, stride, format);
-	framebufferManager_->SetDisplayFramebuffer(framebuf, stride, format);
 }
 
 void GPU_Vulkan::CopyDisplayToOutput(bool reallyDirty) {
@@ -548,12 +525,10 @@ void GPU_Vulkan::DeviceLost() {
 		SaveCache(shaderCachePath_);
 	}
 	DestroyDeviceObjects();
-	vulkan2D_.DeviceLost();
 	drawEngine_.DeviceLost();
 	pipelineManager_->DeviceLost();
 	textureCacheVulkan_->DeviceLost();
-	depalShaderCache_.DeviceLost();
-	shaderManagerVulkan_->ClearShaders();
+	shaderManagerVulkan_->DeviceLost();
 
 	GPUCommon::DeviceLost();
 }
@@ -567,12 +542,10 @@ void GPU_Vulkan::DeviceRestore() {
 	UpdateCmdInfo();
 
 	VulkanContext *vulkan = (VulkanContext *)draw_->GetNativeObject(Draw::NativeObject::CONTEXT);
-	vulkan2D_.DeviceRestore(vulkan);
 	drawEngine_.DeviceRestore(draw_);
 	pipelineManager_->DeviceRestore(vulkan);
 	textureCacheVulkan_->DeviceRestore(draw_);
 	shaderManagerVulkan_->DeviceRestore(draw_);
-	depalShaderCache_.DeviceRestore(draw_);
 }
 
 void GPU_Vulkan::GetStats(char *buffer, size_t bufsize) {
@@ -614,7 +587,6 @@ void GPU_Vulkan::DoState(PointerWrap &p) {
 	// In Freeze-Frame mode, we don't want to do any of this.
 	if (p.mode == p.MODE_READ && !PSP_CoreParameter().frozen) {
 		textureCache_->Clear(true);
-		depalShaderCache_.Clear();
 
 		gstate_c.Dirty(DIRTY_TEXTURE_IMAGE);
 		framebufferManager_->DestroyAllFBOs();
@@ -626,9 +598,8 @@ std::vector<std::string> GPU_Vulkan::DebugGetShaderIDs(DebugShaderType type) {
 		return drawEngine_.DebugGetVertexLoaderIDs();
 	} else if (type == SHADER_TYPE_PIPELINE) {
 		return pipelineManager_->DebugGetObjectIDs(type);
-	} else if (type == SHADER_TYPE_DEPAL) {
-		///...
-		return std::vector<std::string>();
+	} else if (type == SHADER_TYPE_TEXTURE) {
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderIDs(type);
 	} else if (type == SHADER_TYPE_VERTEX || type == SHADER_TYPE_FRAGMENT) {
 		return shaderManagerVulkan_->DebugGetShaderIDs(type);
 	} else if (type == SHADER_TYPE_SAMPLER) {
@@ -643,8 +614,8 @@ std::string GPU_Vulkan::DebugGetShaderString(std::string id, DebugShaderType typ
 		return drawEngine_.DebugGetVertexLoaderString(id, stringType);
 	} else if (type == SHADER_TYPE_PIPELINE) {
 		return pipelineManager_->DebugGetObjectString(id, type, stringType);
-	} else if (type == SHADER_TYPE_DEPAL) {
-		return "";
+	} else if (type == SHADER_TYPE_TEXTURE) {
+		return textureCache_->GetTextureShaderCache()->DebugGetShaderString(id, type, stringType);
 	} else if (type == SHADER_TYPE_SAMPLER) {
 		return textureCacheVulkan_->DebugGetSamplerString(id, stringType);
 	} else if (type == SHADER_TYPE_VERTEX || type == SHADER_TYPE_FRAGMENT) {

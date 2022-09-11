@@ -23,7 +23,7 @@
 
 #include "GPU/GPUCommon.h"
 #include "GPU/D3D11/DrawEngineD3D11.h"
-#include "GPU/D3D11/DepalettizeShaderD3D11.h"
+#include "GPU/Common/TextureShaderCommon.h"
 #include "GPU/Common/VertexDecoderCommon.h"
 
 class FramebufferManagerD3D11;
@@ -41,7 +41,6 @@ public:
 	void ExecuteOp(u32 op, u32 diff) override;
 
 	void ReapplyGfxState() override;
-	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) override;
 	void GetStats(char *buffer, size_t bufsize) override;
 	void ClearCacheNextFrame() override;
 	void DeviceLost() override;  // Only happens on Android. Drop all textures and shaders.
@@ -78,7 +77,6 @@ private:
 
 	FramebufferManagerD3D11 *framebufferManagerD3D11_;
 	TextureCacheD3D11 *textureCacheD3D11_;
-	DepalShaderCacheD3D11 *depalShaderCache_;
 	DrawEngineD3D11 drawEngine_;
 	ShaderManagerD3D11 *shaderManagerD3D11_;
 };

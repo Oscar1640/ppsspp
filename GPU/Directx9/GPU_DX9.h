@@ -23,10 +23,8 @@
 #include "GPU/GPUCommon.h"
 #include "GPU/Directx9/FramebufferManagerDX9.h"
 #include "GPU/Directx9/DrawEngineDX9.h"
-#include "GPU/Directx9/DepalettizeShaderDX9.h"
+#include "GPU/Common/TextureShaderCommon.h"
 #include "GPU/Common/VertexDecoderCommon.h"
-
-namespace DX9 {
 
 class ShaderManagerDX9;
 class LinkedShaderDX9;
@@ -42,7 +40,6 @@ public:
 	void ExecuteOp(u32 op, u32 diff) override;
 
 	void ReapplyGfxState() override;
-	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) override;
 	void GetStats(char *buffer, size_t bufsize) override;
 	void ClearCacheNextFrame() override;
 	void DeviceLost() override;  // Only happens on Android. Drop all textures and shaders.
@@ -77,11 +74,6 @@ private:
 
 	FramebufferManagerDX9 *framebufferManagerDX9_;
 	TextureCacheDX9 *textureCacheDX9_;
-	DepalShaderCacheDX9 depalShaderCache_;
 	DrawEngineDX9 drawEngine_;
 	ShaderManagerDX9 *shaderManagerDX9_;
 };
-
-}  // namespace DX9
-
-typedef DX9::GPU_DX9 DIRECTX9_GPU;

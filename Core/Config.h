@@ -240,7 +240,6 @@ public:
 	float fGameListScrollPosition;
 	int iBloomHack; //0 = off, 1 = safe, 2 = balanced, 3 = aggressive
 	bool bBlockTransferGPU;
-	bool bDisableSlowFramebufEffects;
 	bool bFragmentTestCache;
 	int iSplineBezierQuality; // 0 = low , 1 = Intermediate , 2 = High
 	bool bHardwareTessellation;
@@ -467,6 +466,14 @@ public:
 	bool bDisableWinBorders;
 #endif
 
+	// Virtual reality
+	bool bEnableVR;
+	bool bEnable6DoF;
+	bool bEnableStereo;
+	int iCanvasDistance;
+	int iFieldOfViewPercentage;
+	int iStereoSeparation;
+
 	// Debugger
 	int iDisasmWindowX;
 	int iDisasmWindowY;
@@ -476,6 +483,9 @@ public:
 	int iGEWindowY;
 	int iGEWindowW;
 	int iGEWindowH;
+	uint32_t uGETabsLeft;
+	uint32_t uGETabsRight;
+	uint32_t uGETabsTopRight;
 	int iConsoleWindowX;
 	int iConsoleWindowY;
 	int iFontWidth;

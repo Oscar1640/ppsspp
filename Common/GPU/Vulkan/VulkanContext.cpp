@@ -648,6 +648,7 @@ VkResult VulkanContext::CreateDevice() {
 	}
 	_dbg_assert_(found);
 
+	// TODO: A lot of these are on by default in later Vulkan versions, should check for that, technically.
 	extensionsLookup_.KHR_maintenance1 = EnableDeviceExtension(VK_KHR_MAINTENANCE1_EXTENSION_NAME);
 	extensionsLookup_.KHR_maintenance2 = EnableDeviceExtension(VK_KHR_MAINTENANCE2_EXTENSION_NAME);
 	extensionsLookup_.KHR_maintenance3 = EnableDeviceExtension(VK_KHR_MAINTENANCE3_EXTENSION_NAME);
@@ -684,7 +685,7 @@ VkResult VulkanContext::CreateDevice() {
 	} else {
 		VulkanLoadDeviceFunctions(device_, extensionsLookup_);
 	}
-	INFO_LOG(G3D, "Device created.\n");
+	INFO_LOG(G3D, "Vulkan Device created");
 	VulkanSetAvailable(true);
 
 	VmaAllocatorCreateInfo allocatorInfo = {};
@@ -1195,12 +1196,15 @@ void VulkanContext::DestroyDevice() {
 	device_ = nullptr;
 }
 
-bool VulkanContext::CreateShaderModule(const std::vector<uint32_t> &spirv, VkShaderModule *shaderModule) {
+bool VulkanContext::CreateShaderModule(const std::vector<uint32_t> &spirv, VkShaderModule *shaderModule, const char *tag) {
 	VkShaderModuleCreateInfo sm{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
 	sm.pCode = spirv.data();
 	sm.codeSize = spirv.size() * sizeof(uint32_t);
 	sm.flags = 0;
 	VkResult result = vkCreateShaderModule(device_, &sm, nullptr, shaderModule);
+	if (tag) {
+		SetDebugName(*shaderModule, VK_OBJECT_TYPE_SHADER_MODULE, tag);
+	}
 	if (result != VK_SUCCESS) {
 		return false;
 	} else {

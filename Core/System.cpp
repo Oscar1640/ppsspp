@@ -295,6 +295,7 @@ bool CPU_Init(std::string *errorString) {
 		HLEPlugins::Init();
 	if (!Memory::Init()) {
 		// We're screwed.
+		*errorString = "Memory init failed";
 		return false;
 	}
 	mipsr4k.Reset();
@@ -447,7 +448,9 @@ bool PSP_InitStart(const CoreParameter &coreParam, std::string *error_string) {
 	bool success = !g_CoreParameter.fileToStart.empty();
 	if (!success) {
 		Core_NotifyLifecycle(CoreLifecycle::START_COMPLETE);
-		pspIsIniting = false;
+		// In this case, we must call shutdown since the caller won't know to.
+		// It must've partially started since CPU_Init returned true.
+		PSP_Shutdown();
 	}
 	return success;
 }

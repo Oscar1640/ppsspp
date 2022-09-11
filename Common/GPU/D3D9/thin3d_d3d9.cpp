@@ -112,19 +112,6 @@ static const D3DSTENCILOP stencilOpToD3D9[] = {
 	D3DSTENCILOP_DECR,
 };
 
-static const int primCountDivisor[] = {
-	1,
-	2,
-	3,
-	3,
-	3,
-	1,
-	1,
-	1,
-	1,
-	1,
-};
-
 D3DFORMAT FormatToD3DFMT(DataFormat fmt) {
 	switch (fmt) {
 	case DataFormat::R8G8B8A8_UNORM: return D3DFMT_A8R8G8B8;
@@ -165,7 +152,6 @@ public:
 	D3DCMPFUNC stencilCompareOp;
 
 	void Apply(LPDIRECT3DDEVICE9 device, uint8_t stencilRef, uint8_t stencilWriteMask, uint8_t stencilCompareMask) {
-		using namespace DX9;
 		dxstate.depthTest.set(depthTestEnabled);
 		if (depthTestEnabled) {
 			dxstate.depthWrite.set(depthWriteEnabled);
@@ -187,7 +173,6 @@ public:
 	DWORD cullMode;   // D3DCULL_*
 
 	void Apply(LPDIRECT3DDEVICE9 device) {
-		using namespace DX9;
 		dxstate.cullMode.set(cullMode);
 		dxstate.scissorTest.enable();
 	}
@@ -201,7 +186,6 @@ public:
 	uint32_t colorMask;
 
 	void Apply(LPDIRECT3DDEVICE9 device) {
-		using namespace DX9;
 		dxstate.blend.set(enabled);
 		dxstate.blendFunc.set(srcCol, dstCol, srcAlpha, dstAlpha);
 		dxstate.blendEquation.set(eqCol, eqAlpha);
@@ -215,7 +199,6 @@ public:
 	D3DTEXTUREFILTERTYPE magFilt, minFilt, mipFilt;
 
 	void Apply(LPDIRECT3DDEVICE9 device, int index) {
-		using namespace DX9;
 		dxstate.texAddressU.set(wrapS);
 		dxstate.texAddressV.set(wrapT);
 		dxstate.texMagFilter.set(magFilt);
@@ -272,18 +255,23 @@ class D3D9Pipeline : public Pipeline {
 public:
 	D3D9Pipeline() {}
 	~D3D9Pipeline() {
+		if (vshader) {
+			vshader->Release();
+		}
+		if (pshader) {
+			pshader->Release();
+		}
 	}
 
-	D3D9ShaderModule *vshader;
-	D3D9ShaderModule *pshader;
+	D3D9ShaderModule *vshader = nullptr;
+	D3D9ShaderModule *pshader = nullptr;
 
-	D3DPRIMITIVETYPE prim;
-	int primDivisor;
+	D3DPRIMITIVETYPE prim{};
 	AutoRef<D3D9InputLayout> inputLayout;
 	AutoRef<D3D9DepthStencilState> depthStencil;
 	AutoRef<D3D9BlendState> blend;
 	AutoRef<D3D9RasterState> raster;
-	UniformBufferDesc dynamicUniforms;
+	UniformBufferDesc dynamicUniforms{};
 
 	void Apply(LPDIRECT3DDEVICE9 device, uint8_t stencilRef, uint8_t stencilWriteMask, uint8_t stencilCompareMask);
 };
@@ -293,6 +281,18 @@ public:
 	D3D9Texture(LPDIRECT3DDEVICE9 device, LPDIRECT3DDEVICE9EX deviceEx, const TextureDesc &desc);
 	~D3D9Texture();
 	void SetToSampler(LPDIRECT3DDEVICE9 device, int sampler);
+	LPDIRECT3DBASETEXTURE9 Texture() const {
+		// TODO: Cleanup
+		if (tex_) {
+			return tex_;
+		} else if (volTex_) {
+			return volTex_;
+		} else if (cubeTex_) {
+			return cubeTex_;
+		} else {
+			return nullptr;
+		}
+	}
 
 private:
 	void SetImageData(int x, int y, int z, int width, int height, int depth, int level, int stride, const uint8_t *data, TextureCallback callback);
@@ -302,9 +302,9 @@ private:
 	TextureType type_;
 	DataFormat format_;
 	D3DFORMAT d3dfmt_;
-	LPDIRECT3DTEXTURE9 tex_;
-	LPDIRECT3DVOLUMETEXTURE9 volTex_;
-	LPDIRECT3DCUBETEXTURE9 cubeTex_;
+	LPDIRECT3DTEXTURE9 tex_ = nullptr;
+	LPDIRECT3DVOLUMETEXTURE9 volTex_ = nullptr;
+	LPDIRECT3DCUBETEXTURE9 cubeTex_ = nullptr;
 };
 
 D3D9Texture::D3D9Texture(LPDIRECT3DDEVICE9 device, LPDIRECT3DDEVICE9EX deviceEx, const TextureDesc &desc)
@@ -489,13 +489,13 @@ public:
 	}
 	uint32_t GetDataFormatSupport(DataFormat fmt) const override;
 
-	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const std::string &tag) override;
+	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const char *tag) override;
 	DepthStencilState *CreateDepthStencilState(const DepthStencilStateDesc &desc) override;
 	BlendState *CreateBlendState(const BlendStateDesc &desc) override;
 	SamplerState *CreateSamplerState(const SamplerStateDesc &desc) override;
 	RasterState *CreateRasterState(const RasterStateDesc &desc) override;
 	Buffer *CreateBuffer(size_t size, uint32_t usageFlags) override;
-	Pipeline *CreateGraphicsPipeline(const PipelineDesc &desc) override;
+	Pipeline *CreateGraphicsPipeline(const PipelineDesc &desc, const char *tag) override;
 	InputLayout *CreateInputLayout(const InputLayoutDesc &desc) override;
 	Texture *CreateTexture(const TextureDesc &desc) override;
 
@@ -560,7 +560,7 @@ public:
 	void DrawUP(const void *vdata, int vertexCount) override;
 	void Clear(int mask, uint32_t colorval, float depthVal, int stencilVal) override;
 
-	uint64_t GetNativeObject(NativeObject obj) override {
+	uint64_t GetNativeObject(NativeObject obj, void *srcObject) override {
 		switch (obj) {
 		case NativeObject::CONTEXT:
 			return (uint64_t)(uintptr_t)d3d_;
@@ -568,6 +568,8 @@ public:
 			return (uint64_t)(uintptr_t)device_;
 		case NativeObject::DEVICE_EX:
 			return (uint64_t)(uintptr_t)deviceEx_;
+		case NativeObject::TEXTURE_VIEW:
+			return (uint64_t)(((D3D9Texture *)srcObject)->Texture());
 		default:
 			return 0;
 		}
@@ -663,11 +665,13 @@ D3D9Context::D3D9Context(IDirect3D9 *d3d, IDirect3D9Ex *d3dEx, int adapterId, ID
 	caps_.tesselationShaderSupported = false;
 	caps_.framebufferBlitSupported = true;
 	caps_.framebufferCopySupported = false;
-	caps_.framebufferDepthBlitSupported = true;
+	caps_.framebufferDepthBlitSupported = false;
 	caps_.framebufferStencilBlitSupported = false;
 	caps_.framebufferDepthCopySupported = false;
 	caps_.framebufferSeparateDepthCopySupported = false;
 	caps_.texture3DSupported = true;
+	caps_.textureNPOTFullySupported = true;
+	caps_.fragmentShaderDepthWriteSupported = true;
 
 	if (d3d) {
 		D3DDISPLAYMODE displayMode;
@@ -678,16 +682,17 @@ D3D9Context::D3D9Context(IDirect3D9 *d3d, IDirect3D9Ex *d3dEx, int adapterId, ID
 		HRESULT fboINTZ = d3d->CheckDeviceFormat(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, D3DFMT_A8R8G8B8, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE, FOURCC_INTZ);
 		supportsINTZ = SUCCEEDED(displayINTZ) && SUCCEEDED(fboINTZ);
 	}
+	caps_.textureDepthSupported = supportsINTZ;
 
 	shaderLanguageDesc_.Init(HLSL_D3D9);
 
-	DX9::dxstate.Restore();
+	dxstate.Restore();
 }
 
 D3D9Context::~D3D9Context() {
 }
 
-ShaderModule *D3D9Context::CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t size, const std::string &tag) {
+ShaderModule *D3D9Context::CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t size, const char *tag) {
 	D3D9ShaderModule *shader = new D3D9ShaderModule(stage, tag);
 	if (shader->Compile(device_, data, size)) {
 		return shader;
@@ -697,27 +702,28 @@ ShaderModule *D3D9Context::CreateShaderModule(ShaderStage stage, ShaderLanguage 
 	}
 }
 
-Pipeline *D3D9Context::CreateGraphicsPipeline(const PipelineDesc &desc) {
+Pipeline *D3D9Context::CreateGraphicsPipeline(const PipelineDesc &desc, const char *tag) {
 	if (!desc.shaders.size()) {
-		ERROR_LOG(G3D,  "Pipeline requires at least one shader");
+		ERROR_LOG(G3D,  "Pipeline %s requires at least one shader", tag);
 		return NULL;
 	}
 	D3D9Pipeline *pipeline = new D3D9Pipeline();
 	for (auto iter : desc.shaders) {
 		if (!iter) {
-			ERROR_LOG(G3D,  "NULL shader passed to CreateGraphicsPipeline");
+			ERROR_LOG(G3D,  "NULL shader passed to CreateGraphicsPipeline(%s)", tag);
 			delete pipeline;
 			return NULL;
 		}
 		if (iter->GetStage() == ShaderStage::Fragment) {
 			pipeline->pshader = static_cast<D3D9ShaderModule *>(iter);
+			pipeline->pshader->AddRef();
 		}
 		else if (iter->GetStage() == ShaderStage::Vertex) {
 			pipeline->vshader = static_cast<D3D9ShaderModule *>(iter);
+			pipeline->vshader->AddRef();
 		}
 	}
 	pipeline->prim = primToD3D9[(int)desc.prim];
-	pipeline->primDivisor = primCountDivisor[(int)desc.prim];
 	pipeline->depthStencil = (D3D9DepthStencilState *)desc.depthStencil;
 	pipeline->blend = (D3D9BlendState *)desc.blend;
 	pipeline->raster = (D3D9RasterState *)desc.raster;
@@ -974,12 +980,26 @@ void D3D9Context::ApplyDynamicState() {
 	}
 }
 
+static const int D3DPRIMITIVEVERTEXCOUNT[8][2] = {
+	{0, 0}, // invalid
+	{1, 0}, // 1 = D3DPT_POINTLIST,
+	{2, 0}, // 2 = D3DPT_LINELIST,
+	{2, 1}, // 3 = D3DPT_LINESTRIP,
+	{3, 0}, // 4 = D3DPT_TRIANGLELIST,
+	{1, 2}, // 5 = D3DPT_TRIANGLESTRIP,
+	{1, 2}, // 6 = D3DPT_TRIANGLEFAN,
+};
+
+inline int D3DPrimCount(D3DPRIMITIVETYPE prim, int size) {
+	return (size / D3DPRIMITIVEVERTEXCOUNT[prim][0]) - D3DPRIMITIVEVERTEXCOUNT[prim][1];
+}
+
 void D3D9Context::Draw(int vertexCount, int offset) {
 	device_->SetStreamSource(0, curVBuffers_[0]->vbuffer_, curVBufferOffsets_[0], curPipeline_->inputLayout->GetStride(0));
 	curPipeline_->inputLayout->Apply(device_);
 	curPipeline_->Apply(device_, stencilRef_, stencilWriteMask_, stencilCompareMask_);
 	ApplyDynamicState();
-	device_->DrawPrimitive(curPipeline_->prim, offset, vertexCount / 3);
+	device_->DrawPrimitive(curPipeline_->prim, offset, D3DPrimCount(curPipeline_->prim, vertexCount));
 }
 
 void D3D9Context::DrawIndexed(int vertexCount, int offset) {
@@ -988,14 +1008,15 @@ void D3D9Context::DrawIndexed(int vertexCount, int offset) {
 	ApplyDynamicState();
 	device_->SetStreamSource(0, curVBuffers_[0]->vbuffer_, curVBufferOffsets_[0], curPipeline_->inputLayout->GetStride(0));
 	device_->SetIndices(curIBuffer_->ibuffer_);
-	device_->DrawIndexedPrimitive(curPipeline_->prim, 0, 0, vertexCount, offset, vertexCount / curPipeline_->primDivisor);
+	device_->DrawIndexedPrimitive(curPipeline_->prim, 0, 0, vertexCount, offset, D3DPrimCount(curPipeline_->prim, vertexCount));
 }
 
 void D3D9Context::DrawUP(const void *vdata, int vertexCount) {
 	curPipeline_->inputLayout->Apply(device_);
 	curPipeline_->Apply(device_, stencilRef_, stencilWriteMask_, stencilCompareMask_);
 	ApplyDynamicState();
-	device_->DrawPrimitiveUP(curPipeline_->prim, vertexCount / 3, vdata, curPipeline_->inputLayout->GetStride(0));
+
+	device_->DrawPrimitiveUP(curPipeline_->prim, D3DPrimCount(curPipeline_->prim, vertexCount), vdata, curPipeline_->inputLayout->GetStride(0));
 }
 
 static uint32_t SwapRB(uint32_t c) {
@@ -1013,15 +1034,11 @@ void D3D9Context::Clear(int mask, uint32_t colorval, float depthVal, int stencil
 }
 
 void D3D9Context::SetScissorRect(int left, int top, int width, int height) {
-	using namespace DX9;
-
 	dxstate.scissorRect.set(left, top, left + width, top + height);
 	dxstate.scissorTest.set(true);
 }
 
 void D3D9Context::SetViewports(int count, Viewport *viewports) {
-	using namespace DX9;
-
 	int x = (int)viewports[0].TopLeftX;
 	int y = (int)viewports[0].TopLeftY;
 	int w = (int)viewports[0].Width;
@@ -1034,7 +1051,6 @@ void D3D9Context::SetBlendFactor(float color[4]) {
 	uint32_t g = (uint32_t)(color[1] * 255.0f);
 	uint32_t b = (uint32_t)(color[2] * 255.0f);
 	uint32_t a = (uint32_t)(color[3] * 255.0f);
-	using namespace DX9;
 	dxstate.blendColor.set(color);
 }
 
@@ -1053,11 +1069,7 @@ bool D3D9ShaderModule::Compile(LPDIRECT3DDEVICE9 device, const uint8_t *data, si
 	auto compile = [&](const char *profile) -> HRESULT {
 		return dyn_D3DCompile(source, (UINT)strlen(source), nullptr, defines, includes, "main", profile, 0, 0, &codeBuffer, &errorBuffer);
 	};
-	HRESULT hr = compile(stage_ == ShaderStage::Fragment ? "ps_2_0" : "vs_2_0");
-	if (FAILED(hr) && hr == D3DXERR_INVALIDDATA) {
-		// Might be a post shader.  Let's try using shader model 3.
-		hr = compile(stage_ == ShaderStage::Fragment ? "ps_3_0" : "vs_3_0");
-	}
+	HRESULT hr = compile(stage_ == ShaderStage::Fragment ? "ps_3_0" : "vs_3_0");
 	if (FAILED(hr)) {
 		const char *error = errorBuffer ? (const char *)errorBuffer->GetBufferPointer() : "(no errorbuffer returned)";
 		if (hr == ERROR_MOD_NOT_FOUND) {
@@ -1155,7 +1167,6 @@ D3D9Framebuffer::~D3D9Framebuffer() {
 }
 
 void D3D9Context::BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp, const char *tag) {
-	using namespace DX9;
 	if (fbo) {
 		D3D9Framebuffer *fb = (D3D9Framebuffer *)fbo;
 		device_->SetRenderTarget(0, fb->surf);

@@ -3,15 +3,13 @@
 #include "Common/GPU/OpenGL/GLFeatures.h"
 #include "Common/GPU/thin3d.h"
 #include "Common/Thread/ThreadUtil.h"
+#include "Common/VR/PPSSPPVR.h"
+
+#include "Core/Config.h"
 
 #include "Common/Log.h"
 #include "Common/MemoryUtil.h"
 #include "Common/Math/math_util.h"
-
-#ifdef OPENXR
-#include "VR/VRBase.h"
-#include "VR/VRRenderer.h"
-#endif
 
 #if 0 // def _DEBUG
 #define VLOG(...) INFO_LOG(G3D, __VA_ARGS__)
@@ -26,15 +24,15 @@ static bool OnRenderThread() {
 }
 #endif
 
-GLRTexture::GLRTexture(int width, int height, int depth, int numMips) {
-	if (gl_extensions.OES_texture_npot) {
+GLRTexture::GLRTexture(const Draw::DeviceCaps &caps, int width, int height, int depth, int numMips) {
+	if (caps.textureNPOTFullySupported) {
 		canWrap = true;
 	} else {
 		canWrap = isPowerOf2(width) && isPowerOf2(height);
 	}
 	w = width;
 	h = height;
-	depth = depth;
+	d = depth;
 	this->numMips = numMips;
 }
 
@@ -113,12 +111,6 @@ void GLDeleter::Perform(GLRenderManager *renderManager, bool skipGLCalls) {
 		delete framebuffer;
 	}
 	framebuffers.clear();
-}
-
-GLRenderManager::GLRenderManager() {
-	for (int i = 0; i < MAX_INFLIGHT_FRAMES; i++) {
-
-	}
 }
 
 GLRenderManager::~GLRenderManager() {
@@ -208,9 +200,6 @@ bool GLRenderManager::ThreadFrame() {
 	std::unique_lock<std::mutex> lock(mutex_);
 	if (!run_)
 		return false;
-#ifdef OPENXR
-	VR_BeginFrame(VR_GetEngine());
-#endif
 
 	// In case of syncs or other partial completion, we keep going until we complete a frame.
 	do {
@@ -247,11 +236,10 @@ bool GLRenderManager::ThreadFrame() {
 			firstFrame = false;
 		}
 		Run(threadFrame_);
+
 		VLOG("PULL: Finished frame %d", threadFrame_);
 	} while (!nextFrame);
-#ifdef OPENXR
-	VR_EndFrame(VR_GetEngine());
-#endif
+
 	return true;
 }
 
@@ -573,6 +561,7 @@ void GLRenderManager::EndSubmitFrame(int frame) {
 void GLRenderManager::Run(int frame) {
 	BeginSubmitFrame(frame);
 
+
 	FrameData &frameData = frameData_[frame];
 
 	auto &stepsOnThread = frameData_[frame].steps;
@@ -589,7 +578,22 @@ void GLRenderManager::Run(int frame) {
 		}
 	}
 
-	queueRunner_.RunSteps(stepsOnThread, skipGLCalls_);
+	if (IsVRBuild()) {
+		if (PreVRRender()) {
+			int passes = 1;
+			if (!IsMultiviewSupported() && g_Config.bEnableStereo) {
+				passes = 2;
+			}
+			for (int i = 0; i < passes; i++) {
+				PreVRFrameRender(i);
+				queueRunner_.RunSteps(stepsOnThread, skipGLCalls_, i < passes - 1);
+				PostVRFrameRender();
+			}
+			PostVRRender();
+		}
+	} else {
+		queueRunner_.RunSteps(stepsOnThread, skipGLCalls_);
+	}
 	stepsOnThread.clear();
 
 	if (!skipGLCalls_) {

@@ -101,8 +101,8 @@ static inline Vec4<float> Interpolate(const float &c0, const float &c1, const fl
 	return Interpolate(c0, c1, c2, w0.Cast<float>(), w1.Cast<float>(), w2.Cast<float>(), wsum_recip);
 }
 
-void ComputeRasterizerState(RasterizerState *state) {
-	ComputePixelFuncID(&state->pixelID);
+void ComputeRasterizerState(RasterizerState *state, bool throughMode) {
+	ComputePixelFuncID(&state->pixelID, throughMode);
 	state->drawPixel = Rasterizer::GetSingleFunc(state->pixelID);
 
 	state->enableTextures = gstate.isTextureMapEnabled() && !state->pixelID.clearMode;
@@ -140,7 +140,7 @@ void ComputeRasterizerState(RasterizerState *state) {
 	}
 
 	state->shadeGouraud = gstate.getShadeMode() == GE_SHADE_GOURAUD;
-	state->throughMode = gstate.isModeThrough();
+	state->throughMode = throughMode;
 	state->antialiasLines = gstate.isAntiAliasEnabled();
 
 	state->screenOffsetX = gstate.getOffsetX16();
@@ -348,7 +348,7 @@ Vec3<int> AlphaBlendingResult(const PixelFuncID &pixelID, const Vec4<int> &sourc
 
 		return Vec3<int>(_mm_unpacklo_epi16(_mm_adds_epi16(s, d), _mm_setzero_si128()));
 #else
-		Vec3<int> half = Vec3<int>::AssignToAll(1);
+		static constexpr Vec3<int> half = Vec3<int>::AssignToAll(1);
 		Vec3<int> lhs = ((source.rgb() * 2 + half) * (srcfactor * 2 + half)) / 1024;
 		Vec3<int> rhs = ((dst.rgb() * 2 + half) * (dstfactor * 2 + half)) / 1024;
 		return lhs + rhs;
@@ -370,7 +370,7 @@ Vec3<int> AlphaBlendingResult(const PixelFuncID &pixelID, const Vec4<int> &sourc
 
 		return Vec3<int>(_mm_unpacklo_epi16(_mm_max_epi16(_mm_subs_epi16(s, d), _mm_setzero_si128()), _mm_setzero_si128()));
 #else
-		Vec3<int> half = Vec3<int>::AssignToAll(1);
+		static constexpr Vec3<int> half = Vec3<int>::AssignToAll(1);
 		Vec3<int> lhs = ((source.rgb() * 2 + half) * (srcfactor * 2 + half)) / 1024;
 		Vec3<int> rhs = ((dst.rgb() * 2 + half) * (dstfactor * 2 + half)) / 1024;
 		return lhs - rhs;
@@ -392,7 +392,7 @@ Vec3<int> AlphaBlendingResult(const PixelFuncID &pixelID, const Vec4<int> &sourc
 
 		return Vec3<int>(_mm_unpacklo_epi16(_mm_max_epi16(_mm_subs_epi16(d, s), _mm_setzero_si128()), _mm_setzero_si128()));
 #else
-		Vec3<int> half = Vec3<int>::AssignToAll(1);
+		static constexpr Vec3<int> half = Vec3<int>::AssignToAll(1);
 		Vec3<int> lhs = ((source.rgb() * 2 + half) * (srcfactor * 2 + half)) / 1024;
 		Vec3<int> rhs = ((dst.rgb() * 2 + half) * (dstfactor * 2 + half)) / 1024;
 		return rhs - lhs;
@@ -710,6 +710,11 @@ void DrawTriangleSlice(
 	const bool flatColor1 = flatColorAll || (v0.color1 == v1.color1 && v0.color1 == v2.color1);
 	const bool noFog = clearMode || !pixelID.applyFog || (v0.fogdepth >= 1.0f && v1.fogdepth >= 1.0f && v2.fogdepth >= 1.0f);
 
+	if (pixelID.applyDepthRange && flatZ) {
+		if (v0.screenpos.z < pixelID.cached.minz || v0.screenpos.z > pixelID.cached.maxz)
+			return;
+	}
+
 #if defined(SOFTGPU_MEMORY_TAGGING_DETAILED) || defined(SOFTGPU_MEMORY_TAGGING_BASIC)
 	uint32_t bpp = pixelID.FBFormat() == GE_FORMAT_8888 ? 4 : 2;
 	std::string tag = StringFromFormat("DisplayListT_%08x", state.listPC);
@@ -753,6 +758,32 @@ void DrawTriangleSlice(
 			Vec4<int> mask = MakeMask(w0, w1, w2, bias0, bias1, bias2, scissor_mask);
 			if (AnyMask<useSSE4>(mask)) {
 				Vec4<float> wsum_recip = EdgeRecip(w0, w1, w2);
+
+				Vec4<int> z;
+				if (flatZ) {
+					z = Vec4<int>::AssignToAll(v2.screenpos.z);
+				} else {
+					// Z is interpolated pretty much directly.
+					Vec4<float> zfloats = w0.Cast<float>() * v0.screenpos.z + w1.Cast<float>() * v1.screenpos.z + w2.Cast<float>() * v2.screenpos.z;
+					z = (zfloats * wsum_recip).Cast<int>();
+				}
+
+				if (pixelID.earlyZChecks) {
+					for (int i = 0; i < 4; ++i) {
+						if (pixelID.applyDepthRange) {
+							if (z[i] < pixelID.cached.minz || z[i] > pixelID.cached.maxz)
+								mask[i] = -1;
+						}
+						if (mask[i] < 0)
+							continue;
+
+						int x = p.x + (i & 1);
+						int y = p.y + (i / 2);
+						if (!CheckDepthTestPassed(pixelID.DepthTestFunc(), x, y, pixelID.cached.depthbufStride, z[i])) {
+							mask[i] = -1;
+						}
+					}
+				}
 
 				// Color interpolation is not perspective corrected on the PSP.
 				Vec4<int> prim_color[4];
@@ -814,15 +845,6 @@ void DrawTriangleSlice(
 					for (int i = 0; i < 4; ++i) {
 						fog[i] = ClampFogDepth(fogdepths[i]);
 					}
-				}
-
-				Vec4<int> z;
-				if (flatZ) {
-					z = Vec4<int>::AssignToAll(v2.screenpos.z);
-				} else {
-					// Z is interpolated pretty much directly.
-					Vec4<float> zfloats = w0.Cast<float>() * v0.screenpos.z + w1.Cast<float>() * v1.screenpos.z + w2.Cast<float>() * v2.screenpos.z;
-					z = (zfloats * wsum_recip).Cast<int>();
 				}
 
 				PROFILE_THIS_SCOPE("draw_tri_px");
@@ -947,6 +969,12 @@ void DrawRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &
 	Vec4<int> z = Vec4<int>::AssignToAll(v1.screenpos.z);
 	Vec3<int> sec_color = v1.color1;
 
+	if (state.pixelID.applyDepthRange) {
+		// We can bail early since the Z is flat.
+		if (v1.screenpos.z < state.pixelID.cached.minz || v1.screenpos.z > state.pixelID.cached.maxz)
+			return;
+	}
+
 #if defined(SOFTGPU_MEMORY_TAGGING_DETAILED) || defined(SOFTGPU_MEMORY_TAGGING_BASIC)
 	uint32_t bpp = state.pixelID.FBFormat() == GE_FORMAT_8888 ? 4 : 2;
 	std::string tag = StringFromFormat("DisplayListR_%08x", state.listPC);
@@ -970,6 +998,19 @@ void DrawRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &
 			Vec4<int> prim_color[4];
 			for (int i = 0; i < 4; ++i) {
 				prim_color[i] = v1.color0;
+			}
+
+			if (state.pixelID.earlyZChecks) {
+				for (int i = 0; i < 4; ++i) {
+					if (mask[i] < 0)
+						continue;
+
+					int x = p.x + (i & 1);
+					int y = p.y + (i / 2);
+					if (!CheckDepthTestPassed(state.pixelID.DepthTestFunc(), x, y, state.pixelID.cached.depthbufStride, z[i])) {
+						mask[i] = -1;
+					}
+				}
 			}
 
 			if (state.enableTextures) {
@@ -1038,6 +1079,20 @@ void DrawPoint(const VertexData &v0, const BinCoords &range, const RasterizerSta
 	auto &pixelID = state.pixelID;
 	auto &samplerID = state.samplerID;
 
+	DrawingCoords p = TransformUnit::ScreenToDrawing(pos);
+	u16 z = pos.z;
+
+	if (pixelID.earlyZChecks) {
+		if (pixelID.applyDepthRange) {
+			if (z < pixelID.cached.minz || z > pixelID.cached.maxz)
+				return;
+		}
+
+		if (!CheckDepthTestPassed(pixelID.DepthTestFunc(), p.x, p.y, pixelID.cached.depthbufStride, z)) {
+			return;
+		}
+	}
+
 	if (state.enableTextures) {
 		float s = v0.texturecoords.s();
 		float t = v0.texturecoords.t();
@@ -1059,9 +1114,6 @@ void DrawPoint(const VertexData &v0, const BinCoords &range, const RasterizerSta
 
 	if (!pixelID.clearMode)
 		prim_color += Vec4<int>(sec_color, 0);
-
-	DrawingCoords p = TransformUnit::ScreenToDrawing(pos);
-	u16 z = pos.z;
 
 	u8 fog = 255;
 	if (pixelID.applyFog) {
@@ -1302,7 +1354,23 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 	double z = a.z;
 	const int steps1 = steps == 0 ? 1 : steps;
 	for (int i = 0; i < steps; i++) {
-		if (x >= range.x1 && y >= range.y1 && x <= range.x2 && y <= range.y2) {
+		DrawingCoords p = TransformUnit::ScreenToDrawing(x, y);
+
+		bool maskOK = x >= range.x1 && y >= range.y1 && x <= range.x2 && y <= range.y2;
+		if (maskOK) {
+			if (pixelID.earlyZChecks) {
+				if (pixelID.applyDepthRange) {
+					if (z < pixelID.cached.minz || z > pixelID.cached.maxz)
+						maskOK = false;
+				}
+
+				if (!CheckDepthTestPassed(pixelID.DepthTestFunc(), x, y, pixelID.cached.depthbufStride, z)) {
+					maskOK = false;
+				}
+			}
+		}
+
+		if (maskOK) {
 			// Interpolate between the two points.
 			Vec4<int> prim_color;
 			Vec3<int> sec_color;
@@ -1368,7 +1436,6 @@ void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range
 				prim_color += Vec4<int>(sec_color, 0);
 
 			PROFILE_THIS_SCOPE("draw_px");
-			DrawingCoords p = TransformUnit::ScreenToDrawing(x, y);
 			state.drawPixel(p.x, p.y, z, fog, ToVec4IntArg(prim_color), pixelID);
 
 #if defined(SOFTGPU_MEMORY_TAGGING_DETAILED) || defined(SOFTGPU_MEMORY_TAGGING_BASIC)
@@ -1401,14 +1468,18 @@ bool GetCurrentTexture(GPUDebugBuffer &buffer, int level)
 	int w = gstate.getTextureWidth(level);
 	int h = gstate.getTextureHeight(level);
 
-	if (!texaddr || !Memory::IsValidRange(texaddr, (textureBitsPerPixel[texfmt] * texbufw * h) / 8))
+	u32 sizeInBits = textureBitsPerPixel[texfmt] * (texbufw * (h - 1) + w);
+	if (!texaddr || !Memory::IsValidRange(texaddr, sizeInBits / 8))
+		return false;
+	// We'll break trying to allocate this much.
+	if (w >= 0x8000 && h >= 0x8000)
 		return false;
 
 	buffer.Allocate(w, h, GE_FORMAT_8888, false);
 
 	SamplerID id;
 	ComputeSamplerID(&id);
-	id.cached.clut = (const u8 *)clut;
+	id.cached.clut = clut;
 
 	Sampler::FetchFunc sampler = Sampler::GetFetchFunc(id);
 

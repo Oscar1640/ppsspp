@@ -123,7 +123,7 @@ public:
 	bool GetCurrentSimpleVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices);
 
 	void Flush(const char *reason);
-	void FlushIfOverlap(const char *reason, uint32_t addr, uint32_t stride, uint32_t w, uint32_t h);
+	void FlushIfOverlap(const char *reason, bool modifying, uint32_t addr, uint32_t stride, uint32_t w, uint32_t h);
 	void NotifyClutUpdate(const void *src);
 
 	void GetStats(char *buffer, size_t bufsize);
@@ -136,6 +136,12 @@ private:
 
 	u8 *decoded_ = nullptr;
 	BinManager *binner_ = nullptr;
+
+	// Normally max verts per prim is 3, but we temporarily need 4 to detect rectangles from strips.
+	VertexData data_[4];
+	// This is the index of the next vert in data (or higher, may need modulus.)
+	int data_index_ = 0;
+	GEPrimitiveType prev_prim_ = GE_PRIM_POINTS;
 };
 
 class SoftwareDrawEngine : public DrawEngineCommon {

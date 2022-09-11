@@ -28,8 +28,6 @@
 #include "GPU/GPUCommon.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
 
-namespace DX9 {
-
 class TextureCacheDX9;
 class DrawEngineDX9;
 class ShaderManagerDX9;
@@ -39,13 +37,7 @@ public:
 	FramebufferManagerDX9(Draw::DrawContext *draw);
 	~FramebufferManagerDX9();
 
-	void SetTextureCache(TextureCacheDX9 *tc);
-	void SetShaderManager(ShaderManagerDX9 *sm);
-	void SetDrawEngine(DrawEngineDX9 *td);
-
 	void DestroyAllFBOs() override;
-
-	void EndFrame();
 
 	bool GetFramebuffer(u32 fb_address, int fb_stride, GEBufferFormat format, GPUDebugBuffer &buffer, int maxRes) override;
 	bool GetDepthbuffer(u32 fb_address, int fb_stride, u32 z_address, int z_stride, GPUDebugBuffer &buffer) override;
@@ -56,36 +48,20 @@ public:
 	LPDIRECT3DSURFACE9 GetOffscreenSurface(D3DFORMAT fmt, u32 w, u32 h);
 
 protected:
-	void Bind2DShader() override;
 	void DecimateFBOs() override;
 
-	// Used by ReadFramebufferToMemory and later framebuffer block copies
-	void BlitFramebuffer(VirtualFramebuffer *dst, int dstX, int dstY, VirtualFramebuffer *src, int srcX, int srcY, int w, int h, int bpp, const char *tag) override;
-
 private:
-	void PackFramebufferSync_(VirtualFramebuffer *vfb, int x, int y, int w, int h) override;
+	void PackFramebufferSync(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel) override;
 	void PackDepthbuffer(VirtualFramebuffer *vfb, int x, int y, int w, int h);
 	bool GetRenderTargetFramebuffer(LPDIRECT3DSURFACE9 renderTarget, LPDIRECT3DSURFACE9 offscreen, int w, int h, GPUDebugBuffer &buffer);
 
 	LPDIRECT3DDEVICE9 device_;
 	LPDIRECT3DDEVICE9 deviceEx_;
 
-	LPDIRECT3DVERTEXSHADER9 pFramebufferVertexShader = nullptr;
-	LPDIRECT3DPIXELSHADER9 pFramebufferPixelShader = nullptr;
-	LPDIRECT3DVERTEXDECLARATION9 pFramebufferVertexDecl = nullptr;
-
-	LPDIRECT3DPIXELSHADER9 stencilUploadPS_ = nullptr;
-	LPDIRECT3DVERTEXSHADER9 stencilUploadVS_ = nullptr;
-	bool stencilUploadFailed_ = false;
-
-	LPDIRECT3DTEXTURE9 nullTex_ = nullptr;
-	
 	struct OffscreenSurface {
 		LPDIRECT3DSURFACE9 surface;
 		int last_frame_used;
 	};
 
 	std::unordered_map<u64, OffscreenSurface> offscreenSurfaces_;
-};
-
 };

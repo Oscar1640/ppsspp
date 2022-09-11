@@ -95,7 +95,11 @@ void NativeResized() { }
 
 std::string System_GetProperty(SystemProperty prop) { return ""; }
 std::vector<std::string> System_GetPropertyStringVec(SystemProperty prop) { return std::vector<std::string>(); }
-int System_GetPropertyInt(SystemProperty prop) { return -1; }
+int System_GetPropertyInt(SystemProperty prop) {
+	if (prop == SYSPROP_SYSTEMVERSION)
+		return 31;
+	return -1;
+}
 float System_GetPropertyFloat(SystemProperty prop) { return -1.0f; }
 bool System_GetPropertyBool(SystemProperty prop) { 
 	switch (prop) {
@@ -418,6 +422,7 @@ int main(int argc, const char* argv[])
 	g_Config.iATRACMP3Volume = MAX_CONFIG_VOLUME;
 	g_Config.iSASVolume = MAX_CONFIG_VOLUME;
 	g_Config.bVertexDecoderJit = true;
+	g_Config.bSoftwareRendering = coreParameter.gpuCore == GPUCORE_SOFTWARE;
 	g_Config.bSoftwareRenderingJit = true;
 	g_Config.bBlockTransferGPU = true;
 	g_Config.iSplineBezierQuality = 2;
@@ -528,6 +533,8 @@ int main(int argc, const char* argv[])
 #if PPSSPP_PLATFORM(WINDOWS)
 	timeEndPeriod(1);
 #endif
+
+	g_threadManager.Teardown();
 
 	if (!failedTests.empty() && !teamCityMode)
 		return 1;

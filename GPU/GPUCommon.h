@@ -15,6 +15,8 @@ class FramebufferManagerCommon;
 class TextureCacheCommon;
 class DrawEngineCommon;
 class GraphicsContext;
+struct VirtualFramebuffer;
+
 namespace Draw {
 	class DrawContext;
 }
@@ -115,6 +117,7 @@ public:
 	u32  Break(int mode) override;
 	void ReapplyGfxState() override;
 
+	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) override;
 	void CopyDisplayToOutput(bool reallyDirty) override = 0;
 	void InitClear() override = 0;
 	bool PerformMemoryCopy(u32 dest, u32 src, int size) override;
@@ -124,7 +127,7 @@ public:
 
 	void InvalidateCache(u32 addr, int size, GPUInvalidationType type) override;
 	void NotifyVideoUpload(u32 addr, int size, int width, int format) override;
-	bool PerformStencilUpload(u32 dest, int size) override;
+	bool PerformStencilUpload(u32 dest, int size, StencilUpload flags) override;
 
 	void Execute_OffsetAddr(u32 op, u32 diff);
 	void Execute_Vaddr(u32 op, u32 diff);
@@ -231,11 +234,11 @@ public:
 	const std::list<int>& GetDisplayLists() override {
 		return dlQueue;
 	}
-	std::vector<FramebufferInfo> GetFramebufferList() override;
+	std::vector<FramebufferInfo> GetFramebufferList() const override;
 	void ClearShaderCache() override {}
 	void CleanupBeforeUI() override {}
 
-	s64 GetListTicks(int listid) override {
+	s64 GetListTicks(int listid) const override {
 		if (listid >= 0 && listid < DisplayListMaxCount) {
 			return dls[listid].waitTicks;
 		}
@@ -283,16 +286,11 @@ protected:
 	void SlowRunLoop(DisplayList &list);
 	void UpdatePC(u32 currentPC, u32 newPC);
 	void UpdateState(GPURunState state);
-	void PopDLQueue();
-	void CheckDrawSync();
-	int  GetNextListIndex();
-	virtual void FastLoadBoneMatrix(u32 target);
+	void FastLoadBoneMatrix(u32 target);
+	void FlushImm();
 
 	// TODO: Unify this.
 	virtual void FinishDeferred() {}
-
-	void DoBlockTransfer(u32 skipDrawReason);
-	void DoExecuteCall(u32 target);
 
 	void AdvanceVerts(u32 vertType, int count, int bytesRead) {
 		if ((vertType & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
@@ -356,13 +354,20 @@ protected:
 
 	TransformedVertex immBuffer_[MAX_IMMBUFFER_SIZE];
 	int immCount_ = 0;
-	GEPrimitiveType immPrim_;
+	GEPrimitiveType immPrim_ = GE_PRIM_INVALID;
+	uint32_t immFlags_ = 0;
 
 	std::string reportingPrimaryInfo_;
 	std::string reportingFullInfo_;
 
 private:
-	void FlushImm();
+	void CheckDepthUsage(VirtualFramebuffer *vfb);
+	void DoBlockTransfer(u32 skipDrawReason);
+	void DoExecuteCall(u32 target);
+	void PopDLQueue();
+	void CheckDrawSync();
+	int  GetNextListIndex();
+
 	// Debug stats.
 	double timeSteppingStarted_;
 	double timeSpentStepping_;

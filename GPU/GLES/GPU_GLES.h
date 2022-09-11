@@ -23,9 +23,9 @@
 #include "Common/File/Path.h"
 
 #include "GPU/GPUCommon.h"
+#include "GPU/Common/TextureShaderCommon.h"
 #include "GPU/GLES/FramebufferManagerGLES.h"
 #include "GPU/GLES/DrawEngineGLES.h"
-#include "GPU/GLES/DepalettizeShaderGLES.h"
 #include "GPU/GLES/FragmentTestCacheGLES.h"
 
 class ShaderManagerGLES;
@@ -47,7 +47,6 @@ public:
 	void ExecuteOp(u32 op, u32 diff) override;
 
 	void ReapplyGfxState() override;
-	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) override;
 	void GetStats(char *buffer, size_t bufsize) override;
 
 	void ClearCacheNextFrame() override;
@@ -83,7 +82,6 @@ private:
 
 	FramebufferManagerGLES *framebufferManagerGL_;
 	TextureCacheGLES *textureCacheGL_;
-	DepalShaderCacheGLES depalShaderCache_;
 	DrawEngineGLES drawEngine_;
 	FragmentTestCacheGLES fragmentTestCache_;
 	ShaderManagerGLES *shaderManagerGL_;

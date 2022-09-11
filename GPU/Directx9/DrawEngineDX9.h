@@ -30,8 +30,6 @@
 struct DecVtxFormat;
 struct UVScale;
 
-namespace DX9 {
-
 class VSShader;
 class ShaderManagerDX9;
 class TextureCacheDX9;
@@ -150,7 +148,6 @@ private:
 
 	void ApplyDrawState(int prim);
 	void ApplyDrawStateLate();
-	void ResetFramebufferRead();
 
 	IDirect3DVertexDeclaration9 *SetupDecFmtForDraw(VSShader *vshader, const DecVtxFormat &decFmt, u32 pspFmt);
 
@@ -174,6 +171,6 @@ private:
 	TessellationDataTransferDX9 *tessDataTransferDX9;
 
 	int lastRenderStepId_ = -1;
-};
 
-}  // namespace
+	bool fboTexNeedsBind_ = false;
+};

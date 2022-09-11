@@ -15,48 +15,53 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
-#include <map>
+#pragma once
 
-#include <d3d9.h>
+#include <map>
+#include <vector>
+#include <string>
+
 #include "Common/CommonTypes.h"
+#include "Common/GPU/Shader.h"
+#include "Common/GPU/thin3d.h"
 #include "GPU/ge_constants.h"
+#include "GPU/Common/Draw2D.h"
 #include "GPU/Common/ShaderCommon.h"
 #include "GPU/Common/DepalettizeShaderCommon.h"
 
-namespace DX9 {
-
-class DepalShaderDX9 {
+class ClutTexture {
 public:
-	LPDIRECT3DPIXELSHADER9 pixelShader;
-	std::string code;
-};
-
-class DepalTextureDX9 {
-public:
-	LPDIRECT3DTEXTURE9 texture;
+	Draw::Texture *texture;
 	int lastFrame;
+	int rampLength;
 };
 
+// For CLUT depal shaders, and other pre-bind texture shaders.
 // Caches both shaders and palette textures.
-class DepalShaderCacheDX9 : public DepalShaderCacheCommon {
+class TextureShaderCache {
 public:
-	DepalShaderCacheDX9(Draw::DrawContext *draw);
-	~DepalShaderCacheDX9();
+	TextureShaderCache(Draw::DrawContext *draw, Draw2D *draw2D);
+	~TextureShaderCache();
 
-	// This also uploads the palette and binds the correct texture.
-	LPDIRECT3DPIXELSHADER9 GetDepalettizePixelShader(uint32_t clutMode, GEBufferFormat pixelFormat);
-	LPDIRECT3DVERTEXSHADER9 GetDepalettizeVertexShader() { return vertexShader_; }
-	LPDIRECT3DTEXTURE9 GetClutTexture(GEPaletteFormat clutFormat, u32 clutHash, u32 *rawClut);
+	Draw2DPipeline *GetDepalettizeShader(uint32_t clutMode, GETextureFormat texFormat, GEBufferFormat pixelFormat, bool smoothedDepal, u32 depthUpperBits);
+	ClutTexture GetClutTexture(GEPaletteFormat clutFormat, const u32 clutHash, u32 *rawClut);
+
+	Draw::SamplerState *GetSampler(bool linearFilter);
+
 	void Clear();
 	void Decimate();
 	std::vector<std::string> DebugGetShaderIDs(DebugShaderType type);
 	std::string DebugGetShaderString(std::string id, DebugShaderType type, DebugShaderStringType stringType);
 
-private:
-	LPDIRECT3DDEVICE9 device_;
-	LPDIRECT3DVERTEXSHADER9 vertexShader_ = nullptr;
-	std::map<u32, DepalShaderDX9 *> cache_;
-	std::map<u32, DepalTextureDX9 *> texCache_;
-};
+	void DeviceLost();
+	void DeviceRestore(Draw::DrawContext *draw);
 
-}  // namespace
+private:
+	Draw::DrawContext *draw_;
+	Draw::SamplerState *nearestSampler_ = nullptr;
+	Draw::SamplerState *linearSampler_ = nullptr;
+	Draw2D *draw2D_;
+
+	std::map<u64, Draw2DPipeline *> depalCache_;
+	std::map<u32, ClutTexture *> texCache_;
+};
