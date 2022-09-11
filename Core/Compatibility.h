@@ -91,7 +91,6 @@ struct CompatFlags {
 	bool DisableFirstFrameReadback;
 	bool DisableRangeCulling;
 	bool MpegAvcWarmUp;
-	bool AtracSeekToSampleHack;
 	bool BlueToAlpha;
 	bool CenteredLines;
 	bool MaliDepthStencilBugWorkaround;
