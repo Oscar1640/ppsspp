@@ -19,9 +19,12 @@
 
 #include "ppsspp_config.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
+#include "Common/Data/Collections/Hashmaps.h"
 #include "GPU/Math3D.h"
 #include "GPU/Software/FuncId.h"
 #include "GPU/Software/RasterizerRegCache.h"
@@ -36,9 +39,10 @@ namespace Rasterizer {
 #endif
 
 typedef void (SOFTRAST_CALL *SingleFunc)(int x, int y, int z, int fog, Vec4IntArg color_in, const PixelFuncID &pixelID);
-SingleFunc GetSingleFunc(const PixelFuncID &id);
+SingleFunc GetSingleFunc(const PixelFuncID &id, std::function<void()> flushForCompile);
 
 void Init();
+void FlushJit();
 void Shutdown();
 
 bool CheckDepthTestPassed(GEComparison func, int x, int y, int stride, u16 z);
@@ -51,6 +55,7 @@ struct PixelBlendState {
 	bool dstFactorIsInverse = false;
 	bool srcColorAsFactor = false;
 	bool dstColorAsFactor = false;
+	bool readsDstPixel = true;
 };
 void ComputePixelBlendState(PixelBlendState &state, const PixelFuncID &id);
 
@@ -59,13 +64,15 @@ public:
 	PixelJitCache();
 
 	// Returns a pointer to the code to run.
-	SingleFunc GetSingle(const PixelFuncID &id);
+	SingleFunc GetSingle(const PixelFuncID &id, std::function<void()> flushForCompile);
 	SingleFunc GenericSingle(const PixelFuncID &id);
 	void Clear() override;
+	void Flush();
 
 	std::string DescribeCodePtr(const u8 *ptr) override;
 
 private:
+	void Compile(const PixelFuncID &id);
 	SingleFunc CompileSingle(const PixelFuncID &id);
 
 	RegCache::Reg GetPixelID();
@@ -101,8 +108,9 @@ private:
 	bool Jit_ConvertFrom5551(const PixelFuncID &id, RegCache::Reg colorReg, RegCache::Reg temp1Reg, RegCache::Reg temp2Reg, bool keepAlpha);
 	bool Jit_ConvertFrom4444(const PixelFuncID &id, RegCache::Reg colorReg, RegCache::Reg temp1Reg, RegCache::Reg temp2Reg, bool keepAlpha);
 
-	std::unordered_map<PixelFuncID, SingleFunc> cache_;
+	DenseHashMap<size_t, SingleFunc, nullptr> cache_;
 	std::unordered_map<PixelFuncID, const u8 *> addresses_;
+	std::unordered_set<PixelFuncID> compileQueue_;
 
 	const u8 *constBlendHalf_11_4s_ = nullptr;
 	const u8 *constBlendInvert_11_4s_ = nullptr;

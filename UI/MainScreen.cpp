@@ -136,8 +136,8 @@ public:
 	void SetHoldEnabled(bool hold) {
 		holdEnabled_ = hold;
 	}
-	void Touch(const TouchInput &input) override {
-		UI::Clickable::Touch(input);
+	bool Touch(const TouchInput &input) override {
+		bool retval = UI::Clickable::Touch(input);
 		hovering_ = bounds_.Contains(input.x, input.y);
 		if (hovering_ && (input.flags & TOUCH_DOWN)) {
 			holdStart_ = time_now_d();
@@ -145,6 +145,7 @@ public:
 		if (input.flags & TOUCH_UP) {
 			holdStart_ = 0;
 		}
+		return retval;
 	}
 
 	bool Key(const KeyInput &key) override {
@@ -1125,7 +1126,7 @@ void MainScreen::CreateViews() {
 #endif
 
 	rightColumnItems->Add(logos);
-	TextView *ver = rightColumnItems->Add(new TextView(versionString, new LinearLayoutParams(Margins(70, -6, 0, 0))));
+	TextView *ver = rightColumnItems->Add(new TextView(versionString, new LinearLayoutParams(Margins(70, -10, 0, 4))));
 	ver->SetSmall(true);
 	ver->SetClip(false);
 
@@ -1436,11 +1437,12 @@ UI::EventReturn MainScreen::OnExit(UI::EventParams &e) {
 }
 
 void MainScreen::dialogFinished(const Screen *dialog, DialogResult result) {
-	if (dialog->tag() == "store") {
+	std::string tag = dialog->tag();
+	if (tag == "Store") {
 		backFromStore_ = true;
 		RecreateViews();
 	}
-	if (dialog->tag() == "game") {
+	if (tag == "Game") {
 		if (!restoreFocusGamePath_.empty() && UI::IsFocusMovementEnabled()) {
 			// Prevent the background from fading, since we just were displaying it.
 			highlightedGamePath_ = restoreFocusGamePath_;

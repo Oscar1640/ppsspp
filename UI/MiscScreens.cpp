@@ -43,6 +43,7 @@
 #include "Core/MIPS/JitCommon/JitCommon.h"
 #include "Core/HLE/sceUtility.h"
 #include "GPU/GPUState.h"
+#include "GPU/GPUInterface.h"
 #include "GPU/Common/PostShader.h"
 
 #include "UI/ControlMappingScreen.h"
@@ -251,7 +252,7 @@ private:
 			return nullptr;
 		}
 		const auto recentIsos = g_Config.RecentIsos();
-		if (index >= recentIsos.size())
+		if (index >= (int)recentIsos.size())
 			return nullptr;
 		return g_gameInfoCache->GetInfo(dc.GetDrawContext(), Path(recentIsos[index]), GAMEINFO_WANTBG);
 	}
@@ -355,7 +356,36 @@ void DrawBackground(UIContext &dc, float alpha, float x, float y, float z) {
 	}
 }
 
-void DrawGameBackground(UIContext &dc, const Path &gamePath, float x, float y, float z) {
+void DrawGameBackground(UIContext &dc, const Path &gamePath, float x, float y, float z, bool darkenBackground) {
+	using namespace Draw;
+	using namespace UI;
+
+	if (PSP_IsInited() && !g_Config.bSkipBufferEffects) {
+		gpu->CheckDisplayResized();
+		gpu->CheckConfigChanged();
+		gpu->CopyDisplayToOutput(true);
+
+		DrawContext *draw = dc.GetDrawContext();
+		Viewport viewport;
+		viewport.TopLeftX = 0;
+		viewport.TopLeftY = 0;
+		viewport.Width = pixel_xres;
+		viewport.Height = pixel_yres;
+		viewport.MaxDepth = 1.0;
+		viewport.MinDepth = 0.0;
+		draw->SetViewports(1, &viewport);
+		dc.BeginFrame();
+		dc.RebindTexture();
+		dc.Begin();
+
+		if (darkenBackground) {
+			uint32_t color = colorAlpha(colorBlend(dc.GetTheme().backgroundColor, 0, 0.5f), 0.65f);
+			dc.FillRect(UI::Drawable(color), dc.GetBounds());
+			dc.Flush();
+		}
+		return;
+	}
+
 	std::shared_ptr<GameInfo> ginfo;
 	if (!gamePath.empty())
 		ginfo = g_gameInfoCache->GetInfo(dc.GetDrawContext(), gamePath, GAMEINFO_WANTBG);
@@ -364,8 +394,6 @@ void DrawGameBackground(UIContext &dc, const Path &gamePath, float x, float y, f
 	GameInfoTex *pic = ginfo ? ginfo->GetBGPic() : nullptr;
 	if (pic) {
 		dc.GetDrawContext()->BindTexture(0, pic->texture->GetTexture());
-	}
-	if (pic) {
 		uint32_t color = whiteAlpha(ease((time_now_d() - pic->timeLoaded) * 3)) & 0xFFc0c0c0;
 		dc.Draw()->DrawTexRect(dc.GetBounds(), 0,0,1,1, color);
 		dc.Flush();
@@ -387,18 +415,18 @@ void HandleCommonMessages(const char *message, const char *value, ScreenManager 
 				MIPSComp::jit->ClearCache();
 		}
 		currentMIPS->UpdateCore((CPUCore)g_Config.iCpuCore);
-	} else if (!strcmp(message, "control mapping") && isActiveScreen && activeScreen->tag() != "control mapping") {
+	} else if (!strcmp(message, "control mapping") && isActiveScreen && std::string(activeScreen->tag()) != "ControlMapping") {
 		UpdateUIState(UISTATE_MENU);
-		manager->push(new ControlMappingScreen());
-	} else if (!strcmp(message, "display layout editor") && isActiveScreen && activeScreen->tag() != "display layout screen") {
+		manager->push(new ControlMappingScreen(Path()));
+	} else if (!strcmp(message, "display layout editor") && isActiveScreen && std::string(activeScreen->tag()) != "DisplayLayout") {
 		UpdateUIState(UISTATE_MENU);
-		manager->push(new DisplayLayoutScreen());
-	} else if (!strcmp(message, "settings") && isActiveScreen && activeScreen->tag() != "settings") {
+		manager->push(new DisplayLayoutScreen(Path()));
+	} else if (!strcmp(message, "settings") && isActiveScreen && std::string(activeScreen->tag()) != "GameSettings") {
 		UpdateUIState(UISTATE_MENU);
 		manager->push(new GameSettingsScreen(Path()));
 	} else if (!strcmp(message, "language screen") && isActiveScreen) {
-		auto dev = GetI18NCategory("Developer");
-		auto langScreen = new NewLanguageScreen(dev->T("Language"));
+		auto sy = GetI18NCategory("System");
+		auto langScreen = new NewLanguageScreen(sy->T("Language"));
 		langScreen->OnChoice.Add([](UI::EventParams &) {
 			NativeMessageReceived("recreateviews", "");
 			if (host) {
@@ -427,7 +455,7 @@ void UIScreenWithGameBackground::DrawBackground(UIContext &dc) {
 	float x, y, z;
 	screenManager()->getFocusPosition(x, y, z);
 	if (!gamePath_.empty()) {
-		DrawGameBackground(dc, gamePath_, x, y, z);
+		DrawGameBackground(dc, gamePath_, x, y, z, darkenGameBackground_);
 	} else {
 		::DrawBackground(dc, 1.0f, x, y, z);
 		dc.Flush();
@@ -443,9 +471,11 @@ void UIScreenWithGameBackground::sendMessage(const char *message, const char *va
 }
 
 void UIDialogScreenWithGameBackground::DrawBackground(UIContext &dc) {
+	using namespace UI;
+	using namespace Draw;
 	float x, y, z;
 	screenManager()->getFocusPosition(x, y, z);
-	DrawGameBackground(dc, gamePath_, x, y, z);
+	DrawGameBackground(dc, gamePath_, x, y, z, darkenGameBackground_);
 }
 
 void UIDialogScreenWithGameBackground::sendMessage(const char *message, const char *value) {
@@ -477,8 +507,8 @@ void UIDialogScreenWithBackground::sendMessage(const char *message, const char *
 	HandleCommonMessages(message, value, screenManager(), this);
 }
 
-PromptScreen::PromptScreen(std::string message, std::string yesButtonText, std::string noButtonText, std::function<void(bool)> callback)
-		: message_(message), callback_(callback) {
+PromptScreen::PromptScreen(const Path &gamePath, std::string message, std::string yesButtonText, std::string noButtonText, std::function<void(bool)> callback)
+	: UIDialogScreenWithGameBackground(gamePath), message_(message), callback_(callback) {
 	auto di = GetI18NCategory("Dialog");
 	yesButtonText_ = di->T(yesButtonText.c_str());
 	noButtonText_ = di->T(noButtonText.c_str());
@@ -521,7 +551,7 @@ void PromptScreen::TriggerFinish(DialogResult result) {
 	UIDialogScreenWithBackground::TriggerFinish(result);
 }
 
-PostProcScreen::PostProcScreen(const std::string &title, int id) : ListPopupScreen(title), id_(id) { }
+PostProcScreen::PostProcScreen(const std::string &title, int id, bool showStereoShaders) : ListPopupScreen(title), id_(id), showStereoShaders_(showStereoShaders) { }
 
 void PostProcScreen::CreateViews() {
 	auto ps = GetI18NCategory("PostShaders");
@@ -530,12 +560,16 @@ void PostProcScreen::CreateViews() {
 	std::vector<std::string> items;
 	int selected = -1;
 	const std::string selectedName = id_ >= (int)g_Config.vPostShaderNames.size() ? "Off" : g_Config.vPostShaderNames[id_];
+
 	for (int i = 0; i < (int)shaders_.size(); i++) {
 		if (!shaders_[i].visible)
 			continue;
+		if (shaders_[i].isStereo != showStereoShaders_)
+			continue;
 		if (shaders_[i].section == selectedName)
-			selected = i;
+			selected = (int)indexTranslation_.size();
 		items.push_back(ps->T(shaders_[i].section.c_str(), shaders_[i].name.c_str()));
+		indexTranslation_.push_back(i);
 	}
 	adaptor_ = UI::StringVectorListAdaptor(items, selected);
 	ListPopupScreen::CreateViews();
@@ -544,11 +578,16 @@ void PostProcScreen::CreateViews() {
 void PostProcScreen::OnCompleted(DialogResult result) {
 	if (result != DR_OK)
 		return;
-	const std::string &value = shaders_[listView_->GetSelected()].section;
-	if (id_ < (int)g_Config.vPostShaderNames.size())
-		g_Config.vPostShaderNames[id_] = value;
-	else
-		g_Config.vPostShaderNames.push_back(value);
+	const std::string &value = shaders_[indexTranslation_[listView_->GetSelected()]].section;
+	// I feel this logic belongs more in the caller, but eh...
+	if (showStereoShaders_) {
+		g_Config.sStereoToMonoShader = value;
+	} else {
+		if (id_ < (int)g_Config.vPostShaderNames.size())
+			g_Config.vPostShaderNames[id_] = value;
+		else
+			g_Config.vPostShaderNames.push_back(value);
+	}
 }
 
 TextureShaderScreen::TextureShaderScreen(const std::string &title) : ListPopupScreen(title) {}

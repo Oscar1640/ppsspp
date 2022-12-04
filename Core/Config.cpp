@@ -616,6 +616,7 @@ static ConfigSetting generalSettings[] = {
 	ConfigSetting("PauseWhenMinimized", &g_Config.bPauseWhenMinimized, false, true, true),
 	ConfigSetting("DumpDecryptedEboots", &g_Config.bDumpDecryptedEboot, false, true, true),
 	ConfigSetting("FullscreenOnDoubleclick", &g_Config.bFullscreenOnDoubleclick, true, false, false),
+	ConfigSetting("ShowMenuBar", &g_Config.bShowMenuBar, true, true, false),
 
 	ReportedConfigSetting("MemStickInserted", &g_Config.bMemStickInserted, true, true, true),
 	ConfigSetting("EnablePlugins", &g_Config.bLoadPlugins, true, true, true),
@@ -702,7 +703,7 @@ const char * const vulkanDefaultBlacklist[] = {
 };
 
 static int DefaultGPUBackend() {
-	if (IsVRBuild()) {
+	if (IsVREnabled()) {
 		return (int)GPUBackend::OPENGL;
 	}
 
@@ -879,7 +880,8 @@ static ConfigSetting graphicsSettings[] = {
 #endif
 	ConfigSetting("CameraDevice", &g_Config.sCameraDevice, "", true, false),
 	ConfigSetting("VendorBugChecksEnabled", &g_Config.bVendorBugChecksEnabled, true, false, false),
-	ReportedConfigSetting("RenderingMode", &g_Config.iRenderingMode, 1, true, true),
+	ConfigSetting("UseGeometryShader", &g_Config.bUseGeometryShader, true, true, true),
+	ReportedConfigSetting("SkipBufferEffects", &g_Config.bSkipBufferEffects, false, true, true),
 	ConfigSetting("SoftwareRenderer", &g_Config.bSoftwareRendering, false, true, true),
 	ConfigSetting("SoftwareRendererJit", &g_Config.bSoftwareRenderingJit, true, true, true),
 	ReportedConfigSetting("HardwareTransform", &g_Config.bHardwareTransform, true, true, true),
@@ -892,6 +894,8 @@ static ConfigSetting graphicsSettings[] = {
 	ReportedConfigSetting("FrameSkip", &g_Config.iFrameSkip, 0, true, true),
 	ReportedConfigSetting("FrameSkipType", &g_Config.iFrameSkipType, 0, true, true),
 	ReportedConfigSetting("AutoFrameSkip", &g_Config.bAutoFrameSkip, false, true, true),
+	ConfigSetting("StereoRendering", &g_Config.bStereoRendering, false, true, true),
+	ConfigSetting("StereoToMonoShader", &g_Config.sStereoToMonoShader, "RedBlue", true, true),
 	ConfigSetting("FrameRate", &g_Config.iFpsLimit1, 0, true, true),
 	ConfigSetting("FrameRate2", &g_Config.iFpsLimit2, -1, true, true),
 	ConfigSetting("AnalogFrameRate", &g_Config.iAnalogFpsLimit, 240, true, true),
@@ -903,10 +907,10 @@ static ConfigSetting graphicsSettings[] = {
 
 	// Most low-performance (and many high performance) mobile GPUs do not support aniso anyway so defaulting to 4 is fine.
 	ConfigSetting("AnisotropyLevel", &g_Config.iAnisotropyLevel, 4, true, true),
+	ConfigSetting("MultiSampleLevel", &g_Config.iMultiSampleLevel, 0, true, true),  // Number of samples is 1 << iMultiSampleLevel
 
 	ReportedConfigSetting("VertexDecCache", &g_Config.bVertexCache, false, true, true),
 	ReportedConfigSetting("TextureBackoffCache", &g_Config.bTextureBackoffCache, false, true, true),
-	ReportedConfigSetting("TextureSecondaryCache", &g_Config.bTextureSecondaryCache, false, true, true),
 	ReportedConfigSetting("VertexDecJit", &g_Config.bVertexDecoderJit, &DefaultCodeGen, false),
 
 #ifndef MOBILE_DEVICE
@@ -914,10 +918,12 @@ static ConfigSetting graphicsSettings[] = {
 	ConfigSetting("FullScreenMulti", &g_Config.bFullScreenMulti, false),
 #endif
 
-	ConfigSetting("SmallDisplayZoomType", &g_Config.iSmallDisplayZoomType, &DefaultZoomType, true, true),
-	ConfigSetting("SmallDisplayOffsetX", &g_Config.fSmallDisplayOffsetX, 0.5f, true, true),
-	ConfigSetting("SmallDisplayOffsetY", &g_Config.fSmallDisplayOffsetY, 0.5f, true, true),
-	ConfigSetting("SmallDisplayZoomLevel", &g_Config.fSmallDisplayZoomLevel, 1.0f, true, true),
+	ConfigSetting("DisplayOffsetX", &g_Config.fDisplayOffsetX, 0.5f, true, true),
+	ConfigSetting("DisplayOffsetY", &g_Config.fDisplayOffsetY, 0.5f, true, true),
+	ConfigSetting("DisplayScale", &g_Config.fDisplayScale, 1.0f, true, true),
+	ConfigSetting("DisplayAspectRatio", &g_Config.fDisplayAspectRatio, 1.0f, true, true),
+	ConfigSetting("DisplayStretch", &g_Config.bDisplayStretch, false, true, true),
+
 	ConfigSetting("ImmersiveMode", &g_Config.bImmersiveMode, true, true, true),
 	ConfigSetting("SustainedPerformanceMode", &g_Config.bSustainedPerformanceMode, false, true, true),
 
@@ -942,11 +948,9 @@ static ConfigSetting graphicsSettings[] = {
 	ConfigSetting("TextureShader", &g_Config.sTextureShaderName, "Off", true, true),
 	ConfigSetting("ShaderChainRequires60FPS", &g_Config.bShaderChainRequires60FPS, false, true, true),
 
-	ReportedConfigSetting("MemBlockTransferGPU", &g_Config.bBlockTransferGPU, true, true, true),
-	ReportedConfigSetting("FragmentTestCache", &g_Config.bFragmentTestCache, true, true, true),
+	ReportedConfigSetting("SkipGPUReadbacks", &g_Config.bSkipGPUReadbacks, false, true, true),
 
 	ConfigSetting("GfxDebugOutput", &g_Config.bGfxDebugOutput, false, false, false),
-	ConfigSetting("GfxDebugSplitSubmit", &g_Config.bGfxDebugSplitSubmit, false, false, false),
 	ConfigSetting("LogFrameDrops", &g_Config.bLogFrameDrops, false, true, false),
 
 	ConfigSetting("InflightFrames", &g_Config.iInflightFrames, 3, true, false),
@@ -1222,9 +1226,15 @@ static ConfigSetting vrSettings[] = {
 	ConfigSetting("VREnable", &g_Config.bEnableVR, true),
 	ConfigSetting("VREnable6DoF", &g_Config.bEnable6DoF, true),
 	ConfigSetting("VREnableStereo", &g_Config.bEnableStereo, false),
-	ConfigSetting("VRCanvasDistance", &g_Config.iCanvasDistance, 6),
-	ConfigSetting("VRFieldOfView", &g_Config.iFieldOfViewPercentage, 100),
-	ConfigSetting("VRStereoSeparation", &g_Config.iStereoSeparation, 10),
+	ConfigSetting("VREnableMotions", &g_Config.bEnableMotions, true),
+	ConfigSetting("VRbForce72Hz", &g_Config.bForce72Hz, true),
+	ConfigSetting("VRCameraDistance", &g_Config.fCameraDistance, 0.0f),
+	ConfigSetting("VRCameraHeight", &g_Config.fCameraHeight, 0.0f),
+	ConfigSetting("VRCameraSide", &g_Config.fCameraSide, 0.0f),
+	ConfigSetting("VRCanvasDistance", &g_Config.fCanvasDistance, 6.0f),
+	ConfigSetting("VRFieldOfView", &g_Config.fFieldOfViewPercentage, 100.0f),
+	ConfigSetting("VRHeadUpDisplayScale", &g_Config.fHeadUpDisplayScale, 0.3f),
+	ConfigSetting("VRMotionLength", &g_Config.fMotionLength, 0.5f),
 
 	ConfigSetting(false),
 };
@@ -1418,9 +1428,6 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 	if (iAnisotropyLevel > 4) {
 		iAnisotropyLevel = 4;
 	}
-	if (iRenderingMode != FB_NON_BUFFERED_MODE && iRenderingMode != FB_BUFFERED_MODE) {
-		g_Config.iRenderingMode = FB_BUFFERED_MODE;
-	}
 
 	// Check for an old dpad setting
 	Section *control = iniFile.GetOrCreateSection("Control");
@@ -1439,7 +1446,7 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 	// build of PPSSPP, receive an upgrade notice, then start a newer version, and still receive the upgrade notice,
 	// even if said newer version is >= the upgrade found online.
 	if ((dismissedVersion == upgradeVersion) || (versionsValid && (installed >= upgrade))) {
-		upgradeMessage = "";
+		upgradeMessage.clear();
 	}
 
 	// Check for new version on every 10 runs.
@@ -1471,14 +1478,14 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 	if (sMACAddress.length() != 17)
 		sMACAddress = CreateRandMAC();
 
-	if (g_Config.bAutoFrameSkip && g_Config.iRenderingMode == FB_NON_BUFFERED_MODE) {
-		g_Config.iRenderingMode = FB_BUFFERED_MODE;
+	if (g_Config.bAutoFrameSkip && g_Config.bSkipBufferEffects) {
+		g_Config.bSkipBufferEffects = false;
 	}
 
 	// Override ppsspp.ini JIT value to prevent crashing
 	if (DefaultCpuCore() != (int)CPUCore::JIT && g_Config.iCpuCore == (int)CPUCore::JIT) {
 		jitForcedOff = true;
-		g_Config.iCpuCore = (int)CPUCore::INTERPRETER;
+		g_Config.iCpuCore = (int)CPUCore::IR_JIT;
 	}
 
 	// Automatically silence secondary instances. Could be an option I guess, but meh.
@@ -1600,11 +1607,8 @@ bool Config::Save(const char *saveReason) {
 	}
 	if (jitForcedOff) {
 		// force JIT off again just in case Config::Save() is called without exiting PPSSPP
-#if PPSSPP_PLATFORM(IOS)
-		g_Config.iCpuCore = (int)CPUCore::IR_JIT;
-#else
-		g_Config.iCpuCore = (int)CPUCore::INTERPRETER;
-#endif
+		if (g_Config.iCpuCore != (int)CPUCore::INTERPRETER)
+			g_Config.iCpuCore = (int)CPUCore::IR_JIT;
 	}
 	return true;
 }
@@ -1651,16 +1655,16 @@ void Config::DownloadCompletedCallback(http::Download &download) {
 
 	if (installed >= upgrade) {
 		INFO_LOG(LOADER, "Version check: Already up to date, erasing any upgrade message");
-		g_Config.upgradeMessage = "";
+		g_Config.upgradeMessage.clear();
 		g_Config.upgradeVersion = upgrade.ToString();
-		g_Config.dismissedVersion = "";
+		g_Config.dismissedVersion.clear();
 		return;
 	}
 
 	if (installed < upgrade && dismissed != upgrade) {
 		g_Config.upgradeMessage = "New version of PPSSPP available!";
 		g_Config.upgradeVersion = upgrade.ToString();
-		g_Config.dismissedVersion = "";
+		g_Config.dismissedVersion.clear();
 	}
 }
 
@@ -1993,5 +1997,5 @@ void Config::GetReportingInfo(UrlEncoder &data) {
 }
 
 bool Config::IsPortrait() const {
-	return (iInternalScreenRotation == ROTATION_LOCKED_VERTICAL || iInternalScreenRotation == ROTATION_LOCKED_VERTICAL180) && iRenderingMode != FB_NON_BUFFERED_MODE;
+	return (iInternalScreenRotation == ROTATION_LOCKED_VERTICAL || iInternalScreenRotation == ROTATION_LOCKED_VERTICAL180) && !bSkipBufferEffects;
 }

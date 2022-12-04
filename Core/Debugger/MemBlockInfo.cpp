@@ -399,12 +399,41 @@ void FlushPendingMemInfo() {
 	pendingNotifyMaxAddr2 = 0;
 }
 
+static inline uint32_t NormalizeAddress(uint32_t addr) {
+	if ((addr & 0x3F000000) == 0x04000000)
+		return addr & 0x041FFFFF;
+	return addr & 0x3FFFFFFF;
+}
+
+static inline bool MergeRecentMemInfo(const PendingNotifyMem &info, size_t copyLength) {
+	if (pendingNotifies.size() < 4)
+		return false;
+
+	for (size_t i = 1; i <= 4; ++i) {
+		auto &prev = pendingNotifies[pendingNotifies.size() - i];
+		if (prev.start >= info.start + info.size || prev.start + prev.size <= info.start)
+			continue;
+
+		// This means there's overlap, but not a match, so we can't combine any.
+		if (prev.start != info.start || prev.size > info.size)
+			return false;
+
+		memcpy(prev.tag, info.tag, copyLength + 1);
+		prev.size = info.size;
+		prev.ticks = info.ticks;
+		prev.pc = info.pc;
+		return true;
+	}
+
+	return false;
+}
+
 void NotifyMemInfoPC(MemBlockFlags flags, uint32_t start, uint32_t size, uint32_t pc, const char *tagStr, size_t strLength) {
 	if (size == 0) {
 		return;
 	}
 	// Clear the uncached and kernel bits.
-	start &= ~0xC0000000;
+	start = NormalizeAddress(start);
 
 	bool needFlush = false;
 	// When the setting is off, we skip smaller info to keep things fast.
@@ -421,14 +450,17 @@ void NotifyMemInfoPC(MemBlockFlags flags, uint32_t start, uint32_t size, uint32_
 		info.tag[copyLength] = 0;
 
 		std::lock_guard<std::mutex> guard(pendingMutex);
-		if (start < 0x08000000) {
-			pendingNotifyMinAddr1 = std::min(pendingNotifyMinAddr1.load(), start);
-			pendingNotifyMaxAddr1 = std::max(pendingNotifyMaxAddr1.load(), start + size);
-		} else {
-			pendingNotifyMinAddr2 = std::min(pendingNotifyMinAddr2.load(), start);
-			pendingNotifyMaxAddr2 = std::max(pendingNotifyMaxAddr2.load(), start + size);
+		// Sometimes we get duplicates, quickly check.
+		if (!MergeRecentMemInfo(info, copyLength)) {
+			if (start < 0x08000000) {
+				pendingNotifyMinAddr1 = std::min(pendingNotifyMinAddr1.load(), start);
+				pendingNotifyMaxAddr1 = std::max(pendingNotifyMaxAddr1.load(), start + size);
+			} else {
+				pendingNotifyMinAddr2 = std::min(pendingNotifyMinAddr2.load(), start);
+				pendingNotifyMaxAddr2 = std::max(pendingNotifyMaxAddr2.load(), start + size);
+			}
+			pendingNotifies.push_back(info);
 		}
-		pendingNotifies.push_back(info);
 		needFlush = pendingNotifies.size() > MAX_PENDING_NOTIFIES;
 	}
 
@@ -450,7 +482,7 @@ void NotifyMemInfo(MemBlockFlags flags, uint32_t start, uint32_t size, const cha
 }
 
 std::vector<MemBlockInfo> FindMemInfo(uint32_t start, uint32_t size) {
-	start &= ~0xC0000000;
+	start = NormalizeAddress(start);
 
 	if (pendingNotifyMinAddr1 < start + size && pendingNotifyMaxAddr1 >= start)
 		FlushPendingMemInfo();
@@ -466,7 +498,7 @@ std::vector<MemBlockInfo> FindMemInfo(uint32_t start, uint32_t size) {
 }
 
 std::vector<MemBlockInfo> FindMemInfoByFlag(MemBlockFlags flags, uint32_t start, uint32_t size) {
-	start &= ~0xC0000000;
+	start = NormalizeAddress(start);
 
 	if (pendingNotifyMinAddr1 < start + size && pendingNotifyMaxAddr1 >= start)
 		FlushPendingMemInfo();
@@ -486,7 +518,7 @@ std::vector<MemBlockInfo> FindMemInfoByFlag(MemBlockFlags flags, uint32_t start,
 }
 
 static const char *FindWriteTagByFlag(MemBlockFlags flags, uint32_t start, uint32_t size) {
-	start &= ~0xC0000000;
+	start = NormalizeAddress(start);
 
 	if (pendingNotifyMinAddr1 < start + size && pendingNotifyMaxAddr1 >= start)
 		FlushPendingMemInfo();

@@ -99,14 +99,14 @@ void DrawEngineDX9::ApplyDrawState(int prim) {
 	if (!gstate.isModeClear()) {
 		textureCache_->ApplyTexture();
 
-		if (fboTexNeedsBind_) {
+		if (fboTexBindState_ == FBO_TEX_COPY_BIND_TEX) {
 			// Note that this is positions, not UVs, that we need the copy from.
-			framebufferManager_->BindFramebufferAsColorTexture(1, framebufferManager_->GetCurrentRenderVFB(), BINDFBCOLOR_MAY_COPY);
+			framebufferManager_->BindFramebufferAsColorTexture(1, framebufferManager_->GetCurrentRenderVFB(), BINDFBCOLOR_MAY_COPY, 0);
 			// If we are rendering at a higher resolution, linear is probably best for the dest color.
 			device_->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 			device_->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 			fboTexBound_ = true;
-			fboTexNeedsBind_ = false;
+			fboTexBindState_ = FBO_TEX_NONE;
 		}
 
 		// TODO: Test texture?
@@ -127,26 +127,29 @@ void DrawEngineDX9::ApplyDrawState(int prim) {
 			}
 			dxstate.colorMask.set(mask);
 		} else {
-			pipelineState_.Convert(draw_->GetDeviceCaps().fragmentShaderInt32Supported);
+			pipelineState_.Convert(draw_->GetShaderLanguageDesc().bitwiseOps);
 			GenericMaskState &maskState = pipelineState_.maskState;
 			GenericBlendState &blendState = pipelineState_.blendState;
 			// We ignore the logicState on D3D since there's no support, the emulation of it is blend-and-shader only.
 
 			if (pipelineState_.FramebufferRead()) {
-				bool fboTexNeedsBind = false;
-				ApplyFramebufferRead(&fboTexNeedsBind);
+				ApplyFramebufferRead(&fboTexBindState_);
 				// The shader takes over the responsibility for blending, so recompute.
 				ApplyStencilReplaceAndLogicOpIgnoreBlend(blendState.replaceAlphaWithStencil, blendState);
 
-				if (fboTexNeedsBind) {
+				if (fboTexBindState_ == FBO_TEX_COPY_BIND_TEX) {
 					// Note that this is positions, not UVs, that we need the copy from.
-					framebufferManager_->BindFramebufferAsColorTexture(1, framebufferManager_->GetCurrentRenderVFB(), BINDFBCOLOR_MAY_COPY);
+					framebufferManager_->BindFramebufferAsColorTexture(1, framebufferManager_->GetCurrentRenderVFB(), BINDFBCOLOR_MAY_COPY, Draw::ALL_LAYERS);
 					// If we are rendering at a higher resolution, linear is probably best for the dest color.
 					device_->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 					device_->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 					fboTexBound_ = true;
+					fboTexBindState_ = FBO_TEX_NONE;
 					dirtyRequiresRecheck_ |= DIRTY_BLEND_STATE;
 					gstate_c.Dirty(DIRTY_BLEND_STATE);
+				} else if (fboTexBindState_ == FBO_TEX_READ_FRAMEBUFFER) {
+					// Not supported.
+					fboTexBindState_ = FBO_TEX_NONE;
 				}
 
 				dirtyRequiresRecheck_ |= DIRTY_FRAGMENTSHADER_STATE;
@@ -225,10 +228,11 @@ void DrawEngineDX9::ApplyDrawState(int prim) {
 			}
 		} else {
 			// Depth Test
-			if (gstate.isDepthTestEnabled()) {
+			if (!IsDepthTestEffectivelyDisabled()) {
 				dxstate.depthTest.enable();
 				dxstate.depthFunc.set(ztests[gstate.getDepthTestFunction()]);
 				dxstate.depthWrite.set(gstate.isDepthWriteEnabled());
+				UpdateEverUsedEqualDepth(gstate.getDepthTestFunction());
 			} else {
 				dxstate.depthTest.disable();
 			}

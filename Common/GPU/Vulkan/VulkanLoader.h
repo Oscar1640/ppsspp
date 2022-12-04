@@ -224,6 +224,7 @@ extern PFN_vkGetImageMemoryRequirements2KHR vkGetImageMemoryRequirements2KHR;
 extern PFN_vkGetMemoryHostPointerPropertiesEXT vkGetMemoryHostPointerPropertiesEXT;
 extern PFN_vkGetPhysicalDeviceProperties2KHR vkGetPhysicalDeviceProperties2KHR;
 extern PFN_vkGetPhysicalDeviceFeatures2KHR vkGetPhysicalDeviceFeatures2KHR;
+extern PFN_vkCreateRenderPass2KHR vkCreateRenderPass2KHR;
 } // namespace PPSSPP_VK
 
 // For fast extension-enabled checks.
@@ -241,6 +242,8 @@ struct VulkanExtensions {
 	bool KHR_depth_stencil_resolve;
 	bool EXT_shader_stencil_export;
 	bool EXT_swapchain_colorspace;
+	bool ARM_rasterization_order_attachment_access;
+	bool EXT_fragment_shader_interlock;
 	// bool EXT_depth_range_unrestricted;  // Allows depth outside [0.0, 1.0] in 32-bit float depth buffers.
 };
 
@@ -252,3 +255,5 @@ bool VulkanLoad();
 void VulkanLoadInstanceFunctions(VkInstance instance, const VulkanExtensions &enabledExtensions);
 void VulkanLoadDeviceFunctions(VkDevice device, const VulkanExtensions &enabledExtensions);
 void VulkanFree();
+
+const char *VulkanResultToString(VkResult res);

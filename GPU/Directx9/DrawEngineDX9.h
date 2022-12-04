@@ -144,6 +144,7 @@ protected:
 	void DecimateTrackedVertexArrays();
 
 private:
+	void Invalidate(InvalidationCallbackFlags flags);
 	void DoFlush();
 
 	void ApplyDrawState(int prim);
@@ -169,6 +170,8 @@ private:
 
 	// Hardware tessellation
 	TessellationDataTransferDX9 *tessDataTransferDX9;
+
+	FBOTexState fboTexBindState_ = FBO_TEX_NONE;
 
 	int lastRenderStepId_ = -1;
 

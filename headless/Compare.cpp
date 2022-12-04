@@ -305,11 +305,18 @@ bool CompareOutput(const Path &bootFilename, const std::string &output, bool ver
 	}
 }
 
-inline int ComparePixel(u32 pix1, u32 pix2) {
-	// For now, if they're different at all except alpha, it's an error.
-	if ((pix1 & 0xFFFFFF) != (pix2 & 0xFFFFFF))
-		return 1;
-	return 0;
+static inline double CompareChannel(int pix1, int pix2) {
+	double diff = pix1 - pix2;
+	return diff * diff;
+}
+
+static inline double ComparePixel(u32 pix1, u32 pix2) {
+	// Ignore alpha.
+	double r = CompareChannel(pix1 & 0xFF, pix2 & 0xFF);
+	double g = CompareChannel((pix1 >> 8) & 0xFF, (pix2 >> 8) & 0xFF);
+	double b = CompareChannel((pix1 >> 16) & 0xFF, (pix2 >> 16) & 0xFF);
+
+	return r + g + b;
 }
 
 std::vector<u32> TranslateDebugBufferToCompare(const GPUDebugBuffer *buffer, u32 stride, u32 h) {
@@ -338,7 +345,6 @@ std::vector<u32> TranslateDebugBufferToCompare(const GPUDebugBuffer *buffer, u32
 		dst += (h - safeH) * stride;
 	}
 
-	u32 errors = 0;
 	for (u32 y = 0; y < safeH; ++y) {
 		switch (buffer->GetFormat()) {
 		case GPU_DBG_FORMAT_8888:
@@ -393,6 +399,7 @@ double ScreenshotComparer::Compare(const Path &screenshotFilename) {
 
 		if (header[0] == 'B' && header[1] == 'M') {
 			reference_ = (u32 *)calloc(stride_ * h_, sizeof(u32));
+			referenceStride_ = stride_;
 			asBitmap_ = true;
 			// The bitmap header is 14 + 40 bytes.  We could validate it but the test would fail either way.
 			if (reference_ && loader->ReadAt(14 + 40, sizeof(u32), stride_ * h_, reference_) != stride_ * h_) {
@@ -418,6 +425,8 @@ double ScreenshotComparer::Compare(const Path &screenshotFilename) {
 				reference_ = nullptr;
 				return -1.0f;
 			}
+
+			referenceStride_ = width;
 		}
 	} else {
 		error_ = "Unable to read screenshot: " + screenshotFilename.ToVisualString();
@@ -429,25 +438,26 @@ double ScreenshotComparer::Compare(const Path &screenshotFilename) {
 		return -1.0f;
 	}
 
-	u32 errors = 0;
+	double errors = 0;
 	if (asBitmap_) {
 		// The reference is flipped and BGRA by default for the common BMP compare case.
 		for (u32 y = 0; y < h_; ++y) {
-			u32 yoff = y * stride_;
+			u32 yoff = y * referenceStride_;
 			for (u32 x = 0; x < w_; ++x)
 				errors += ComparePixel(pixels_[y * stride_ + x], reference_[yoff + x]);
 		}
 	} else {
 		// Just convert to BGRA for simplicity.
-		ConvertRGBA8888ToBGRA8888(reference_, reference_, h_ * stride_);
+		ConvertRGBA8888ToBGRA8888(reference_, reference_, h_ * referenceStride_);
 		for (u32 y = 0; y < h_; ++y) {
-			u32 yoff = (h_ - y - 1) * stride_;
+			u32 yoff = (h_ - y - 1) * referenceStride_;
 			for (u32 x = 0; x < w_; ++x)
 				errors += ComparePixel(pixels_[y * stride_ + x], reference_[yoff + x]);
 		}
 	}
 
-	return (double) errors / (double) (w_ * h_);
+	// Convert to MSE, accounting for all three channels (RGB.)
+	return errors / (double)(w_ * h_ * 3);
 }
 
 bool ScreenshotComparer::SaveActualBitmap(const Path &resultFilename) {
@@ -479,7 +489,7 @@ bool ScreenshotComparer::SaveVisualComparisonPNG(const Path &resultFilename) {
 	if (asBitmap_) {
 		// The reference is flipped and BGRA by default for the common BMP compare case.
 		for (u32 y = 0; y < h_; ++y) {
-			u32 yoff = y * stride_;
+			u32 yoff = y * referenceStride_;
 			u32 comparisonRow = (h_ - y - 1) * 2 * w_ * 2;
 			for (u32 x = 0; x < w_; ++x) {
 				PlotVisualComparison(comparison.get(), comparisonRow + x * 2, pixels_[y * stride_ + x], reference_[yoff + x]);
@@ -488,7 +498,7 @@ bool ScreenshotComparer::SaveVisualComparisonPNG(const Path &resultFilename) {
 	} else {
 		// Reference is already in BGRA either way.
 		for (u32 y = 0; y < h_; ++y) {
-			u32 yoff = (h_ - y - 1) * stride_;
+			u32 yoff = (h_ - y - 1) * referenceStride_;
 			u32 comparisonRow = (h_ - y - 1) * 2 * w_ * 2;
 			for (u32 x = 0; x < w_; ++x) {
 				PlotVisualComparison(comparison.get(), comparisonRow + x * 2, pixels_[y * stride_ + x], reference_[yoff + x]);

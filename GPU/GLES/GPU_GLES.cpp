@@ -22,6 +22,7 @@
 #include "Common/Serialize/Serializer.h"
 #include "Common/File/FileUtil.h"
 #include "Common/GraphicsContext.h"
+#include "Common/VR/PPSSPPVR.h"
 
 #include "Core/Config.h"
 #include "Core/Debugger/Breakpoints.h"
@@ -54,7 +55,7 @@
 GPU_GLES::GPU_GLES(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	: GPUCommon(gfxCtx, draw), drawEngine_(draw), fragmentTestCache_(draw) {
 	UpdateVsyncInterval(true);
-	CheckGPUFeatures();
+	gstate_c.useFlags = CheckGPUFeatures();
 
 	shaderManagerGL_ = new ShaderManagerGLES(draw);
 	framebufferManagerGL_ = new FramebufferManagerGLES(draw);
@@ -143,113 +144,69 @@ GPU_GLES::~GPU_GLES() {
 	shaderManagerGL_ = nullptr;
 	delete framebufferManagerGL_;
 	delete textureCacheGL_;
+
+	// Clear features so they're not visible in system info.
+	gstate_c.useFlags = 0;
 }
 
 // Take the raw GL extension and versioning data and turn into feature flags.
 // TODO: This should use DrawContext::GetDeviceCaps() more and more, and eventually
 // this can be shared between all the backends.
-void GPU_GLES::CheckGPUFeatures() {
-	u32 features = 0;
+u32 GPU_GLES::CheckGPUFeatures() const {
+	u32 features = GPUCommon::CheckGPUFeatures();
 
-	features |= GPU_SUPPORTS_16BIT_FORMATS;
-
-	if (draw_->GetDeviceCaps().dualSourceBlend) {
-		if (!g_Config.bVendorBugChecksEnabled || !draw_->GetBugs().Has(Draw::Bugs::DUAL_SOURCE_BLENDING_BROKEN)) {
-			features |= GPU_SUPPORTS_DUALSOURCE_BLEND;
-		}
-	}
-
-	if (gl_extensions.EXT_shader_framebuffer_fetch || gl_extensions.ARM_shader_framebuffer_fetch) {
-		// This has caused problems in the past.  Let's only enable on GLES3.
-		if (gl_extensions.GLES3) {
-			features |= GPU_SUPPORTS_ANY_FRAMEBUFFER_FETCH;
-		}
-	}
-
-	if ((gl_extensions.gpuVendor == GPU_VENDOR_NVIDIA) || (gl_extensions.gpuVendor == GPU_VENDOR_AMD))
-		features |= GPU_PREFER_REVERSE_COLOR_ORDER;
-
-	if (draw_->GetDeviceCaps().textureNPOTFullySupported)
-		features |= GPU_SUPPORTS_TEXTURE_NPOT;
-
-	if (gl_extensions.EXT_blend_minmax)
-		features |= GPU_SUPPORTS_BLEND_MINMAX;
-
-	if (draw_->GetDeviceCaps().logicOpSupported)
-		features |= GPU_SUPPORTS_LOGIC_OP;
+	features |= GPU_USE_16BIT_FORMATS;
 
 	if (gl_extensions.GLES3 || !gl_extensions.IsGLES)
-		features |= GPU_SUPPORTS_TEXTURE_LOD_CONTROL;
-
-	if (draw_->GetDeviceCaps().anisoSupported)
-		features |= GPU_SUPPORTS_ANISOTROPY;
+		features |= GPU_USE_TEXTURE_LOD_CONTROL;
 
 	bool canUseInstanceID = gl_extensions.EXT_draw_instanced || gl_extensions.ARB_draw_instanced;
 	bool canDefInstanceID = gl_extensions.IsGLES || gl_extensions.EXT_gpu_shader4 || gl_extensions.VersionGEThan(3, 1);
 	bool instanceRendering = gl_extensions.GLES3 || (canUseInstanceID && canDefInstanceID);
 	if (instanceRendering)
-		features |= GPU_SUPPORTS_INSTANCE_RENDERING;
+		features |= GPU_USE_INSTANCE_RENDERING;
 
 	int maxVertexTextureImageUnits = gl_extensions.maxVertexTextureUnits;
 	if (maxVertexTextureImageUnits >= 3) // At least 3 for hardware tessellation
-		features |= GPU_SUPPORTS_VERTEX_TEXTURE_FETCH;
+		features |= GPU_USE_VERTEX_TEXTURE_FETCH;
 
 	if (gl_extensions.ARB_texture_float || gl_extensions.OES_texture_float)
-		features |= GPU_SUPPORTS_TEXTURE_FLOAT;
+		features |= GPU_USE_TEXTURE_FLOAT;
 
-	if (draw_->GetDeviceCaps().depthClampSupported) {
-		features |= GPU_SUPPORTS_DEPTH_CLAMP | GPU_SUPPORTS_ACCURATE_DEPTH;
-		// Our implementation of depth texturing needs simple Z range, so can't
-		// use the extension hacks (yet).
+	// The Phantasy Star hack :(
+	if (PSP_CoreParameter().compat.flags().DepthRangeHack && (features & GPU_USE_ACCURATE_DEPTH) == 0) {
+		features |= GPU_USE_DEPTH_RANGE_HACK;
 	}
-	if (draw_->GetDeviceCaps().textureDepthSupported)
-		features |= GPU_SUPPORTS_DEPTH_TEXTURE;
-	if (draw_->GetDeviceCaps().clipDistanceSupported)
-		features |= GPU_SUPPORTS_CLIP_DISTANCE;
-	if (draw_->GetDeviceCaps().cullDistanceSupported)
-		features |= GPU_SUPPORTS_CULL_DISTANCE;
-	if (!draw_->GetBugs().Has(Draw::Bugs::BROKEN_NAN_IN_CONDITIONAL)) {
-		// Ignore the compat setting if clip and cull are both enabled.
-		// When supported, we can do the depth side of range culling more correctly.
-		const bool supported = draw_->GetDeviceCaps().clipDistanceSupported && draw_->GetDeviceCaps().cullDistanceSupported;
-		const bool disabled = PSP_CoreParameter().compat.flags().DisableRangeCulling;
-		if (supported || !disabled) {
-			features |= GPU_SUPPORTS_VS_RANGE_CULLING;
+
+	if (!draw_->GetShaderLanguageDesc().bitwiseOps) {
+		features |= GPU_USE_FRAGMENT_TEST_CACHE;
+	}
+
+	if (IsVREnabled()) {
+		features |= GPU_USE_VIRTUAL_REALITY;
+	}
+	if (IsMultiviewSupported()) {
+		features |= GPU_USE_SINGLE_PASS_STEREO;
+	}
+
+	features = CheckGPUFeaturesLate(features);
+
+	if (draw_->GetBugs().Has(Draw::Bugs::ADRENO_RESOURCE_DEADLOCK) && g_Config.bVendorBugChecksEnabled) {
+		if (PSP_CoreParameter().compat.flags().OldAdrenoPixelDepthRoundingGL) {
+			features |= GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT;
 		}
 	}
 
-	// If we already have a 16-bit depth buffer, we don't need to round.
-	bool prefer24 = draw_->GetDeviceCaps().preferredDepthBufferFormat == Draw::DataFormat::D24_S8;
-	if (prefer24) {
-		if (!g_Config.bHighQualityDepth && (features & GPU_SUPPORTS_ACCURATE_DEPTH) != 0) {
-			features |= GPU_SCALE_DEPTH_FROM_24BIT_TO_16BIT;
-		} else if (PSP_CoreParameter().compat.flags().PixelDepthRounding) {
-			if (!gl_extensions.IsGLES || gl_extensions.GLES3) {
-				// Use fragment rounding on desktop and GLES3, most accurate.
-				features |= GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT;
-			} else if (prefer24 && (features & GPU_SUPPORTS_ACCURATE_DEPTH) != 0) {
-				// Here we can simulate a 16 bit depth buffer by scaling.
-				// Note that the depth buffer is fixed point, not floating, so dividing by 256 is pretty good.
-				features |= GPU_SCALE_DEPTH_FROM_24BIT_TO_16BIT;
-			} else {
-				// At least do vertex rounding if nothing else.
-				features |= GPU_ROUND_DEPTH_TO_16BIT;
-			}
-		} else if (PSP_CoreParameter().compat.flags().VertexDepthRounding) {
+	// This is a bit ugly, but lets us reuse most of the depth logic in GPUCommon.
+	if (features & GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT) {
+		if (gl_extensions.IsGLES && !gl_extensions.GLES3) {
+			// Unsupported, switch to GPU_ROUND_DEPTH_TO_16BIT instead.
+			features &= ~GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT;
 			features |= GPU_ROUND_DEPTH_TO_16BIT;
 		}
 	}
 
-	// The Phantasy Star hack :(
-	if (PSP_CoreParameter().compat.flags().DepthRangeHack && (features & GPU_SUPPORTS_ACCURATE_DEPTH) == 0) {
-		features |= GPU_USE_DEPTH_RANGE_HACK;
-	}
-
-	if (PSP_CoreParameter().compat.flags().ClearToRAM) {
-		features |= GPU_USE_CLEAR_RAM_HACK;
-	}
-
-	gstate_c.featureFlags = features;
+	return features;
 }
 
 bool GPU_GLES::IsReady() {
@@ -319,16 +276,6 @@ void GPU_GLES::InitClear() {
 
 void GPU_GLES::BeginHostFrame() {
 	GPUCommon::BeginHostFrame();
-	UpdateCmdInfo();
-	if (resized_) {
-		CheckGPUFeatures();
-		framebufferManager_->Resized();
-		drawEngine_.Resized();
-		shaderManagerGL_->DirtyShader();
-		textureCache_->NotifyConfigChanged();
-		resized_ = false;
-	}
-
 	drawEngine_.BeginFrame();
 }
 
@@ -413,19 +360,6 @@ void GPU_GLES::GetStats(char *buffer, size_t bufsize) {
 		shaderManagerGL_->GetNumFragmentShaders(),
 		shaderManagerGL_->GetNumPrograms()
 	);
-}
-
-void GPU_GLES::ClearCacheNextFrame() {
-	textureCacheGL_->ClearNextFrame();
-}
-
-void GPU_GLES::ClearShaderCache() {
-	shaderManagerGL_->ClearCache(true);
-}
-
-void GPU_GLES::CleanupBeforeUI() {
-	// Clear any enabled vertex arrays.
-	shaderManagerGL_->DirtyLastShader();
 }
 
 void GPU_GLES::DoState(PointerWrap &p) {

@@ -150,11 +150,13 @@ public:
 
 	void ClearTrackedVertexArrays() override;
 
-	void Resized() override;
+	void NotifyConfigChanged() override;
 
 	void ClearInputLayoutMap();
 
 private:
+	void Invalidate(InvalidationCallbackFlags flags);
+
 	void DoFlush();
 
 	void ApplyDrawState(int prim);

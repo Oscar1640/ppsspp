@@ -17,6 +17,7 @@
 
 #include <cstring>
 
+#include "Common/Log.h"
 #include "Common/Data/Format/IniFile.h"
 #include "Common/StringUtils.h"
 #include "Core/Compatibility.h"
@@ -50,10 +51,28 @@ void Compatibility::Load(const std::string &gameID) {
 			CheckSettings(compat2, gameID);
 		}
 	}
+
+	{
+		IniFile compat;
+		// This loads from assets.
+		if (compat.LoadFromVFS("compatvr.ini")) {
+			CheckVRSettings(compat, gameID);
+		}
+	}
+
+	{
+		IniFile compat2;
+		// This one is user-editable. Need to load it after the system one.
+		Path path = GetSysDirectory(DIRECTORY_SYSTEM) / "compatvr.ini";
+		if (compat2.Load(path.ToString())) {
+			CheckVRSettings(compat2, gameID);
+		}
+	}
 }
 
 void Compatibility::Clear() {
 	memset(&flags_, 0, sizeof(flags_));
+	memset(&vrCompat_, 0, sizeof(vrCompat_));
 }
 
 void Compatibility::CheckSettings(IniFile &iniFile, const std::string &gameID) {
@@ -99,7 +118,6 @@ void Compatibility::CheckSettings(IniFile &iniFile, const std::string &gameID) {
 	CheckSetting(iniFile, gameID, "DateLimited", &flags_.DateLimited);
 	CheckSetting(iniFile, gameID, "ShaderColorBitmask", &flags_.ShaderColorBitmask);
 	CheckSetting(iniFile, gameID, "DisableFirstFrameReadback", &flags_.DisableFirstFrameReadback);
-	CheckSetting(iniFile, gameID, "DisableRangeCulling", &flags_.DisableRangeCulling);
 	CheckSetting(iniFile, gameID, "MpegAvcWarmUp", &flags_.MpegAvcWarmUp);
 	CheckSetting(iniFile, gameID, "BlueToAlpha", &flags_.BlueToAlpha);
 	CheckSetting(iniFile, gameID, "CenteredLines", &flags_.CenteredLines);
@@ -110,7 +128,21 @@ void Compatibility::CheckSettings(IniFile &iniFile, const std::string &gameID) {
 	CheckSetting(iniFile, gameID, "DeswizzleDepth", &flags_.DeswizzleDepth);
 	CheckSetting(iniFile, gameID, "SplitFramebufferMargin", &flags_.SplitFramebufferMargin);
 	CheckSetting(iniFile, gameID, "ForceLowerResolutionForEffectsOn", &flags_.ForceLowerResolutionForEffectsOn);
+	CheckSetting(iniFile, gameID, "ForceLowerResolutionForEffectsOff", &flags_.ForceLowerResolutionForEffectsOff);
 	CheckSetting(iniFile, gameID, "AllowDownloadCLUT", &flags_.AllowDownloadCLUT);
+	CheckSetting(iniFile, gameID, "NearestFilteringOnFramebufferCreate", &flags_.NearestFilteringOnFramebufferCreate);
+	CheckSetting(iniFile, gameID, "SecondaryTextureCache", &flags_.SecondaryTextureCache);
+	CheckSetting(iniFile, gameID, "EnglishOrJapaneseOnly", &flags_.EnglishOrJapaneseOnly);
+	CheckSetting(iniFile, gameID, "OldAdrenoPixelDepthRoundingGL", &flags_.OldAdrenoPixelDepthRoundingGL);
+	CheckSetting(iniFile, gameID, "ForceCircleButtonConfirm", &flags_.ForceCircleButtonConfirm);
+}
+
+void Compatibility::CheckVRSettings(IniFile &iniFile, const std::string &gameID) {
+	CheckSetting(iniFile, gameID, "IdentityViewHack", &vrCompat_.IdentityViewHack);
+	CheckSetting(iniFile, gameID, "Skyplane", &vrCompat_.Skyplane);
+	CheckSetting(iniFile, gameID, "UnitsPerMeter", &vrCompat_.UnitsPerMeter);
+
+	NOTICE_LOG(G3D, "UnitsPerMeter for %s: %f", gameID.c_str(), vrCompat_.UnitsPerMeter);
 }
 
 void Compatibility::CheckSetting(IniFile &iniFile, const std::string &gameID, const char *option, bool *flag) {
@@ -122,4 +154,10 @@ void Compatibility::CheckSetting(IniFile &iniFile, const std::string &gameID, co
 		iniFile.Get(option, "ALL", &all, false);
 		*flag |= all;
 	}
+}
+
+void Compatibility::CheckSetting(IniFile &iniFile, const std::string &gameID, const char *option, float *flag) {
+	std::string value;
+	iniFile.Get(option, gameID.c_str(), &value, "0");
+	*flag = stof(value);
 }

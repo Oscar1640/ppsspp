@@ -24,6 +24,12 @@
 #elif !defined(GL_CLIP_DISTANCE0)
 #define GL_CLIP_DISTANCE0 0x3000
 #endif
+#ifndef GL_DEPTH_STENCIL_TEXTURE_MODE
+#define GL_DEPTH_STENCIL_TEXTURE_MODE 0x90EA
+#endif
+#ifndef GL_STENCIL_INDEX
+#define GL_STENCIL_INDEX 0x1901
+#endif
 
 static constexpr int TEXCACHE_NAME_CACHE_SIZE = 16;
 
@@ -252,8 +258,8 @@ void GLQueueRunner::RunInitSteps(const std::vector<GLRInitStep> &steps, bool ski
 				ERROR_LOG(G3D, "Could not link program:\n %s", infoLog.c_str());
 				ERROR_LOG(G3D, "VS desc:\n%s", vsDesc.c_str());
 				ERROR_LOG(G3D, "FS desc:\n%s", fsDesc.c_str());
-				ERROR_LOG(G3D, "VS:\n%s\n", vsCode);
-				ERROR_LOG(G3D, "FS:\n%s\n", fsCode);
+				ERROR_LOG(G3D, "VS:\n%s\n", LineNumberString(vsCode).c_str());
+				ERROR_LOG(G3D, "FS:\n%s\n", LineNumberString(fsCode).c_str());
 
 #ifdef _WIN32
 				OutputDebugStringUTF8(infoLog.c_str());
@@ -274,7 +280,7 @@ void GLQueueRunner::RunInitSteps(const std::vector<GLRInitStep> &steps, bool ski
 				_dbg_assert_(query.name);
 
 				int location = -1;
-				if (IsVRBuild() && IsMultiviewSupported()) {
+				if (IsVREnabled() && IsMultiviewSupported()) {
 					int index = GetStereoBufferIndex(query.name);
 					if (index >= 0) {
 						std::string layout = GetStereoBufferLayout(query.name);
@@ -385,7 +391,7 @@ void GLQueueRunner::RunInitSteps(const std::vector<GLRInitStep> &steps, bool ski
 
 			GLenum internalFormat, format, type;
 			int alignment;
-			Thin3DFormatToFormatAndType(step.texture_image.format, internalFormat, format, type, alignment);
+			Thin3DFormatToGLFormatAndType(step.texture_image.format, internalFormat, format, type, alignment);
 			if (step.texture_image.depth == 1) {
 				glTexImage2D(tex->target,
 					step.texture_image.level, internalFormat,
@@ -642,8 +648,11 @@ retry_depth:
 	currentReadHandle_ = fbo->handle;
 }
 
-void GLQueueRunner::RunSteps(const std::vector<GLRStep *> &steps, bool skipGLCalls, bool keepSteps) {
+void GLQueueRunner::RunSteps(const std::vector<GLRStep *> &steps, bool skipGLCalls, bool keepSteps, bool useVR) {
 	if (skipGLCalls) {
+		if (keepSteps) {
+			return;
+		}
 		// Dry run
 		for (size_t i = 0; i < steps.size(); i++) {
 			const GLRStep &step = *steps[i];
@@ -698,7 +707,13 @@ void GLQueueRunner::RunSteps(const std::vector<GLRStep *> &steps, bool skipGLCal
 		switch (step.stepType) {
 		case GLRStepType::RENDER:
 			renderCount++;
-			PerformRenderPass(step, renderCount == 1, renderCount == totalRenderCount);
+			if (IsVREnabled()) {
+				GLRStep vrStep = step;
+				PreprocessStepVR(&vrStep);
+				PerformRenderPass(vrStep, renderCount == 1, renderCount == totalRenderCount);
+			} else {
+				PerformRenderPass(step, renderCount == 1, renderCount == totalRenderCount);
+			}
 			break;
 		case GLRStepType::COPY:
 			PerformCopy(step);
@@ -808,7 +823,7 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 	int logicOp = -1;
 	bool logicEnabled = false;
 #endif
-	bool clipDistance0Enabled = false;
+	bool clipDistanceEnabled[8]{};
 	GLuint blendEqColor = (GLuint)-1;
 	GLuint blendEqAlpha = (GLuint)-1;
 
@@ -1105,8 +1120,16 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 					glBindTexture(GL_TEXTURE_2D, c.bind_fb_texture.framebuffer->z_stencil_texture.texture);
 					curTex[slot] = &c.bind_fb_texture.framebuffer->z_stencil_texture;
 				}
+				// This should be uncommon, so always set the mode.
+				glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
+			} else if (c.bind_fb_texture.aspect == GL_STENCIL_BUFFER_BIT) {
+				if (curTex[slot] != &c.bind_fb_texture.framebuffer->z_stencil_texture) {
+					glBindTexture(GL_TEXTURE_2D, c.bind_fb_texture.framebuffer->z_stencil_texture.texture);
+					curTex[slot] = &c.bind_fb_texture.framebuffer->z_stencil_texture;
+				}
+				// This should be uncommon, so always set the mode.
+				glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_STENCIL_INDEX);
 			} else {
-				// Can't texture from stencil buffers.
 				curTex[slot] = nullptr;
 			}
 			CHECK_GL_ERROR_IF_DEBUG();
@@ -1116,14 +1139,18 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 		{
 			if (curProgram != c.program.program) {
 				glUseProgram(c.program.program->program);
-				if (c.program.program->use_clip_distance0 != clipDistance0Enabled) {
-					if (c.program.program->use_clip_distance0)
-						glEnable(GL_CLIP_DISTANCE0);
-					else
-						glDisable(GL_CLIP_DISTANCE0);
-					clipDistance0Enabled = c.program.program->use_clip_distance0;
-				}
 				curProgram = c.program.program;
+
+				for (size_t i = 0; i < ARRAY_SIZE(clipDistanceEnabled); ++i) {
+					if (c.program.program->use_clip_distance[i] == clipDistanceEnabled[i])
+						continue;
+
+					if (c.program.program->use_clip_distance[i])
+						glEnable(GL_CLIP_DISTANCE0 + (GLenum)i);
+					else
+						glDisable(GL_CLIP_DISTANCE0 + (GLenum)i);
+					clipDistanceEnabled[i] = c.program.program->use_clip_distance[i];
+				}
 			}
 			CHECK_GL_ERROR_IF_DEBUG();
 			break;
@@ -1276,7 +1303,7 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 			// For things to show in RenderDoc, need to split into glTexImage2D(..., nullptr) and glTexSubImage.
 			GLuint internalFormat, format, type;
 			int alignment;
-			Thin3DFormatToFormatAndType(c.texture_subimage.format, internalFormat, format, type, alignment);
+			Thin3DFormatToGLFormatAndType(c.texture_subimage.format, internalFormat, format, type, alignment);
 			glTexSubImage2D(tex->target, c.texture_subimage.level, c.texture_subimage.x, c.texture_subimage.y, c.texture_subimage.width, c.texture_subimage.height, format, type, c.texture_subimage.data);
 			if (c.texture_subimage.allocType == GLRAllocType::ALIGNED) {
 				FreeAlignedMemory(c.texture_subimage.data);
@@ -1363,8 +1390,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 		glDisable(GL_COLOR_LOGIC_OP);
 	}
 #endif
-	if (clipDistance0Enabled)
-		glDisable(GL_CLIP_DISTANCE0);
+	for (size_t i = 0; i < ARRAY_SIZE(clipDistanceEnabled); ++i) {
+		if (clipDistanceEnabled[i])
+			glDisable(GL_CLIP_DISTANCE0 + (GLenum)i);
+	}
 	if ((colorMask & 15) != 15)
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	CHECK_GL_ERROR_IF_DEBUG();
@@ -1574,6 +1603,9 @@ void GLQueueRunner::PerformBindFramebufferAsRenderTarget(const GLRStep &pass) {
 		fbo_bind_fb_target(false, curFB_->handle);
 	} else {
 		fbo_unbind();
+		if (IsVREnabled()) {
+			BindVRFramebuffer();
+		}
 		// Backbuffer is now bound.
 	}
 	CHECK_GL_ERROR_IF_DEBUG();
@@ -1725,10 +1757,6 @@ void GLQueueRunner::fbo_unbind() {
 #if PPSSPP_PLATFORM(IOS)
 	bindDefaultFBO();
 #endif
-
-	if (IsVRBuild()) {
-		BindVRFramebuffer();
-	}
 
 	currentDrawHandle_ = 0;
 	currentReadHandle_ = 0;

@@ -71,6 +71,8 @@ struct GLExtensions {
 	bool ARB_depth_clamp;
 	bool ARB_uniform_buffer_object;
 	bool ARB_texture_non_power_of_two;
+	bool ARB_stencil_texturing;
+	bool ARB_shader_stencil_export;
 
 	// EXT
 	bool EXT_swap_control_tear;
@@ -87,6 +89,7 @@ struct GLExtensions {
 	bool EXT_draw_instanced;
 	bool EXT_buffer_storage;
 	bool EXT_clip_cull_distance;
+	bool EXT_depth_clamp;
 
 	// NV
 	bool NV_copy_image;

@@ -316,7 +316,7 @@ void DisassemblyManager::getLine(u32 address, bool insertSymbols, DisassemblyLin
 		dest.params = "Disassembly failure";
 	} else {
 		dest.name = "-";
-		dest.params = "";
+		dest.params.clear();
 	}
 }
 
@@ -709,22 +709,8 @@ void DisassemblyFunction::load()
 				case 0x2B:	// sw
 					macro = new DisassemblyMacro(opAddress);
 					
-					int dataSize;
-					switch (nextInfo & MEMTYPE_MASK) {
-					case MEMTYPE_BYTE:
-						dataSize = 1;
-						break;
-					case MEMTYPE_HWORD:
-						dataSize = 2;
-						break;
-					case MEMTYPE_WORD:
-					case MEMTYPE_FLOAT:
-						dataSize = 4;
-						break;
-					case MEMTYPE_VQUAD:
-						dataSize = 16;
-						break;
-					default:
+					int dataSize = MIPSGetMemoryAccessSize(next);
+					if (dataSize == 0) {
 						delete macro;
 						return;
 					}
@@ -1003,7 +989,7 @@ void DisassemblyData::createLines()
 					lines[currentLineStart] = entry;
 					lineAddresses.push_back(currentLineStart);
 					
-					currentLine = "";
+					currentLine.clear();
 					currentLineStart = pos-1;
 					inString = false;
 				}
@@ -1028,7 +1014,7 @@ void DisassemblyData::createLines()
 					lines[currentLineStart] = entry;
 					lineAddresses.push_back(currentLineStart);
 					
-					currentLine = "";
+					currentLine.clear();
 					currentLineStart = pos-1;
 					inString = false;
 				}
@@ -1099,7 +1085,7 @@ void DisassemblyData::createLines()
 				lines[currentLineStart] = entry;
 				lineAddresses.push_back(currentLineStart);
 
-				currentLine = "";
+				currentLine.clear();
 				currentLineStart = currentPos;
 			}
 

@@ -57,7 +57,7 @@ std::string VulkanVendorString(uint32_t vendorId) {
 	case VULKAN_VENDOR_ARM: return "ARM";
 	case VULKAN_VENDOR_QUALCOMM: return "Qualcomm";
 	case VULKAN_VENDOR_IMGTEC: return "Imagination";
-
+	case VULKAN_VENDOR_APPLE: return "Apple";
 	default:
 		return StringFromFormat("%08x", vendorId);
 	}
@@ -253,15 +253,21 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 			VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
 			VkPhysicalDevicePushDescriptorPropertiesKHR pushProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR};
 			VkPhysicalDeviceExternalMemoryHostPropertiesEXT extHostMemProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+			VkPhysicalDeviceDepthStencilResolveProperties depthStencilResolveProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
+
 			props2.pNext = &pushProps;
 			pushProps.pNext = &extHostMemProps;
+			extHostMemProps.pNext = &depthStencilResolveProps;
 			vkGetPhysicalDeviceProperties2KHR(physical_devices_[i], &props2);
 			// Don't want bad pointers sitting around.
 			props2.pNext = nullptr;
 			pushProps.pNext = nullptr;
+			extHostMemProps.pNext = nullptr;
+			depthStencilResolveProps.pNext = nullptr;
 			physicalDeviceProperties_[i].properties = props2.properties;
 			physicalDeviceProperties_[i].pushDescriptorProperties = pushProps;
 			physicalDeviceProperties_[i].externalMemoryHostProperties = extHostMemProps;
+			physicalDeviceProperties_[i].depthStencilResolve = depthStencilResolveProps;
 		}
 	} else {
 		for (uint32_t i = 0; i < gpu_count; i++) {
@@ -329,7 +335,7 @@ bool VulkanContext::MemoryTypeFromProperties(uint32_t typeBits, VkFlags requirem
 	for (uint32_t i = 0; i < 32; i++) {
 		if ((typeBits & 1) == 1) {
 			// Type is available, does it match user properties?
-			if ((memory_properties.memoryTypes[i].propertyFlags & requirements_mask) == requirements_mask) {
+			if ((memory_properties_.memoryTypes[i].propertyFlags & requirements_mask) == requirements_mask) {
 				*typeIndex = i;
 				return true;
 			}
@@ -569,39 +575,48 @@ void VulkanContext::ChooseDevice(int physical_device) {
 	}
 
 	// This is as good a place as any to do this.
-	vkGetPhysicalDeviceMemoryProperties(physical_devices_[physical_device_], &memory_properties);
-	INFO_LOG(G3D, "Memory Types (%d):", memory_properties.memoryTypeCount);
-	for (int i = 0; i < (int)memory_properties.memoryTypeCount; i++) {
+	vkGetPhysicalDeviceMemoryProperties(physical_devices_[physical_device_], &memory_properties_);
+	INFO_LOG(G3D, "Memory Types (%d):", memory_properties_.memoryTypeCount);
+	for (int i = 0; i < (int)memory_properties_.memoryTypeCount; i++) {
 		// Don't bother printing dummy memory types.
-		if (!memory_properties.memoryTypes[i].propertyFlags)
+		if (!memory_properties_.memoryTypes[i].propertyFlags)
 			continue;
-		INFO_LOG(G3D, "  %d: Heap %d; Flags: %s%s%s%s  ", i, memory_properties.memoryTypes[i].heapIndex,
-			(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? "DEVICE_LOCAL " : "",
-			(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? "HOST_VISIBLE " : "",
-			(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ? "HOST_CACHED " : "",
-			(memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ? "HOST_COHERENT " : "");
+		INFO_LOG(G3D, "  %d: Heap %d; Flags: %s%s%s%s  ", i, memory_properties_.memoryTypes[i].heapIndex,
+			(memory_properties_.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? "DEVICE_LOCAL " : "",
+			(memory_properties_.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? "HOST_VISIBLE " : "",
+			(memory_properties_.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ? "HOST_CACHED " : "",
+			(memory_properties_.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ? "HOST_COHERENT " : "");
 	}
 
 	// Optional features
 	if (extensionsLookup_.KHR_get_physical_device_properties2) {
 		VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR};
+		// Add to chain even if not supported, GetPhysicalDeviceFeatures is supposed to ignore unknown structs.
+		VkPhysicalDeviceMultiviewFeatures multiViewFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES };
+		features2.pNext = &multiViewFeatures;
 		vkGetPhysicalDeviceFeatures2KHR(physical_devices_[physical_device_], &features2);
-		deviceFeatures_.available = features2.features;
+		deviceFeatures_.available.standard = features2.features;
+		deviceFeatures_.available.multiview = multiViewFeatures;
 	} else {
-		vkGetPhysicalDeviceFeatures(physical_devices_[physical_device_], &deviceFeatures_.available);
+		vkGetPhysicalDeviceFeatures(physical_devices_[physical_device_], &deviceFeatures_.available.standard);
+		deviceFeatures_.available.multiview = {};
 	}
 
 	deviceFeatures_.enabled = {};
 	// Enable a few safe ones if they are available.
-	deviceFeatures_.enabled.dualSrcBlend = deviceFeatures_.available.dualSrcBlend;
-	deviceFeatures_.enabled.logicOp = deviceFeatures_.available.logicOp;
-	deviceFeatures_.enabled.depthClamp = deviceFeatures_.available.depthClamp;
-	deviceFeatures_.enabled.depthBounds = deviceFeatures_.available.depthBounds;
-	deviceFeatures_.enabled.samplerAnisotropy = deviceFeatures_.available.samplerAnisotropy;
-	deviceFeatures_.enabled.shaderClipDistance = deviceFeatures_.available.shaderClipDistance;
-	deviceFeatures_.enabled.shaderCullDistance = deviceFeatures_.available.shaderCullDistance;
-	// For easy wireframe mode, someday.
-	deviceFeatures_.enabled.fillModeNonSolid = deviceFeatures_.available.fillModeNonSolid;
+	deviceFeatures_.enabled.standard.dualSrcBlend = deviceFeatures_.available.standard.dualSrcBlend;
+	deviceFeatures_.enabled.standard.logicOp = deviceFeatures_.available.standard.logicOp;
+	deviceFeatures_.enabled.standard.depthClamp = deviceFeatures_.available.standard.depthClamp;
+	deviceFeatures_.enabled.standard.depthBounds = deviceFeatures_.available.standard.depthBounds;
+	deviceFeatures_.enabled.standard.samplerAnisotropy = deviceFeatures_.available.standard.samplerAnisotropy;
+	deviceFeatures_.enabled.standard.shaderClipDistance = deviceFeatures_.available.standard.shaderClipDistance;
+	deviceFeatures_.enabled.standard.shaderCullDistance = deviceFeatures_.available.standard.shaderCullDistance;
+	deviceFeatures_.enabled.standard.geometryShader = deviceFeatures_.available.standard.geometryShader;
+	deviceFeatures_.enabled.standard.sampleRateShading = deviceFeatures_.available.standard.sampleRateShading;
+
+	deviceFeatures_.enabled.multiview = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES };
+	deviceFeatures_.enabled.multiview.multiview = deviceFeatures_.available.multiview.multiview;
+	// deviceFeatures_.enabled.multiview.multiviewGeometryShader = deviceFeatures_.available.multiview.multiviewGeometryShader;
 
 	GetDeviceLayerExtensionList(nullptr, device_extension_properties_);
 
@@ -667,7 +682,12 @@ VkResult VulkanContext::CreateDevice() {
 		extensionsLookup_.KHR_create_renderpass2 = true;
 		extensionsLookup_.KHR_depth_stencil_resolve = EnableDeviceExtension(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
 	}
+
 	extensionsLookup_.EXT_shader_stencil_export = EnableDeviceExtension(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+	extensionsLookup_.EXT_fragment_shader_interlock = EnableDeviceExtension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME);
+	extensionsLookup_.ARM_rasterization_order_attachment_access = EnableDeviceExtension(VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
+
+	VkPhysicalDeviceFeatures2 features2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
 
 	VkDeviceCreateInfo device_info{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 	device_info.queueCreateInfoCount = 1;
@@ -676,7 +696,14 @@ VkResult VulkanContext::CreateDevice() {
 	device_info.ppEnabledLayerNames = device_info.enabledLayerCount ? device_layer_names_.data() : nullptr;
 	device_info.enabledExtensionCount = (uint32_t)device_extensions_enabled_.size();
 	device_info.ppEnabledExtensionNames = device_info.enabledExtensionCount ? device_extensions_enabled_.data() : nullptr;
-	device_info.pEnabledFeatures = &deviceFeatures_.enabled;
+
+	if (extensionsLookup_.KHR_get_physical_device_properties2) {
+		device_info.pNext = &features2;
+		features2.features = deviceFeatures_.enabled.standard;
+		features2.pNext = &deviceFeatures_.enabled.multiview;
+	} else {
+		device_info.pEnabledFeatures = &deviceFeatures_.enabled.standard;
+	}
 
 	VkResult res = vkCreateDevice(physical_devices_[physical_device_], &device_info, nullptr, &device_);
 	if (res != VK_SUCCESS) {
@@ -1009,12 +1036,21 @@ bool VulkanContext::InitSwapchain() {
 	res = vkGetPhysicalDeviceSurfacePresentModesKHR(physical_devices_[physical_device_], surface_, &presentModeCount, presentModes);
 	_dbg_assert_(res == VK_SUCCESS);
 
+	VkExtent2D currentExtent { surfCapabilities_.currentExtent };
+	// https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkSurfaceCapabilitiesKHR.html
+	// currentExtent is the current width and height of the surface, or the special value (0xFFFFFFFF, 0xFFFFFFFF) indicating that the surface size will be determined by the extent of a swapchain targeting the surface.
+	if (currentExtent.width == 0xFFFFFFFFu || currentExtent.height == 0xFFFFFFFFu) {
+		_dbg_assert_((bool)cbGetDrawSize_)
+		if (cbGetDrawSize_) {
+			currentExtent = cbGetDrawSize_();
+		}
+	}
 
-	swapChainExtent_.width = clamp(surfCapabilities_.currentExtent.width, surfCapabilities_.minImageExtent.width, surfCapabilities_.maxImageExtent.width);
-	swapChainExtent_.height = clamp(surfCapabilities_.currentExtent.height, surfCapabilities_.minImageExtent.height, surfCapabilities_.maxImageExtent.height);
+	swapChainExtent_.width = clamp(currentExtent.width, surfCapabilities_.minImageExtent.width, surfCapabilities_.maxImageExtent.width);
+	swapChainExtent_.height = clamp(currentExtent.height, surfCapabilities_.minImageExtent.height, surfCapabilities_.maxImageExtent.height);
 
 	INFO_LOG(G3D, "surfCapabilities_.current: %dx%d min: %dx%d max: %dx%d computed: %dx%d",
-		surfCapabilities_.currentExtent.width, surfCapabilities_.currentExtent.height,
+		currentExtent.width, currentExtent.height,
 		surfCapabilities_.minImageExtent.width, surfCapabilities_.minImageExtent.height,
 		surfCapabilities_.maxImageExtent.width, surfCapabilities_.maxImageExtent.height,
 		swapChainExtent_.width, swapChainExtent_.height);
@@ -1107,11 +1143,21 @@ bool VulkanContext::InitSwapchain() {
 	INFO_LOG(G3D, "Transform supported: %s current: %s chosen: %s", supportedTransforms.c_str(), currentTransform.c_str(), preTransformStr.c_str());
 
 	if (physicalDeviceProperties_[physical_device_].properties.vendorID == VULKAN_VENDOR_IMGTEC) {
-		INFO_LOG(G3D, "Applying PowerVR hack (rounding off the width!)");
-		// Swap chain width hack to avoid issue #11743 (PowerVR driver bug).
-		// To keep the size consistent even with pretransform, do this after the swap. Should be fine.
-		// This is fixed in newer PowerVR drivers but I don't know the cutoff.
-		swapChainExtent_.width &= ~31;
+		u32 driverVersion = physicalDeviceProperties_[physical_device_].properties.driverVersion;
+		// Cutoff the hack at driver version 1.386.1368 (0x00582558, see issue #15773).
+		if (driverVersion < 0x00582558) {
+			INFO_LOG(G3D, "Applying PowerVR hack (rounding off the width!) driverVersion=%08x", driverVersion);
+			// Swap chain width hack to avoid issue #11743 (PowerVR driver bug).
+			// To keep the size consistent even with pretransform, do this after the swap. Should be fine.
+			// This is fixed in newer PowerVR drivers but I don't know the cutoff.
+			swapChainExtent_.width &= ~31;
+
+			// TODO: Also modify display_xres/display_yres appropriately for scissors to match.
+			// This will get a bit messy. Ideally we should remove that logic from app-android.cpp
+			// and move it here, but the OpenGL code still needs it.
+		} else {
+			INFO_LOG(G3D, "PowerVR driver version new enough (%08x), not applying swapchain width hack", driverVersion);
+		}
 	}
 
 	VkSwapchainCreateInfoKHR swap_chain_info{ VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
@@ -1157,6 +1203,10 @@ bool VulkanContext::InitSwapchain() {
 	}
 	INFO_LOG(G3D, "Created swapchain: %dx%d", swap_chain_info.imageExtent.width, swap_chain_info.imageExtent.height);
 	return true;
+}
+
+void VulkanContext::SetCbGetDrawSize(std::function<VkExtent2D()> cb) {
+	cbGetDrawSize_ = cb;
 }
 
 VkFence VulkanContext::CreateFence(bool presignalled) {
@@ -1212,7 +1262,7 @@ bool VulkanContext::CreateShaderModule(const std::vector<uint32_t> &spirv, VkSha
 	}
 }
 
-void TransitionImageLayout2(VkCommandBuffer cmd, VkImage image, int baseMip, int numMipLevels, VkImageAspectFlags aspectMask,
+void TransitionImageLayout2(VkCommandBuffer cmd, VkImage image, int baseMip, int numMipLevels, int numLayers, VkImageAspectFlags aspectMask,
 	VkImageLayout oldImageLayout, VkImageLayout newImageLayout,
 	VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,
 	VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask) {
@@ -1225,7 +1275,7 @@ void TransitionImageLayout2(VkCommandBuffer cmd, VkImage image, int baseMip, int
 	image_memory_barrier.subresourceRange.aspectMask = aspectMask;
 	image_memory_barrier.subresourceRange.baseMipLevel = baseMip;
 	image_memory_barrier.subresourceRange.levelCount = numMipLevels;
-	image_memory_barrier.subresourceRange.layerCount = 1;  // We never use more than one layer, and old Mali drivers have problems with VK_REMAINING_ARRAY_LAYERS/VK_REMAINING_MIP_LEVELS.
+	image_memory_barrier.subresourceRange.layerCount = numLayers;  // We never use more than one layer, and old Mali drivers have problems with VK_REMAINING_ARRAY_LAYERS/VK_REMAINING_MIP_LEVELS.
 	image_memory_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	image_memory_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	vkCmdPipelineBarrier(cmd, srcStageMask, dstStageMask, 0, 0, nullptr, 0, nullptr, 1, &image_memory_barrier);
@@ -1263,10 +1313,10 @@ bool GLSLtoSPV(const VkShaderStageFlagBits shader_type, const char *sourceCode, 
 
 	glslang::TProgram program;
 	const char *shaderStrings[1];
-	TBuiltInResource Resources;
+	TBuiltInResource Resources{};
 	init_resources(Resources);
 
-	int defaultVersion;
+	int defaultVersion = 0;
 	EShMessages messages;
 	EProfile profile;
 
@@ -1337,37 +1387,6 @@ void init_glslang() {
 
 void finalize_glslang() {
 	glslang::FinalizeProcess();
-}
-
-const char *VulkanResultToString(VkResult res) {
-	switch (res) {
-	case VK_NOT_READY: return "VK_NOT_READY";
-	case VK_TIMEOUT: return "VK_TIMEOUT";
-	case VK_EVENT_SET: return "VK_EVENT_SET";
-	case VK_EVENT_RESET: return "VK_EVENT_RESET";
-	case VK_INCOMPLETE: return "VK_INCOMPLETE";
-	case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
-	case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
-	case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
-	case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
-	case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
-	case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
-	case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
-	case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
-	case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
-	case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
-	case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
-	case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
-	case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
-	case VK_ERROR_OUT_OF_DATE_KHR: return "VK_ERROR_OUT_OF_DATE_KHR";
-	case VK_ERROR_INCOMPATIBLE_DISPLAY_KHR: return "VK_ERROR_INCOMPATIBLE_DISPLAY_KHR";
-	case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
-	case VK_ERROR_OUT_OF_POOL_MEMORY_KHR: return "VK_ERROR_OUT_OF_POOL_MEMORY_KHR";
-	case VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR: return "VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR";
-
-	default:
-		return "VK_ERROR_...(unknown)";
-	}
 }
 
 void VulkanDeleteList::Take(VulkanDeleteList &del) {
@@ -1561,6 +1580,7 @@ const char *VulkanFormatToString(VkFormat format) {
 	switch (format) {
 	case VK_FORMAT_A1R5G5B5_UNORM_PACK16: return "A1R5G5B5_UNORM_PACK16";
 	case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return "A2B10G10R10_UNORM_PACK32";
+	case VK_FORMAT_A2R10G10B10_UNORM_PACK32: return "A2R10G10B10_UNORM_PACK32";
 	case VK_FORMAT_A8B8G8R8_SNORM_PACK32: return "A8B8G8R8_SNORM_PACK32";
 	case VK_FORMAT_A8B8G8R8_SRGB_PACK32: return "A8B8G8R8_SRGB_PACK32";
 	case VK_FORMAT_A8B8G8R8_UNORM_PACK32: return "A8B8G8R8_UNORM_PACK32";

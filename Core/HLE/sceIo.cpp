@@ -70,6 +70,8 @@ extern "C" {
 
 // For headless screenshots.
 #include "Core/HLE/sceDisplay.h"
+// For EMULATOR_DEVCTL__GET_SCALE
+#include <System/Display.h>
 
 static const int ERROR_ERRNO_IO_ERROR                     = 0x80010005;
 static const int ERROR_MEMSTICK_DEVCTL_BAD_PARAMS         = 0x80220081;
@@ -230,6 +232,17 @@ public:
 		return pendingAsyncResult || hasAsyncResult;
 	}
 
+	const PSPFileInfo &FileInfo() {
+		if (!infoReady) {
+			info = pspFileSystem.GetFileInfo(fullpath);
+			if (!info.exists) {
+				ERROR_LOG(IO, "File %s no longer exists when reading info", fullpath.c_str());
+			}
+			infoReady = true;
+		}
+		return info;
+	}
+
 	void DoState(PointerWrap &p) override {
 		auto s = p.Section("FileNode", 1, 3);
 		if (!s)
@@ -246,6 +259,9 @@ public:
 		Do(p, closePending);
 		Do(p, info);
 		Do(p, openMode);
+		if (p.mode == p.MODE_READ) {
+			infoReady = info.exists;
+		}
 
 		Do(p, npdrm);
 		Do(p, pgd_offset);
@@ -285,6 +301,7 @@ public:
 	// TODO: Use an enum instead?
 	bool closePending = false;
 
+	bool infoReady = false;
 	PSPFileInfo info;
 	u32 openMode = 0;
 
@@ -1356,7 +1373,7 @@ static s64 __IoLseekDest(FileNode *f, s64 offset, int whence, FileMove &seek) {
 		seek = FILEMOVE_CURRENT;
 		break;
 	case 2:
-		newPos = f->info.size + offset;
+		newPos = f->FileInfo().size + offset;
 		seek = FILEMOVE_END;
 		break;
 	default:
@@ -1489,8 +1506,6 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 
 		isTTY = true;
 	} else {
-		info = pspFileSystem.GetFileInfo(filename);
-
 		h = pspFileSystem.OpenFile(filename, (FileAccess)access);
 		if (h < 0) {
 			error = h;
@@ -1504,7 +1519,10 @@ static FileNode *__IoOpen(int &error, const char *filename, int flags, int mode)
 	f->handle = h;
 	f->fullpath = filename;
 	f->asyncResult = h;
-	f->info = info;
+	if (isTTY) {
+		f->info = info;
+		f->infoReady = true;
+	}
 	f->openMode = access;
 	f->isTTY = isTTY;
 
@@ -1964,12 +1982,29 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 	if (!strcmp(name, "kemulator:") || !strcmp(name, "emulator:"))
 	{
 		// Emulator special tricks!
+		
+		enum
+		{
+			EMULATOR_DEVCTL__GET_HAS_DISPLAY = 1,
+			EMULATOR_DEVCTL__SEND_OUTPUT,
+			EMULATOR_DEVCTL__IS_EMULATOR,
+			EMULATOR_DEVCTL__VERIFY_STATE,
+
+			EMULATOR_DEVCTL__EMIT_SCREENSHOT = 0x20,
+			
+			EMULATOR_DEVCTL__TOGGLE_FASTFORWARD = 0x30,
+			EMULATOR_DEVCTL__GET_ASPECT_RATIO,
+			EMULATOR_DEVCTL__GET_SCALE,
+			EMULATOR_DEVCTL__GET_LTRIGGER,
+			EMULATOR_DEVCTL__GET_RTRIGGER
+		};
+
 		switch (cmd) {
-		case 1:	// EMULATOR_DEVCTL__GET_HAS_DISPLAY
+		case EMULATOR_DEVCTL__GET_HAS_DISPLAY:
 			if (Memory::IsValidAddress(outPtr))
 				Memory::Write_U32(PSP_CoreParameter().headLess ? 0 : 1, outPtr);
 			return 0;
-		case 2:	// EMULATOR_DEVCTL__SEND_OUTPUT
+		case EMULATOR_DEVCTL__SEND_OUTPUT:
 			{
 				std::string data(Memory::GetCharPointer(argAddr), argLen);
 				if (PSP_CoreParameter().printfEmuLog) {
@@ -1983,17 +2018,17 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 				}
 				return 0;
 			}
-		case 3:	// EMULATOR_DEVCTL__IS_EMULATOR
+		case EMULATOR_DEVCTL__IS_EMULATOR:
 			if (Memory::IsValidAddress(outPtr))
 				Memory::Write_U32(1, outPtr);
 			return 0;
-		case 4: // EMULATOR_DEVCTL__VERIFY_STATE
+		case EMULATOR_DEVCTL__VERIFY_STATE:
 			// Note that this is async, and makes sure the save state matches up.
 			SaveState::Verify();
 			// TODO: Maybe save/load to a file just to be sure?
 			return 0;
 
-		case 0x20: // EMULATOR_DEVCTL__EMIT_SCREENSHOT
+		case EMULATOR_DEVCTL__EMIT_SCREENSHOT:
 		{
 			PSPPointer<u8> topaddr;
 			u32 linesize;
@@ -2003,6 +2038,39 @@ static u32 sceIoDevctl(const char *name, int cmd, u32 argAddr, int argLen, u32 o
 			host->SendDebugScreenshot(topaddr, linesize, 272);
 			return 0;
 		}
+		case EMULATOR_DEVCTL__TOGGLE_FASTFORWARD:
+			if (argAddr)
+				PSP_CoreParameter().fastForward = true;
+			else
+				PSP_CoreParameter().fastForward = false;
+			return 0;
+		case EMULATOR_DEVCTL__GET_ASPECT_RATIO:
+			if (Memory::IsValidAddress(outPtr)) {
+				// TODO: Share code with CenterDisplayOutputRect to take a few more things into account.
+				// I have a planned further refactoring.
+				float ar;
+				if (g_Config.bDisplayStretch) {
+					ar = (float)dp_xres / (float)dp_yres;
+				} else {
+					ar = g_Config.fDisplayAspectRatio * (480.0f / 272.0f);
+				}
+				Memory::Write_Float(ar, outPtr);
+			}
+			return 0;
+		case EMULATOR_DEVCTL__GET_SCALE:
+			if (Memory::IsValidAddress(outPtr)) {
+				// TODO: Maybe do something more sophisticated taking the longest side and screen rotation
+				// into account, etc.
+				float scale = float(dp_xres) * g_Config.fDisplayScale / 480.0f;
+				Memory::Write_Float(scale, outPtr);
+			}
+			return 0;
+		case EMULATOR_DEVCTL__GET_LTRIGGER:
+			//To-do
+			return 0;
+		case EMULATOR_DEVCTL__GET_RTRIGGER:
+			//To-do
+			return 0;
 		}
 
 		ERROR_LOG(SCEIO, "sceIoDevCtl: UNKNOWN PARAMETERS");
@@ -2320,16 +2388,19 @@ public:
 static u32 sceIoDopen(const char *path) {
 	DEBUG_LOG(SCEIO, "sceIoDopen(\"%s\")", path);
 
-	if (!pspFileSystem.GetFileInfo(path).exists) {
+	double startTime = time_now_d();
+
+	bool listingExists = false;
+	auto listing = pspFileSystem.GetDirListing(path, &listingExists);
+
+	if (!listingExists) {
 		return SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
 	}
 
 	DirListing *dir = new DirListing();
 	SceUID id = kernelObjects.Create(dir);
 
-	double startTime = time_now_d();
-
-	dir->listing = pspFileSystem.GetDirListing(path);
+	dir->listing = listing;
 	dir->index = 0;
 	dir->name = std::string(path);
 
@@ -2528,7 +2599,7 @@ static int __IoIoctl(u32 id, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, 
 		if(f->pgdInfo)
 			return f->pgdInfo->data_size;
 		else
-			return (int)f->info.size;
+			return (int)f->FileInfo().size;
 		break;
 
 	// Get UMD sector size
@@ -2571,7 +2642,7 @@ static int __IoIoctl(u32 id, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, 
 			const auto seekInfo = PSPPointer<SeekInfo>::Create(indataPtr);
 			FileMove seek;
 			s64 newPos = __IoLseekDest(f, seekInfo->offset, seekInfo->whence, seek);
-			if (newPos < 0 || newPos > f->info.size) {
+			if (newPos < 0 || newPos > f->FileInfo().size) {
 				// Not allowed to seek past the end of the file with this API.
 				return ERROR_ERRNO_IO_ERROR;
 			}
@@ -2587,7 +2658,7 @@ static int __IoIoctl(u32 id, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, 
 		// TODO: Should probably move this to something common between ISOFileSystem and VirtualDiscSystem.
 		INFO_LOG(SCEIO, "sceIoIoctl: Asked for start sector of file %i", id);
 		if (Memory::IsValidAddress(outdataPtr) && outlen >= 4) {
-			Memory::Write_U32(f->info.startSector, outdataPtr);
+			Memory::Write_U32(f->FileInfo().startSector, outdataPtr);
 		} else {
 			return SCE_KERNEL_ERROR_ERRNO_INVALID_ARGUMENT;
 		}
@@ -2599,7 +2670,7 @@ static int __IoIoctl(u32 id, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, 
 		// TODO: Should probably move this to something common between ISOFileSystem and VirtualDiscSystem.
 		INFO_LOG(SCEIO, "sceIoIoctl: Asked for size of file %i", id);
 		if (Memory::IsValidAddress(outdataPtr) && outlen >= 8) {
-			Memory::Write_U64(f->info.size, outdataPtr);
+			Memory::Write_U64(f->FileInfo().size, outdataPtr);
 		} else {
 			return SCE_KERNEL_ERROR_ERRNO_INVALID_ARGUMENT;
 		}
@@ -2676,7 +2747,7 @@ static int __IoIoctl(u32 id, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, 
 			FileMove seek;
 			s64 newPos = __IoLseekDest(f, seekInfo->offset, seekInfo->whence, seek);
 			// Position is in sectors, don't forget.
-			if (newPos < 0 || newPos > f->info.size) {
+			if (newPos < 0 || newPos > f->FileInfo().size) {
 				// Not allowed to seek past the end of the file with this API.
 				return SCE_KERNEL_ERROR_ERRNO_INVALID_FILE_SIZE;
 			}

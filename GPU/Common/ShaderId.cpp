@@ -22,7 +22,6 @@ std::string VertexShaderDesc(const VShaderID &id) {
 	if (id.Bit(VS_BIT_HAS_TEXCOORD)) desc << "T ";
 	if (id.Bit(VS_BIT_HAS_NORMAL)) desc << "N ";
 	if (id.Bit(VS_BIT_LMODE)) desc << "LM ";
-	if (id.Bit(VS_BIT_ENABLE_FOG)) desc << "Fog ";
 	if (id.Bit(VS_BIT_NORM_REVERSE)) desc << "RevN ";
 	if (id.Bit(VS_BIT_DO_TEXTURE)) desc << "Tex ";
 	int uvgMode = id.Bits(VS_BIT_UVGEN_MODE, 2);
@@ -40,6 +39,9 @@ std::string VertexShaderDesc(const VShaderID &id) {
 	// Lights
 	if (id.Bit(VS_BIT_LIGHTING_ENABLE)) {
 		desc << "Light: ";
+	}
+	if (id.Bit(VS_BIT_LIGHT_UBERSHADER)) {
+		desc << "LightUberShader ";
 	}
 	for (int i = 0; i < 4; i++) {
 		bool enabled = id.Bit(VS_BIT_LIGHT0_ENABLE + i) && id.Bit(VS_BIT_LIGHTING_ENABLE);
@@ -60,10 +62,12 @@ std::string VertexShaderDesc(const VShaderID &id) {
 	if (id.Bit(VS_BIT_NORM_REVERSE_TESS)) desc << "TessRevN ";
 	if (id.Bit(VS_BIT_VERTEX_RANGE_CULLING)) desc << "Cull ";
 
+	if (id.Bit(VS_BIT_SIMPLE_STEREO)) desc << "SimpleStereo ";
+
 	return desc.str();
 }
 
-void ComputeVertexShaderID(VShaderID *id_out, u32 vertType, bool useHWTransform, bool useHWTessellation, bool weightsAsFloat) {
+void ComputeVertexShaderID(VShaderID *id_out, u32 vertType, bool useHWTransform, bool useHWTessellation, bool weightsAsFloat, bool useSkinInDecode) {
 	bool isModeThrough = (vertType & GE_VTYPE_THROUGH) != 0;
 	bool doTexture = gstate.isTextureMapEnabled() && !gstate.isModeClear();
 	bool doShadeMapping = doTexture && (gstate.getUVGenMode() == GE_TEXMAP_ENVIRONMENT_MAP);
@@ -80,17 +84,19 @@ void ComputeVertexShaderID(VShaderID *id_out, u32 vertType, bool useHWTransform,
 		_assert_(hasNormal);
 	}
 
-	bool enableFog = gstate.isFogEnabled() && !isModeThrough && !gstate.isModeClear();
 	bool lmode = gstate.isUsingSecondaryColor() && gstate.isLightingEnabled() && !isModeThrough && !gstate.isModeClear();
-	bool vertexRangeCulling = gstate_c.Supports(GPU_SUPPORTS_VS_RANGE_CULLING) &&
+	bool vertexRangeCulling = gstate_c.Use(GPU_USE_VS_RANGE_CULLING) &&
 		!isModeThrough && gstate_c.submitType == SubmitType::DRAW;  // neither hw nor sw spline/bezier. See #11692
 
 	VShaderID id;
 	id.SetBit(VS_BIT_LMODE, lmode);
-	id.SetBit(VS_BIT_ENABLE_FOG, enableFog);
 	id.SetBit(VS_BIT_IS_THROUGH, isModeThrough);
 	id.SetBit(VS_BIT_HAS_COLOR, hasColor);
 	id.SetBit(VS_BIT_VERTEX_RANGE_CULLING, vertexRangeCulling);
+
+	if (!isModeThrough && gstate_c.Use(GPU_USE_SINGLE_PASS_STEREO)) {
+		id.SetBit(VS_BIT_SIMPLE_STEREO);
+	}
 
 	if (doTexture) {
 		id.SetBit(VS_BIT_DO_TEXTURE);
@@ -112,7 +118,7 @@ void ComputeVertexShaderID(VShaderID *id_out, u32 vertType, bool useHWTransform,
 		}
 
 		// Bones.
-		bool enableBones = vertTypeIsSkinningEnabled(vertType);
+		bool enableBones = !useSkinInDecode && vertTypeIsSkinningEnabled(vertType);
 		id.SetBit(VS_BIT_ENABLE_BONES, enableBones);
 		if (enableBones) {
 			id.SetBits(VS_BIT_BONES, 3, TranslateNumBones(vertTypeGetNumBoneWeights(vertType)) - 1);
@@ -123,15 +129,19 @@ void ComputeVertexShaderID(VShaderID *id_out, u32 vertType, bool useHWTransform,
 
 		if (gstate.isLightingEnabled()) {
 			// doShadeMapping is stored as UVGenMode, and light type doesn't matter for shade mapping.
-			id.SetBits(VS_BIT_MATERIAL_UPDATE, 3, gstate.getMaterialUpdate());
 			id.SetBit(VS_BIT_LIGHTING_ENABLE);
-			// Light bits
-			for (int i = 0; i < 4; i++) {
-				bool chanEnabled = gstate.isLightChanEnabled(i) != 0;
-				id.SetBit(VS_BIT_LIGHT0_ENABLE + i, chanEnabled);
-				if (chanEnabled) {
-					id.SetBits(VS_BIT_LIGHT0_COMP + 4 * i, 2, gstate.getLightComputation(i));
-					id.SetBits(VS_BIT_LIGHT0_TYPE + 4 * i, 2, gstate.getLightType(i));
+			if (gstate_c.Use(GPU_USE_LIGHT_UBERSHADER)) {
+				id.SetBit(VS_BIT_LIGHT_UBERSHADER);
+			} else {
+				id.SetBits(VS_BIT_MATERIAL_UPDATE, 3, gstate.getMaterialUpdate());
+				// Light bits
+				for (int i = 0; i < 4; i++) {
+					bool chanEnabled = gstate.isLightChanEnabled(i) != 0;
+					id.SetBit(VS_BIT_LIGHT0_ENABLE + i, chanEnabled);
+					if (chanEnabled) {
+						id.SetBits(VS_BIT_LIGHT0_COMP + 4 * i, 2, gstate.getLightComputation(i));
+						id.SetBits(VS_BIT_LIGHT0_TYPE + 4 * i, 2, gstate.getLightType(i));
+					}
 				}
 			}
 		}
@@ -163,8 +173,9 @@ void ComputeVertexShaderID(VShaderID *id_out, u32 vertType, bool useHWTransform,
 
 static const char *alphaTestFuncs[] = { "NEVER", "ALWAYS", "==", "!=", "<", "<=", ">", ">=" };
 
-static bool MatrixNeedsProjection(const float m[12]) {
-	return m[2] != 0.0f || m[5] != 0.0f || m[8] != 0.0f || m[11] != 1.0f;
+static bool MatrixNeedsProjection(const float m[12], GETexProjMapMode mode) {
+	// For GE_PROJMAP_UV, we can ignore m[8] since it multiplies to zero.
+	return m[2] != 0.0f || m[5] != 0.0f || (m[8] != 0.0f && mode != GE_PROJMAP_UV) || m[11] != 1.0f;
 }
 
 std::string FragmentShaderDesc(const FShaderID &id) {
@@ -180,7 +191,7 @@ std::string FragmentShaderDesc(const FShaderID &id) {
 	if (id.Bit(FS_BIT_COLOR_DOUBLE)) desc << "2x ";
 	if (id.Bit(FS_BIT_FLATSHADE)) desc << "Flat ";
 	if (id.Bit(FS_BIT_BGRA_TEXTURE)) desc << "BGRA ";
-	switch ((ShaderDepalMode)id.Bit(FS_BIT_SHADER_DEPAL_MODE)) {
+	switch ((ShaderDepalMode)id.Bits(FS_BIT_SHADER_DEPAL_MODE, 2)) {
 	case ShaderDepalMode::OFF: break;
 	case ShaderDepalMode::NORMAL: desc << "Depal ";  break;
 	case ShaderDepalMode::SMOOTHED: desc << "SmoothDepal "; break;
@@ -223,7 +234,7 @@ std::string FragmentShaderDesc(const FShaderID &id) {
 		case STENCIL_VALUE_INCR_4: desc << "StenIncr4 "; break;
 		case STENCIL_VALUE_INCR_8: desc << "StenIncr8 "; break;
 		case STENCIL_VALUE_DECR_4: desc << "StenDecr4 "; break;
-		case STENCIL_VALUE_DECR_8: desc << "StenDecr4 "; break;
+		case STENCIL_VALUE_DECR_8: desc << "StenDecr8 "; break;
 		default: desc << "StenUnknown "; break;
 		}
 	} else if (id.Bit(FS_BIT_REPLACE_ALPHA_WITH_STENCIL_TYPE)) {
@@ -244,8 +255,19 @@ std::string FragmentShaderDesc(const FShaderID &id) {
 	else if (id.Bit(FS_BIT_ALPHA_TEST)) desc << "AlphaTest " << alphaTestFuncs[id.Bits(FS_BIT_ALPHA_TEST_FUNC, 3)] << " ";
 	if (id.Bit(FS_BIT_COLOR_AGAINST_ZERO)) desc << "ColorTest0 " << alphaTestFuncs[id.Bits(FS_BIT_COLOR_TEST_FUNC, 2)] << " ";  // first 4 match;
 	else if (id.Bit(FS_BIT_COLOR_TEST)) desc << "ColorTest " << alphaTestFuncs[id.Bits(FS_BIT_COLOR_TEST_FUNC, 2)] << " ";  // first 4 match
-
+	if (id.Bit(FS_BIT_TEST_DISCARD_TO_ZERO)) desc << "TestDiscardToZero ";
+	if (id.Bit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL)) desc << "StencilDiscardWorkaround ";
+	if ((id.Bits(FS_BIT_REPLACE_LOGIC_OP, 4) != GE_LOGIC_COPY) && !id.Bit(FS_BIT_CLEARMODE)) desc << "ReplaceLogic ";
+	if (id.Bit(FS_BIT_SAMPLE_ARRAY_TEXTURE)) desc << "TexArray ";
+	if (id.Bit(FS_BIT_STEREO)) desc << "Stereo ";
+	if (id.Bit(FS_BIT_USE_FRAMEBUFFER_FETCH)) desc << "(fetch)";
 	return desc.str();
+}
+
+bool FragmentIdNeedsFramebufferRead(const FShaderID &id) {
+	return id.Bit(FS_BIT_COLOR_WRITEMASK) ||
+		id.Bits(FS_BIT_REPLACE_LOGIC_OP, 4) != GE_LOGIC_COPY ||
+		(ReplaceBlendType)id.Bits(FS_BIT_REPLACE_BLEND, 3) == REPLACE_BLEND_READ_FRAMEBUFFER;
 }
 
 // Here we must take all the bits of the gstate that determine what the fragment shader will
@@ -262,18 +284,18 @@ void ComputeFragmentShaderID(FShaderID *id_out, const ComputedPipelineState &pip
 		bool enableAlphaTest = gstate.isAlphaTestEnabled() && !IsAlphaTestTriviallyTrue();
 		bool enableColorTest = gstate.isColorTestEnabled() && !IsColorTestTriviallyTrue();
 		bool enableColorDoubling = gstate.isColorDoublingEnabled() && gstate.isTextureMapEnabled();
-		bool doTextureProjection = (gstate.getUVGenMode() == GE_TEXMAP_TEXTURE_MATRIX && MatrixNeedsProjection(gstate.tgenMatrix));
+		bool doTextureProjection = (gstate.getUVGenMode() == GE_TEXMAP_TEXTURE_MATRIX && MatrixNeedsProjection(gstate.tgenMatrix, gstate.getUVProjMode()));
 		bool doTextureAlpha = gstate.isTextureAlphaUsed();
 		bool doFlatShading = gstate.getShadeMode() == GE_SHADE_FLAT;
 
 		ShaderDepalMode shaderDepalMode = gstate_c.shaderDepalMode;
 
 		bool colorWriteMask = pipelineState.maskState.applyFramebufferRead;
-
 		ReplaceBlendType replaceBlend = pipelineState.blendState.replaceBlend;
-		ReplaceAlphaType stencilToAlpha = pipelineState.blendState.replaceAlphaWithStencil;
-		SimulateLogicOpType simulateLogicOpType = pipelineState.blendState.simulateLogicOpType;
 		GELogicOp replaceLogicOpType = pipelineState.logicState.applyFramebufferRead ? pipelineState.logicState.logicOp : GE_LOGIC_COPY;
+
+		SimulateLogicOpType simulateLogicOpType = pipelineState.blendState.simulateLogicOpType;
+		ReplaceAlphaType stencilToAlpha = pipelineState.blendState.replaceAlphaWithStencil;
 
 		// All texfuncs except replace are the same for RGB as for RGBA with full alpha.
 		// Note that checking this means that we must dirty the fragment shader ID whenever textureFullAlpha changes.
@@ -346,17 +368,75 @@ void ComputeFragmentShaderID(FShaderID *id_out, const ComputedPipelineState &pip
 			id.SetBits(FS_BIT_BLENDFUNC_B, 4, gstate.getBlendFuncB());
 		}
 		id.SetBit(FS_BIT_FLATSHADE, doFlatShading);
-
 		id.SetBit(FS_BIT_COLOR_WRITEMASK, colorWriteMask);
 
-		if (g_Config.bVendorBugChecksEnabled) {
-			if (bugs.Has(Draw::Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL)) {
-				id.SetBit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL, !IsStencilTestOutputDisabled() && !gstate.isDepthWriteEnabled());
-			} else if (bugs.Has(Draw::Bugs::MALI_STENCIL_DISCARD_BUG) && PSP_CoreParameter().compat.flags().MaliDepthStencilBugWorkaround) {
-				// Very similar driver bug to the Adreno one, with the same workaround (though might look into if there are cheaper ones!)
-				// Keeping the conditions separate since it can probably be made tighter.
-				id.SetBit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL, !IsStencilTestOutputDisabled() && (!gstate.isDepthTestEnabled() || !gstate.isDepthWriteEnabled()));
+		// All framebuffers are array textures in Vulkan now.
+		if (gstate_c.arrayTexture && g_Config.iGPUBackend == (int)GPUBackend::VULKAN) {
+			id.SetBit(FS_BIT_SAMPLE_ARRAY_TEXTURE);
+		}
+
+		// Stereo support
+		if (gstate_c.Use(GPU_USE_SINGLE_PASS_STEREO)) {
+			id.SetBit(FS_BIT_STEREO);
+		}
+
+		if (g_Config.bVendorBugChecksEnabled && bugs.Has(Draw::Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL)) {
+			bool stencilWithoutDepth = !IsStencilTestOutputDisabled() && (!gstate.isDepthTestEnabled() || !gstate.isDepthWriteEnabled());
+			if (stencilWithoutDepth) {
+				id.SetBit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL, stencilWithoutDepth);
 			}
+		}
+
+		// In case the USE flag changes (for example, in multisampling we might disable input attachments),
+		// we don't want to accidentally use the wrong cached shader here. So moved it to a bit.
+		if (FragmentIdNeedsFramebufferRead(id)) {
+			if (gstate_c.Use(GPU_USE_FRAMEBUFFER_FETCH)) {
+				id.SetBit(FS_BIT_USE_FRAMEBUFFER_FETCH);
+			}
+		}
+	}
+
+	*id_out = id;
+}
+
+std::string GeometryShaderDesc(const GShaderID &id) {
+	std::stringstream desc;
+	desc << StringFromFormat("%08x:%08x ", id.d[1], id.d[0]);
+	if (id.Bit(GS_BIT_ENABLED)) desc << "ENABLED ";
+	if (id.Bit(GS_BIT_DO_TEXTURE)) desc << "TEX ";
+	if (id.Bit(GS_BIT_LMODE)) desc << "LMODE ";
+	return desc.str();
+}
+
+void ComputeGeometryShaderID(GShaderID *id_out, const Draw::Bugs &bugs, int prim) {
+	GShaderID id;
+
+	bool isModeThrough = gstate.isModeThrough();
+	bool isCurve = gstate_c.submitType != SubmitType::DRAW;
+	bool isTriangle = prim == GE_PRIM_TRIANGLES || prim == GE_PRIM_TRIANGLE_FAN || prim == GE_PRIM_TRIANGLE_STRIP;
+
+	bool vertexRangeCulling = !isCurve;
+	bool clipClampedDepth = gstate_c.Use(GPU_USE_DEPTH_CLAMP) && !gstate_c.Use(GPU_USE_CLIP_DISTANCE);
+
+	// If we're not using GS culling, return a zero ID.
+	// Also, only use this for triangle primitives.
+	if ((!vertexRangeCulling && !clipClampedDepth) || isModeThrough || !isTriangle || !gstate_c.Use(GPU_USE_GS_CULLING)) {
+		*id_out = id;
+		return;
+	}
+
+	id.SetBit(GS_BIT_ENABLED, true);
+	// Vertex range culling doesn't seem tno happen for spline/bezier, see #11692.
+	id.SetBit(GS_BIT_CURVE, isCurve);
+
+	if (gstate.isModeClear()) {
+		// No attribute bits.
+	} else {
+		bool lmode = gstate.isUsingSecondaryColor() && gstate.isLightingEnabled() && !isModeThrough;
+
+		id.SetBit(GS_BIT_LMODE, lmode);
+		if (gstate.isTextureMapEnabled()) {
+			id.SetBit(GS_BIT_DO_TEXTURE);
 		}
 	}
 

@@ -29,17 +29,17 @@ static bool TestSamplerJit() {
 	auto GetLinear = [&](SamplerID &id) {
 		id.linear = true;
 		id.fetch = false;
-		return cache->GetLinear(id);
+		return cache->GetLinear(id, [] {});
 	};
 	auto GetNearest = [&](SamplerID &id) {
 		id.linear = false;
 		id.fetch = false;
-		return cache->GetNearest(id);
+		return cache->GetNearest(id, [] {});
 	};
 	auto GetFetch = [&](SamplerID &id) {
 		id.linear = false;
 		id.fetch = true;
-		return cache->GetFetch(id);
+		return cache->GetFetch(id, [] {});
 	};
 
 	GMRng rng;
@@ -48,7 +48,7 @@ static bool TestSamplerJit() {
 	bool header = false;
 
 	u8 **tptr = new u8 *[8];
-	int *bufw = new int[8];
+	uint16_t *bufw = new uint16_t[8];
 	u8 *clut = new u8[1024];
 	memset(clut, 0, 1024);
 
@@ -89,8 +89,8 @@ static bool TestSamplerJit() {
 
 		// Try running each to make sure they don't trivially crash.
 		const auto primArg = Rasterizer::ToVec4IntArg(Math3D::Vec4<int>(127, 127, 127, 127));
-		linearFunc(0.0f, 0.0f, 0, 0, primArg, tptr, bufw, 1, 7, id);
-		nearestFunc(0.0f, 0.0f, 0, 0, primArg, tptr, bufw, 1, 7, id);
+		linearFunc(0.0f, 0.0f, primArg, tptr, bufw, 1, 7, id);
+		nearestFunc(0.0f, 0.0f, primArg, tptr, bufw, 1, 7, id);
 		fetchFunc(0, 0, tptr[0], bufw[0], 1, id);
 	}
 
@@ -134,7 +134,7 @@ static bool TestPixelJit() {
 			continue;
 		i++;
 
-		SingleFunc func = cache->GetSingle(id);
+		SingleFunc func = cache->GetSingle(id, [] {});
 		SingleFunc genericFunc = cache->GenericSingle(id);
 		if (func != genericFunc) {
 			successes++;

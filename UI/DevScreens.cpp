@@ -85,7 +85,7 @@ static const char *logLevelList[] = {
 	"Verb."
 };
 
-void DevMenu::CreatePopupContents(UI::ViewGroup *parent) {
+void DevMenuScreen::CreatePopupContents(UI::ViewGroup *parent) {
 	using namespace UI;
 	auto dev = GetI18NCategory("Developer");
 	auto sy = GetI18NCategory("System");
@@ -97,21 +97,22 @@ void DevMenu::CreatePopupContents(UI::ViewGroup *parent) {
 	items->Add(new CheckBox(&g_Config.bSimpleFrameStats, dev->T("Simple Frame Stats"), ""));
 	items->Add(new CheckBox(&g_Config.bDrawFrameGraph, dev->T("Draw Frametimes Graph")));
 #if !defined(MOBILE_DEVICE)
-	items->Add(new Choice(dev->T("Log View")))->OnClick.Handle(this, &DevMenu::OnLogView);
+	items->Add(new Choice(dev->T("Log View")))->OnClick.Handle(this, &DevMenuScreen::OnLogView);
 #endif
-	items->Add(new Choice(dev->T("Logging Channels")))->OnClick.Handle(this, &DevMenu::OnLogConfig);
-	items->Add(new Choice(sy->T("Developer Tools")))->OnClick.Handle(this, &DevMenu::OnDeveloperTools);
-	items->Add(new Choice(dev->T("Jit Compare")))->OnClick.Handle(this, &DevMenu::OnJitCompare);
-	items->Add(new Choice(dev->T("Shader Viewer")))->OnClick.Handle(this, &DevMenu::OnShaderView);
+	items->Add(new Choice(dev->T("Logging Channels")))->OnClick.Handle(this, &DevMenuScreen::OnLogConfig);
+	items->Add(new Choice(sy->T("Developer Tools")))->OnClick.Handle(this, &DevMenuScreen::OnDeveloperTools);
+	items->Add(new Choice(dev->T("Jit Compare")))->OnClick.Handle(this, &DevMenuScreen::OnJitCompare);
+	items->Add(new Choice(dev->T("Shader Viewer")))->OnClick.Handle(this, &DevMenuScreen::OnShaderView);
 	if (g_Config.iGPUBackend == (int)GPUBackend::VULKAN) {
 		// TODO: Make a new allocator visualizer for VMA.
 		// items->Add(new CheckBox(&g_Config.bShowAllocatorDebug, dev->T("Allocator Viewer")));
 		items->Add(new CheckBox(&g_Config.bShowGpuProfile, dev->T("GPU Profile")));
 	}
-	items->Add(new Choice(dev->T("Toggle Freeze")))->OnClick.Handle(this, &DevMenu::OnFreezeFrame);
-	items->Add(new Choice(dev->T("Dump Frame GPU Commands")))->OnClick.Handle(this, &DevMenu::OnDumpFrame);
-	items->Add(new Choice(dev->T("Toggle Audio Debug")))->OnClick.Handle(this, &DevMenu::OnToggleAudioDebug);
-	items->Add(new Choice(dev->T("Reset limited logging")))->OnClick.Handle(this, &DevMenu::OnResetLimitedLogging);
+	items->Add(new Choice(dev->T("Toggle Freeze")))->OnClick.Handle(this, &DevMenuScreen::OnFreezeFrame);
+
+	items->Add(new Choice(dev->T("Dump next frame to log")))->OnClick.Handle(this, &DevMenuScreen::OnDumpFrame);
+	items->Add(new Choice(dev->T("Toggle Audio Debug")))->OnClick.Handle(this, &DevMenuScreen::OnToggleAudioDebug);
+	items->Add(new Choice(dev->T("Reset limited logging")))->OnClick.Handle(this, &DevMenuScreen::OnResetLimitedLogging);
 
 
 	scroll->Add(items);
@@ -123,48 +124,48 @@ void DevMenu::CreatePopupContents(UI::ViewGroup *parent) {
 	}
 }
 
-UI::EventReturn DevMenu::OnToggleAudioDebug(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnToggleAudioDebug(UI::EventParams &e) {
 	g_Config.bShowAudioDebug = !g_Config.bShowAudioDebug;
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnResetLimitedLogging(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnResetLimitedLogging(UI::EventParams &e) {
 	Reporting::ResetCounts();
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnLogView(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnLogView(UI::EventParams &e) {
 	UpdateUIState(UISTATE_PAUSEMENU);
 	screenManager()->push(new LogScreen());
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnLogConfig(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnLogConfig(UI::EventParams &e) {
 	UpdateUIState(UISTATE_PAUSEMENU);
 	screenManager()->push(new LogConfigScreen());
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnDeveloperTools(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnDeveloperTools(UI::EventParams &e) {
 	UpdateUIState(UISTATE_PAUSEMENU);
-	screenManager()->push(new DeveloperToolsScreen());
+	screenManager()->push(new DeveloperToolsScreen(gamePath_));
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnJitCompare(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnJitCompare(UI::EventParams &e) {
 	UpdateUIState(UISTATE_PAUSEMENU);
 	screenManager()->push(new JitCompareScreen());
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnShaderView(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnShaderView(UI::EventParams &e) {
 	UpdateUIState(UISTATE_PAUSEMENU);
 	if (gpu)  // Avoid crashing if chosen while the game is being loaded.
 		screenManager()->push(new ShaderListScreen());
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnFreezeFrame(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnFreezeFrame(UI::EventParams &e) {
 	if (PSP_CoreParameter().frozen) {
 		PSP_CoreParameter().frozen = false;
 	} else {
@@ -173,12 +174,12 @@ UI::EventReturn DevMenu::OnFreezeFrame(UI::EventParams &e) {
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn DevMenu::OnDumpFrame(UI::EventParams &e) {
+UI::EventReturn DevMenuScreen::OnDumpFrame(UI::EventParams &e) {
 	gpu->DumpNextFrame();
 	return UI::EVENT_DONE;
 }
 
-void DevMenu::dialogFinished(const Screen *dialog, DialogResult result) {
+void DevMenuScreen::dialogFinished(const Screen *dialog, DialogResult result) {
 	UpdateUIState(UISTATE_INGAME);
 	// Close when a subscreen got closed.
 	// TODO: a bug in screenmanager causes this not to work here.
@@ -514,7 +515,15 @@ void SystemInfoScreen::CreateViews() {
 	const std::string apiNameKey = draw->GetInfoString(InfoField::APINAME);
 	const char *apiName = gr->T(apiNameKey);
 	deviceSpecs->Add(new InfoItem(si->T("3D API"), apiName));
-	deviceSpecs->Add(new InfoItem(si->T("Vendor"), draw->GetInfoString(InfoField::VENDORSTRING)));
+
+	// TODO: Not really vendor, on most APIs it's a device name (GL calls it vendor though).
+	std::string vendorString;
+	if (draw->GetDeviceCaps().deviceID != 0) {
+		vendorString = StringFromFormat("%s (%08x)", draw->GetInfoString(InfoField::VENDORSTRING).c_str(), draw->GetDeviceCaps().deviceID);
+	} else {
+		vendorString = draw->GetInfoString(InfoField::VENDORSTRING);
+	}
+	deviceSpecs->Add(new InfoItem(si->T("Vendor"), vendorString));
 	std::string vendor = draw->GetInfoString(InfoField::VENDOR);
 	if (vendor.size())
 		deviceSpecs->Add(new InfoItem(si->T("Vendor (detected)"), vendor));
@@ -545,6 +554,7 @@ void SystemInfoScreen::CreateViews() {
 			deviceSpecs->Add(new InfoItem(si->T("High precision float range"), temp));
 		}
 	}
+	deviceSpecs->Add(new InfoItem(si->T("Depth buffer format"), DataFormatToString(draw->GetDeviceCaps().preferredDepthBufferFormat)));
 	deviceSpecs->Add(new ItemHeader(si->T("OS Information")));
 	deviceSpecs->Add(new InfoItem(si->T("Memory Page Size"), StringFromFormat(si->T("%d bytes"), GetMemoryProtectPageSize())));
 	deviceSpecs->Add(new InfoItem(si->T("RW/RX exclusive"), PlatformIsWXExclusive() ? di->T("Active") : di->T("Inactive")));
@@ -608,6 +618,19 @@ void SystemInfoScreen::CreateViews() {
 	}
 	deviceSpecs->Add(new InfoItem("Moga", moga));
 #endif
+
+	if (gstate_c.useFlags != 0) {
+		// We're in-game, and can determine these.
+		// TODO: Call a static version of GPUCommon::CheckGPUFeatures() and derive them here directly.
+
+		deviceSpecs->Add(new ItemHeader(si->T("GPU Flags")));
+
+		for (int i = 0; i < 32; i++) {
+			if (gstate_c.Use((1 << i))) {
+				deviceSpecs->Add(new TextView(GpuUseFlagToString(i), new LayoutParams(FILL_PARENT, WRAP_CONTENT)))->SetFocusable(true);
+			}
+		}
+	}
 
 	ViewGroup *storageScroll = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
 	storageScroll->SetTag("DevSystemInfoBuildConfig");
@@ -1136,7 +1159,7 @@ int ShaderListScreen::ListShaders(DebugShaderType shaderType, UI::LinearLayout *
 	using namespace UI;
 	std::vector<std::string> shaderIds_ = gpu->DebugGetShaderIDs(shaderType);
 	int count = 0;
-	for (auto id : shaderIds_) {
+	for (const auto &id : shaderIds_) {
 		Choice *choice = view->Add(new Choice(gpu->DebugGetShaderString(id, shaderType, SHADER_STRING_SHORT_DESC)));
 		choice->SetTag(id);
 		choice->OnClick.Handle(this, &ShaderListScreen::OnShaderClick);
@@ -1148,7 +1171,7 @@ int ShaderListScreen::ListShaders(DebugShaderType shaderType, UI::LinearLayout *
 struct { DebugShaderType type; const char *name; } shaderTypes[] = {
 	{ SHADER_TYPE_VERTEX, "Vertex" },
 	{ SHADER_TYPE_FRAGMENT, "Fragment" },
-	// { SHADER_TYPE_GEOMETRY, "Geometry" },
+	{ SHADER_TYPE_GEOMETRY, "Geometry" },
 	{ SHADER_TYPE_VERTEXLOADER, "VertexLoader" },
 	{ SHADER_TYPE_PIPELINE, "Pipeline" },
 	{ SHADER_TYPE_TEXTURE, "Texture" },

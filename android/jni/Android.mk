@@ -51,10 +51,12 @@ VULKAN_FILES := \
   $(SRC)/Common/GPU/Vulkan/thin3d_vulkan.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanQueueRunner.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanRenderManager.cpp \
+  $(SRC)/Common/GPU/Vulkan/VulkanFrameData.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanLoader.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanContext.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanDebug.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanImage.cpp \
+  $(SRC)/Common/GPU/Vulkan/VulkanFramebuffer.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanMemory.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanProfiler.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanBarrier.cpp
@@ -69,6 +71,15 @@ SPIRV_CROSS_FILES := \
   $(SRC)/ext/SPIRV-Cross/spirv_glsl.cpp \
   $(SRC)/ext/SPIRV-Cross/spirv_parser.cpp \
   $(SRC)/ext/SPIRV-Cross/spirv_cross_parsed_ir.cpp
+
+VR_FILES := \
+  $(SRC)/Common/VR/OpenXRLoader.cpp \
+  $(SRC)/Common/VR/PPSSPPVR.cpp \
+  $(SRC)/Common/VR/VRBase.cpp \
+  $(SRC)/Common/VR/VRFramebuffer.cpp \
+  $(SRC)/Common/VR/VRInput.cpp \
+  $(SRC)/Common/VR/VRMath.cpp \
+  $(SRC)/Common/VR/VRRenderer.cpp
 
 EXT_FILES := \
   $(SRC)/ext/cityhash/city.cpp \
@@ -114,6 +125,7 @@ EXEC_AND_LIB_FILES := \
   $(ARCH_FILES) \
   $(EGL_FILES) \
   $(VULKAN_FILES) \
+  $(VR_FILES) \
   $(VMA_FILES) \
   $(SPIRV_CROSS_FILES) \
   $(EXT_FILES) \
@@ -155,6 +167,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Common/GPU/Shader.cpp \
   $(SRC)/Common/GPU/ShaderWriter.cpp \
   $(SRC)/Common/GPU/ShaderTranslation.cpp \
+  $(SRC)/Common/Render/ManagedTexture.cpp \
   $(SRC)/Common/Render/DrawBuffer.cpp \
   $(SRC)/Common/Render/TextureAtlas.cpp \
   $(SRC)/Common/Render/Text/draw_text.cpp \
@@ -163,6 +176,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Common/Input/InputState.cpp \
   $(SRC)/Common/Math/fast/fast_matrix.c \
   $(SRC)/Common/Math/math_util.cpp \
+  $(SRC)/Common/Math/Statistics.cpp \
   $(SRC)/Common/Math/curves.cpp \
   $(SRC)/Common/Math/expression_parser.cpp \
   $(SRC)/Common/Math/lin/vec3.cpp.arm \
@@ -180,6 +194,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Common/Thread/ThreadUtil.cpp \
   $(SRC)/Common/Thread/ThreadManager.cpp \
   $(SRC)/Common/Thread/ParallelLoop.cpp \
+  $(SRC)/Common/UI/AsyncImageFileView.cpp \
   $(SRC)/Common/UI/Root.cpp \
   $(SRC)/Common/UI/Screen.cpp \
   $(SRC)/Common/UI/UI.cpp \
@@ -349,6 +364,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/GPU/Common/PostShader.cpp \
   $(SRC)/GPU/Common/ShaderUniforms.cpp \
   $(SRC)/GPU/Common/VertexShaderGenerator.cpp \
+  $(SRC)/GPU/Common/GeometryShaderGenerator.cpp \
   $(SRC)/GPU/Debugger/Breakpoints.cpp \
   $(SRC)/GPU/Debugger/Debugger.cpp \
   $(SRC)/GPU/Debugger/GECommandTable.cpp \
@@ -572,6 +588,12 @@ LIBARMIPS_FILES := \
   $(SRC)/ext/armips/Archs/MIPS/MipsOpcodes.cpp \
   $(SRC)/ext/armips/Archs/MIPS/MipsParser.cpp \
   $(SRC)/ext/armips/Archs/MIPS/PsxRelocator.cpp \
+  $(SRC)/ext/armips/Archs/SuperH/CShInstruction.cpp \
+  $(SRC)/ext/armips/Archs/SuperH/ShElfRelocator.cpp \
+  $(SRC)/ext/armips/Archs/SuperH/ShExpressionFunctions.cpp \
+  $(SRC)/ext/armips/Archs/SuperH/ShOpcodes.cpp \
+  $(SRC)/ext/armips/Archs/SuperH/ShParser.cpp \
+  $(SRC)/ext/armips/Archs/SuperH/SuperH.cpp \
   $(SRC)/ext/armips/Archs/Architecture.cpp \
   $(SRC)/ext/armips/Commands/CAssemblerCommand.cpp \
   $(SRC)/ext/armips/Commands/CAssemblerLabel.cpp \
@@ -583,14 +605,17 @@ LIBARMIPS_FILES := \
   $(SRC)/ext/armips/Commands/CommandSequence.cpp \
   $(SRC)/ext/armips/Core/ELF/ElfFile.cpp \
   $(SRC)/ext/armips/Core/ELF/ElfRelocator.cpp \
+  $(SRC)/ext/armips/Core/Allocations.cpp \
   $(SRC)/ext/armips/Core/Assembler.cpp \
   $(SRC)/ext/armips/Core/Common.cpp \
   $(SRC)/ext/armips/Core/Expression.cpp \
+  $(SRC)/ext/armips/Core/ExpressionFunctionHandler.cpp \
   $(SRC)/ext/armips/Core/ExpressionFunctions.cpp \
   $(SRC)/ext/armips/Core/FileManager.cpp \
   $(SRC)/ext/armips/Core/Misc.cpp \
   $(SRC)/ext/armips/Core/SymbolData.cpp \
   $(SRC)/ext/armips/Core/SymbolTable.cpp \
+  $(SRC)/ext/armips/Core/Types.cpp \
   $(SRC)/ext/armips/Parser/DirectivesParser.cpp \
   $(SRC)/ext/armips/Parser/ExpressionParser.cpp \
   $(SRC)/ext/armips/Parser/Parser.cpp \
@@ -599,6 +624,7 @@ LIBARMIPS_FILES := \
   $(SRC)/ext/armips/Util/CRC.cpp \
   $(SRC)/ext/armips/Util/EncodingTable.cpp \
   $(SRC)/ext/armips/Util/FileClasses.cpp \
+  $(SRC)/ext/armips/Util/FileSystem.cpp \
   $(SRC)/ext/armips/Util/Util.cpp
 
 LOCAL_MODULE := libarmips
@@ -664,7 +690,6 @@ LOCAL_SRC_FILES := \
   $(SRC)/UI/DiscordIntegration.cpp \
   $(SRC)/UI/ChatScreen.cpp \
   $(SRC)/UI/DevScreens.cpp \
-  $(SRC)/UI/DisplayLayoutEditor.cpp \
   $(SRC)/UI/DisplayLayoutScreen.cpp \
   $(SRC)/UI/EmuScreen.cpp \
   $(SRC)/UI/MainScreen.cpp \
@@ -690,7 +715,6 @@ LOCAL_SRC_FILES := \
   $(SRC)/UI/OnScreenDisplay.cpp \
   $(SRC)/UI/ProfilerDraw.cpp \
   $(SRC)/UI/NativeApp.cpp \
-  $(SRC)/UI/TextureUtil.cpp \
   $(SRC)/UI/Theme.cpp \
   $(SRC)/UI/ComboKeyMappingScreen.cpp
 
@@ -714,6 +738,18 @@ ifeq ($(HEADLESS),1)
     $(SRC)/headless/Compare.cpp
 
   include $(BUILD_EXECUTABLE)
+endif
+
+ifeq ($(OPENXR),1)
+  LOCAL_CFLAGS += -DOPENXR
+endif
+
+ifeq ($(OPENXR_PLATFORM_QUEST),1)
+  LOCAL_CFLAGS += -DOPENXR_PLATFORM_QUEST
+endif
+
+ifeq ($(OPENXR_PLATFORM_PICO),1)
+  LOCAL_CFLAGS += -DOPENXR_PLATFORM_PICO
 endif
 
 ifeq ($(UNITTEST),1)

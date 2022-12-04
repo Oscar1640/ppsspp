@@ -10,6 +10,8 @@
 #include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Math/math_util.h"
 #include "Common/Math/lin/matrix4x4.h"
+#include "Common/System/System.h"
+#include "Common/Log.h"
 #include "Common/GPU/thin3d.h"
 #include "Common/GPU/Shader.h"
 #include "Common/GPU/OpenGL/DataFormatGL.h"
@@ -249,9 +251,13 @@ bool OpenGLShaderModule::Compile(GLRenderManager *render, ShaderLanguage languag
 		if (source_.find("#version") == source_.npos) {
 			source_ = ApplyGLSLPrelude(source_, glstage_);
 		}
+	} else {
+		// Unsupported shader type
+		return false;
 	}
 
 	shader_ = render->CreateShader(glstage_, source_, tag_);
+	_assert_(shader_ != nullptr);  // normally can't fail since we defer creation, unless there's a memory error or similar.
 	return true;
 }
 
@@ -276,7 +282,9 @@ public:
 		for (auto &iter : shaders) {
 			iter->Release();
 		}
-		if (program_) render_->DeleteProgram(program_);
+		if (program_) {
+			render_->DeleteProgram(program_);
+		}
 	}
 
 	bool LinkShaders();
@@ -355,10 +363,7 @@ public:
 
 	// These functions should be self explanatory.
 	void BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp, const char *tag) override;
-	Framebuffer *GetCurrentRenderTarget() override {
-		return curRenderTarget_;
-	}
-	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int attachment) override;
+	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int layer) override;
 
 	void GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) override;
 
@@ -400,7 +405,9 @@ public:
 			curPipeline_->depthStencil->stencilPass);
 	}
 
-	void BindTextures(int start, int count, Texture **textures) override;
+	void BindTextures(int start, int count, Texture **textures, TextureBindFlags flags) override;
+	void BindNativeTexture(int sampler, void *nativeTexture) override;
+
 	void BindPipeline(Pipeline *pipeline) override;
 	void BindVertexBuffers(int start, int count, Buffer **buffers, const int *offsets) override {
 		_assert_(start + count <= ARRAY_SIZE(curVBuffers_));
@@ -460,11 +467,11 @@ public:
 
 	void HandleEvent(Event ev, int width, int height, void *param1, void *param2) override {}
 
-	int GetCurrentStepId() const override {
-		return renderManager_.GetCurrentStepId();
-	}
+	void Invalidate(InvalidationFlags flags) override;
 
-	void InvalidateCachedState() override;
+	void SetInvalidationCallback(InvalidationCallback callback) override {
+		renderManager_.SetInvalidationCallback(callback);
+	}
 
 private:
 	void ApplySamplers();
@@ -519,7 +526,6 @@ static bool HasIntelDualSrcBug(int versions[4]) {
 }
 
 OpenGLContext::OpenGLContext() {
-	// TODO: Detect more caps
 	if (gl_extensions.IsGLES) {
 		if (gl_extensions.OES_packed_depth_stencil || gl_extensions.OES_depth24) {
 			caps_.preferredDepthBufferFormat = DataFormat::D24_S8;
@@ -549,7 +555,10 @@ OpenGLContext::OpenGLContext() {
 	caps_.framebufferBlitSupported = gl_extensions.NV_framebuffer_blit || gl_extensions.ARB_framebuffer_object || gl_extensions.GLES3;
 	caps_.framebufferDepthBlitSupported = caps_.framebufferBlitSupported;
 	caps_.framebufferStencilBlitSupported = caps_.framebufferBlitSupported;
-	caps_.depthClampSupported = gl_extensions.ARB_depth_clamp;
+	caps_.depthClampSupported = gl_extensions.ARB_depth_clamp || gl_extensions.EXT_depth_clamp;
+	caps_.blendMinMaxSupported = gl_extensions.EXT_blend_minmax;
+	caps_.multiSampleLevelsMask = 1;  // More could be supported with some work.
+
 	if (gl_extensions.IsGLES) {
 		caps_.clipDistanceSupported = gl_extensions.EXT_clip_cull_distance || gl_extensions.APPLE_clip_distance;
 		caps_.cullDistanceSupported = gl_extensions.EXT_clip_cull_distance;
@@ -568,6 +577,7 @@ OpenGLContext::OpenGLContext() {
 	} else {
 		caps_.fragmentShaderDepthWriteSupported = true;
 	}
+	caps_.fragmentShaderStencilWriteSupported = gl_extensions.ARB_shader_stencil_export;
 
 	// GLES has no support for logic framebuffer operations. There doesn't even seem to exist any such extensions.
 	caps_.logicOpSupported = !gl_extensions.IsGLES;
@@ -592,6 +602,10 @@ OpenGLContext::OpenGLContext() {
 		caps_.vendor = GPUVendor::VENDOR_UNKNOWN;
 		break;
 	}
+
+	// Very rough heuristic!
+	caps_.isTilingGPU = gl_extensions.IsGLES && caps_.vendor != GPUVendor::VENDOR_NVIDIA && caps_.vendor != GPUVendor::VENDOR_INTEL;
+
 	for (int i = 0; i < GLRenderManager::MAX_INFLIGHT_FRAMES; i++) {
 		frameData_[i].push = renderManager_.CreatePushBuffer(i, GL_ARRAY_BUFFER, 64 * 1024);
 	}
@@ -636,6 +650,15 @@ OpenGLContext::OpenGLContext() {
 		// See https://github.com/hrydgard/ppsspp/commit/8974cd675e538f4445955e3eac572a9347d84232
 		// TODO: Should this workaround be removed for newer devices/drivers?
 		bugs_.Infest(Bugs::PVR_GENMIPMAP_HEIGHT_GREATER);
+	}
+
+	if (caps_.vendor == GPUVendor::VENDOR_QUALCOMM) {
+#if PPSSPP_PLATFORM(ANDROID)
+		// The bug seems to affect Adreno 3xx and 5xx, and appeared in Android 8.0 Oreo, so API 26.
+		// See https://github.com/hrydgard/ppsspp/issues/16015#issuecomment-1328316080.
+		if (gl_extensions.modelNumber < 600 && System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 26)
+			bugs_.Infest(Bugs::ADRENO_RESOURCE_DEADLOCK);
+#endif
 	}
 
 #if PPSSPP_PLATFORM(IOS)
@@ -709,8 +732,10 @@ OpenGLContext::OpenGLContext() {
 		}
 	}
 
-	if (gl_extensions.IsGLES) {
+	// NOTE: We only support framebuffer fetch on ES3 due to past issues..
+	if (gl_extensions.IsGLES && gl_extensions.GLES3) {
 		caps_.framebufferFetchSupported = (gl_extensions.EXT_shader_framebuffer_fetch || gl_extensions.ARM_shader_framebuffer_fetch);
+
 		if (gl_extensions.EXT_shader_framebuffer_fetch) {
 			shaderLanguageDesc_.framebufferFetchExtension = "#extension GL_EXT_shader_framebuffer_fetch : require";
 			shaderLanguageDesc_.lastFragData = gl_extensions.GLES3 ? "fragColor0" : "gl_LastFragData[0]";
@@ -741,18 +766,20 @@ void OpenGLContext::EndFrame() {
 	renderManager_.EndPushBuffer(frameData.push);  // upload the data!
 	renderManager_.Finish();
 
-	InvalidateCachedState();
+	Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 }
 
-void OpenGLContext::InvalidateCachedState() {
-	// Unbind stuff.
-	for (auto &texture : boundTextures_) {
-		texture = nullptr;
+void OpenGLContext::Invalidate(InvalidationFlags flags) {
+	if (flags & InvalidationFlags::CACHED_RENDER_STATE) {
+		// Unbind stuff.
+		for (auto &texture : boundTextures_) {
+			texture = nullptr;
+		}
+		for (auto &sampler : boundSamplers_) {
+			sampler = nullptr;
+		}
+		curPipeline_ = nullptr;
 	}
-	for (auto &sampler : boundSamplers_) {
-		sampler = nullptr;
-	}
-	curPipeline_ = nullptr;
 }
 
 InputLayout *OpenGLContext::CreateInputLayout(const InputLayoutDesc &desc) {
@@ -1124,7 +1151,7 @@ Pipeline *OpenGLContext::CreateGraphicsPipeline(const PipelineDesc &desc, const 
 	}
 }
 
-void OpenGLContext::BindTextures(int start, int count, Texture **textures) {
+void OpenGLContext::BindTextures(int start, int count, Texture **textures, TextureBindFlags flags) {
 	_assert_(start + count <= MAX_TEXTURE_SLOTS);
 	for (int i = start; i < start + count; i++) {
 		OpenGLTexture *glTex = static_cast<OpenGLTexture *>(textures[i - start]);
@@ -1136,6 +1163,12 @@ void OpenGLContext::BindTextures(int start, int count, Texture **textures) {
 		glTex->Bind(i);
 		boundTextures_[i] = glTex->GetTex();
 	}
+}
+
+void OpenGLContext::BindNativeTexture(int index, void *nativeTexture) {
+	GLRTexture *tex = (GLRTexture *)nativeTexture;
+	boundTextures_[index] = tex;
+	renderManager_.BindTexture(index, tex);
 }
 
 void OpenGLContext::ApplySamplers() {
@@ -1191,9 +1224,11 @@ bool OpenGLPipeline::LinkShaders() {
 	}
 
 	std::vector<GLRProgram::Semantic> semantics;
+	semantics.reserve(8);
 	// Bind all the common vertex data points. Mismatching ones will be ignored.
 	semantics.push_back({ SEM_POSITION, "Position" });
 	semantics.push_back({ SEM_COLOR0, "Color0" });
+	semantics.push_back({ SEM_COLOR1, "Color1" });
 	semantics.push_back({ SEM_TEXCOORD0, "TexCoord0" });
 	semantics.push_back({ SEM_NORMAL, "Normal" });
 	semantics.push_back({ SEM_TANGENT, "Tangent" });
@@ -1219,14 +1254,15 @@ bool OpenGLPipeline::LinkShaders() {
 	}
 	std::vector<GLRProgram::Initializer> initialize;
 	for (int i = 0; i < MAX_TEXTURE_SLOTS; ++i) {
-		if (i < samplers_.size()) {
+		if (i < (int)samplers_.size()) {
 			initialize.push_back({ &samplerLocs_[i], 0, i });
 		} else {
 			samplerLocs_[i] = -1;
 		}
 	}
 
-	program_ = render_->CreateProgram(linkShaders, semantics, queries, initialize, false, false);
+	GLRProgramFlags flags{};
+	program_ = render_->CreateProgram(linkShaders, semantics, queries, initialize, flags);
 	return true;
 }
 
@@ -1375,6 +1411,9 @@ void OpenGLInputLayout::Compile(const InputLayoutDesc &desc) {
 Framebuffer *OpenGLContext::CreateFramebuffer(const FramebufferDesc &desc) {
 	CheckGLExtensions();
 
+	// TODO: Support multiview later. (It's our only use case for multi layers).
+	_dbg_assert_(desc.numLayers == 1);
+
 	GLRFramebuffer *framebuffer = renderManager_.CreateFramebuffer(desc.width, desc.height, desc.z_stencil);
 	OpenGLFramebuffer *fbo = new OpenGLFramebuffer(&renderManager_, framebuffer);
 	return fbo;
@@ -1421,7 +1460,7 @@ bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, in
 	return true;
 }
 
-void OpenGLContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int color) {
+void OpenGLContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int layer) {
 	OpenGLFramebuffer *fb = (OpenGLFramebuffer *)fbo;
 	_assert_(binding < MAX_TEXTURE_SLOTS);
 
@@ -1438,7 +1477,7 @@ void OpenGLContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBCh
 		aspect |= GL_STENCIL_BUFFER_BIT;
 		boundTextures_[binding] = &fb->framebuffer_->z_stencil_texture;
 	}
-	renderManager_.BindFramebufferAsTexture(fb->framebuffer_, binding, aspect, color);
+	renderManager_.BindFramebufferAsTexture(fb->framebuffer_, binding, aspect);
 }
 
 void OpenGLContext::GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) {
@@ -1483,7 +1522,15 @@ uint32_t OpenGLContext::GetDataFormatSupport(DataFormat fmt) const {
 		return FMT_INPUTLAYOUT;
 
 	case DataFormat::R8_UNORM:
-		return 0;
+		return FMT_TEXTURE;
+	case DataFormat::R16_UNORM:
+		if (!gl_extensions.IsGLES) {
+			return FMT_TEXTURE;
+		} else {
+			return 0;
+		}
+		break;
+
 	case DataFormat::BC1_RGBA_UNORM_BLOCK:
 	case DataFormat::BC2_UNORM_BLOCK:
 	case DataFormat::BC3_UNORM_BLOCK:

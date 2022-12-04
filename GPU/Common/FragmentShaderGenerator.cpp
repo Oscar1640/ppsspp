@@ -31,21 +31,33 @@
 #include "GPU/Common/ShaderId.h"
 #include "GPU/Common/ShaderUniforms.h"
 #include "GPU/Common/FragmentShaderGenerator.h"
+#include "GPU/Vulkan/DrawEngineVulkan.h"
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"
 
 #define WRITE(p, ...) p.F(__VA_ARGS__)
 
+static const SamplerDef samplersMono[3] = {
+	{ 0, "tex" },
+	{ 1, "fbotex", SamplerFlags::ARRAY_ON_VULKAN },
+	{ 2, "pal" },
+};
+
+static const SamplerDef samplersStereo[3] = {
+	{ 0, "tex", SamplerFlags::ARRAY_ON_VULKAN },
+	{ 1, "fbotex", SamplerFlags::ARRAY_ON_VULKAN },
+	{ 2, "pal" },
+};
+
 bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLanguageDesc &compat, Draw::Bugs bugs, uint64_t *uniformMask, FragmentShaderFlags *fragmentShaderFlags, std::string *errorString) {
 	*uniformMask = 0;
-	if (fragmentShaderFlags) {
-		*fragmentShaderFlags = (FragmentShaderFlags)0;
-	}
+	*fragmentShaderFlags = (FragmentShaderFlags)0;
 	errorString->clear();
 
+	bool useStereo = id.Bit(FS_BIT_STEREO);
 	bool highpFog = false;
 	bool highpTexcoord = false;
-	bool enableFragmentTestCache = g_Config.bFragmentTestCache && ShaderLanguageIsOpenGL(compat.shaderLanguage);
+	bool enableFragmentTestCache = gstate_c.Use(GPU_USE_FRAGMENT_TEST_CACHE);
 
 	if (compat.gles) {
 		// PowerVR needs highp to do the fog in MHU correctly.
@@ -55,26 +67,35 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	}
 
 	bool texture3D = id.Bit(FS_BIT_3D_TEXTURE);
+	bool arrayTexture = id.Bit(FS_BIT_SAMPLE_ARRAY_TEXTURE);
 
 	ReplaceAlphaType stencilToAlpha = static_cast<ReplaceAlphaType>(id.Bits(FS_BIT_STENCIL_TO_ALPHA, 2));
 
-	std::vector<const char*> gl_exts;
+	std::vector<const char*> extensions;
 	if (ShaderLanguageIsOpenGL(compat.shaderLanguage)) {
 		if (stencilToAlpha == REPLACE_ALPHA_DUALSOURCE && gl_extensions.EXT_blend_func_extended) {
-			gl_exts.push_back("#extension GL_EXT_blend_func_extended : require");
+			extensions.push_back("#extension GL_EXT_blend_func_extended : require");
 		}
 		if (gl_extensions.EXT_gpu_shader4) {
-			gl_exts.push_back("#extension GL_EXT_gpu_shader4 : enable");
+			extensions.push_back("#extension GL_EXT_gpu_shader4 : enable");
 		}
 		if (compat.framebufferFetchExtension) {
-			gl_exts.push_back(compat.framebufferFetchExtension);
+			extensions.push_back(compat.framebufferFetchExtension);
 		}
 		if (gl_extensions.OES_texture_3D && texture3D) {
-			gl_exts.push_back("#extension GL_OES_texture_3D: enable");
+			extensions.push_back("#extension GL_OES_texture_3D: enable");
 		}
+	} 
+
+	ShaderWriterFlags flags = ShaderWriterFlags::NONE;
+	if (useStereo) {
+		flags |= ShaderWriterFlags::FS_AUTO_STEREO;
 	}
 
-	ShaderWriter p(buffer, compat, ShaderStage::Fragment, gl_exts.data(), gl_exts.size());
+	ShaderWriter p(buffer, compat, ShaderStage::Fragment, extensions, flags);
+	p.F("// %s\n", FragmentShaderDesc(id).c_str());
+
+	p.ApplySamplerMetadata(arrayTexture ? samplersStereo : samplersMono);
 
 	bool lmode = id.Bit(FS_BIT_LMODE);
 	bool doTexture = id.Bit(FS_BIT_DO_TEXTURE);
@@ -88,6 +109,15 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	bool enableColorDoubling = id.Bit(FS_BIT_COLOR_DOUBLE);
 	bool doTextureProjection = id.Bit(FS_BIT_DO_TEXTURE_PROJ);
 	bool doTextureAlpha = id.Bit(FS_BIT_TEXALPHA);
+
+	if (texture3D && arrayTexture) {
+		*errorString = "Invalid combination of 3D texture and array texture, shouldn't happen";
+		return false;
+	}
+	if (compat.shaderLanguage != ShaderLanguage::GLSL_VULKAN && arrayTexture) {
+		*errorString = "We only do array textures for framebuffers in Vulkan.";
+		return false;
+	}
 
 	bool flatBug = bugs.Has(Draw::Bugs::BROKEN_FLAT_IN_SHADER) && g_Config.bVendorBugChecksEnabled;
 
@@ -120,8 +150,9 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	bool isModeClear = id.Bit(FS_BIT_CLEARMODE);
 
 	const char *shading = "";
-	if (compat.glslES30 || compat.shaderLanguage == ShaderLanguage::GLSL_VULKAN)
+	if (compat.glslES30 || compat.shaderLanguage == ShaderLanguage::GLSL_VULKAN) {
 		shading = doFlatShading ? "flat" : "";
+	}
 
 	bool useDiscardStencilBugWorkaround = id.Bit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL);
 
@@ -134,42 +165,54 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	GELogicOp replaceLogicOpType = isModeClear ? GE_LOGIC_COPY : (GELogicOp)id.Bits(FS_BIT_REPLACE_LOGIC_OP, 4);
 	bool replaceLogicOp = replaceLogicOpType != GE_LOGIC_COPY && compat.bitwiseOps;
 
-	bool readFramebuffer = replaceBlend == REPLACE_BLEND_READ_FRAMEBUFFER || colorWriteMask || replaceLogicOp;
-	bool readFramebufferTex = readFramebuffer && !gstate_c.Supports(GPU_SUPPORTS_ANY_FRAMEBUFFER_FETCH);
+	bool needFramebufferRead = replaceBlend == REPLACE_BLEND_READ_FRAMEBUFFER || colorWriteMask || replaceLogicOp;
 
-	bool needFragCoord = readFramebuffer || gstate_c.Supports(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT);
-	bool writeDepth = gstate_c.Supports(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT);
+	bool fetchFramebuffer = needFramebufferRead && id.Bit(FS_BIT_USE_FRAMEBUFFER_FETCH);
+	bool readFramebufferTex = needFramebufferRead && !id.Bit(FS_BIT_USE_FRAMEBUFFER_FETCH);
+
+	if (fetchFramebuffer && compat.shaderLanguage != GLSL_VULKAN && (compat.shaderLanguage != GLSL_3xx || !compat.lastFragData)) {
+		*errorString = "framebuffer fetch requires GLSL: vulkan or 3xx";
+		return false;
+	}
+
+	bool needFragCoord = readFramebufferTex || gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT);
+	bool writeDepth = gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT);
 
 	if (shaderDepalMode != ShaderDepalMode::OFF && !doTexture) {
 		*errorString = "depal requires a texture";
 		return false;
 	}
 
+	// Currently only used by Vulkan.
+	std::vector<SamplerDef> samplers;
+
 	if (compat.shaderLanguage == ShaderLanguage::GLSL_VULKAN) {
-		if (useDiscardStencilBugWorkaround && !gstate_c.Supports(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT)) {
+		if (useDiscardStencilBugWorkaround && !gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT)) {
 			WRITE(p, "layout (depth_unchanged) out float gl_FragDepth;\n");
 		}
 
-		WRITE(p, "layout (std140, set = 0, binding = 3) uniform baseUBO {\n%s};\n", ub_baseStr);
+		WRITE(p, "layout (std140, set = 1, binding = %d) uniform baseUBO {\n%s};\n", DRAW_BINDING_DYNUBO_BASE, ub_baseStr);
 		if (doTexture) {
-			WRITE(p, "layout (binding = 0) uniform %s tex;\n", texture3D ? "sampler3D" : "sampler2D");
+			WRITE(p, "layout (set = 1, binding = %d) uniform %s%s tex;\n", DRAW_BINDING_TEXTURE, texture3D ? "sampler3D" : "sampler2D", arrayTexture ? "Array" : "");
 		}
 
 		if (readFramebufferTex) {
-			WRITE(p, "layout (binding = 1) uniform sampler2D fbotex;\n");
+			// The framebuffer texture is always bound as an array.
+			p.F("layout (set = 1, binding = %d) uniform sampler2DArray fbotex;\n", DRAW_BINDING_2ND_TEXTURE);
+		} else if (fetchFramebuffer) {
+			p.F("layout (input_attachment_index = 0, set = 1, binding = %d) uniform subpassInput inputColor;\n", DRAW_BINDING_INPUT_ATTACHMENT);
+			*fragmentShaderFlags |= FragmentShaderFlags::INPUT_ATTACHMENT;
 		}
 
 		if (shaderDepalMode != ShaderDepalMode::OFF) {
-			WRITE(p, "layout (binding = 2) uniform sampler2D pal;\n");
+			WRITE(p, "layout (set = 1, binding = %d) uniform sampler2D pal;\n", DRAW_BINDING_DEPAL_TEXTURE);
 		}
 
 		// Note: the precision qualifiers must match the vertex shader!
 		WRITE(p, "layout (location = 1) %s in lowp vec4 v_color0;\n", shading);
 		if (lmode)
 			WRITE(p, "layout (location = 2) %s in lowp vec3 v_color1;\n", shading);
-		if (enableFog) {
-			WRITE(p, "layout (location = 3) in highp float v_fogdepth;\n");
-		}
+		WRITE(p, "layout (location = 3) in highp float v_fogdepth;\n");
 		if (doTexture) {
 			WRITE(p, "layout (location = 0) in highp vec3 v_texcoord;\n");
 		}
@@ -178,7 +221,8 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 			WRITE(p, "int roundAndScaleTo255i(in highp float x) { return int(floor(x * 255.0 + 0.5)); }\n");
 		}
 		if (enableColorTest && !colorTestAgainstZero) {
-			WRITE(p, "ivec3 roundAndScaleTo255iv(in highp vec3 x) { return ivec3(floor(x * 255.0 + 0.5)); }\n");
+			WRITE(p, "uint roundAndScaleTo8x4(in highp vec3 x) { uvec3 u = uvec3(floor(x * 255.0 + 0.5)); return u.r | (u.g << 8) | (u.b << 16); }\n");
+			WRITE(p, "uint packFloatsTo8x4(in vec3 x) { uvec3 u = uvec3(x); return u.r | (u.g << 8) | (u.b << 16); }\n");
 		}
 
 		WRITE(p, "layout (location = 0, index = 0) out vec4 fragColor0;\n");
@@ -257,7 +301,8 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		}
 		if (enableColorTest) {
 			if (compat.shaderLanguage == HLSL_D3D11) {
-				WRITE(p, "uvec3 roundAndScaleTo255iv(float3 x) { return (floor(x * 255.0f + 0.5f)); }\n");
+				WRITE(p, "uint roundAndScaleTo8x4(float3 x) { uvec3 u = (floor(x * 255.0f + 0.5f)); return u.r | (u.g << 8) | (u.b << 16); }\n");
+				WRITE(p, "uint packFloatsTo8x4(in vec3 x) { uvec3 u = uvec3(x); return u.r | (u.g << 8) | (u.b << 16); }\n");
 			} else {
 				WRITE(p, "vec3 roundAndScaleTo255v(float3 x) { return floor(x * 255.0f + 0.5f); }\n");
 			}
@@ -272,9 +317,7 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		if (lmode) {
 			WRITE(p, "  vec3 v_color1: COLOR1;\n");
 		}
-		if (enableFog) {
-			WRITE(p, "  float v_fogdepth: TEXCOORD1;\n");
-		}
+		WRITE(p, "  float v_fogdepth: TEXCOORD1;\n");
 		if (needFragCoord) {
 			if (compat.shaderLanguage == HLSL_D3D11) {
 				WRITE(p, "  vec4 pixelPos : SV_POSITION;\n");
@@ -348,10 +391,14 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 				WRITE(p, "uniform sampler2D testtex;\n");
 			} else {
 				*uniformMask |= DIRTY_ALPHACOLORREF;
-				WRITE(p, "uniform vec4 u_alphacolorref;\n");
+				if (compat.bitwiseOps) {
+					WRITE(p, "uniform uint u_alphacolorref;\n");
+				} else {
+					WRITE(p, "uniform vec4 u_alphacolorref;\n");
+				}
 				if (compat.bitwiseOps && ((enableColorTest && !colorTestAgainstZero) || (enableAlphaTest && !alphaTestAgainstZero))) {
 					*uniformMask |= DIRTY_ALPHACOLORMASK;
-					WRITE(p, "uniform ivec4 u_alphacolormask;\n");
+					WRITE(p, "uniform uint u_alphacolormask;\n");
 				}
 			}
 		}
@@ -387,8 +434,8 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		if (enableFog) {
 			*uniformMask |= DIRTY_FOGCOLOR;
 			WRITE(p, "uniform vec3 u_fogcolor;\n");
-			WRITE(p, "%s %s float v_fogdepth;\n", compat.varying_fs, highpFog ? "highp" : "mediump");
 		}
+		WRITE(p, "%s %s float v_fogdepth;\n", compat.varying_fs, highpFog ? "highp" : "mediump");
 		if (doTexture) {
 			WRITE(p, "%s %s vec3 v_texcoord;\n", compat.varying_fs, highpTexcoord ? "highp" : "mediump");
 		}
@@ -405,7 +452,8 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 			}
 			if (enableColorTest && !colorTestAgainstZero) {
 				if (compat.bitwiseOps) {
-					WRITE(p, "ivec3 roundAndScaleTo255iv(in vec3 x) { return ivec3(floor(x * 255.0 + 0.5)); }\n");
+					WRITE(p, "uint roundAndScaleTo8x4(in vec3 x) { uvec3 u = uvec3(floor(x * 255.99)); return u.r | (u.g << 8) | (u.b << 16); }\n");
+					WRITE(p, "uint packFloatsTo8x4(in vec3 x) { uvec3 u = uvec3(x); return u.r | (u.g << 8) | (u.b << 16); }\n");
 				} else if (gl_extensions.gpuVendor == GPU_VENDOR_IMGTEC) {
 					WRITE(p, "vec3 roundTo255thv(in vec3 x) { vec3 y = x + (0.5/255.0); return y - fract(y * 255.0) * (1.0 / 255.0); }\n");
 				} else {
@@ -416,7 +464,7 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 
 		if (!strcmp(compat.fragColor0, "fragColor0")) {
 			const char *qualifierColor0 = "out";
-			if (readFramebuffer && compat.lastFragData && !strcmp(compat.lastFragData, compat.fragColor0)) {
+			if (fetchFramebuffer && compat.lastFragData && !strcmp(compat.lastFragData, compat.fragColor0)) {
 				qualifierColor0 = "inout";
 			}
 			// Output the output color definitions.
@@ -453,6 +501,12 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		WRITE(p, "  highp vec4 f = vec4(u);\n");
 		WRITE(p, "  return f * (1.0 / 255.0);\n");
 		WRITE(p, "}\n");
+	}
+
+	if (compat.bitwiseOps && enableColorTest) {
+		p.C("uvec3 unpackUVec3(highp uint x) {\n");
+		p.C("  return uvec3(x & 0xFFU, (x >> 8) & 0xFFU, (x >> 16) & 0xFFU);\n");
+		p.C("}\n");
 	}
 
 	// PowerVR needs a custom modulo function. For some reason, this has far higher precision than the builtin one.
@@ -492,19 +546,27 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	}
 
 	// Two things read from the old framebuffer - shader replacement blending and bit-level masking.
-	if (readFramebuffer) {
+	if (readFramebufferTex) {
 		if (compat.shaderLanguage == HLSL_D3D11) {
 			WRITE(p, "  vec4 destColor = fbotex.Load(int3((int)gl_FragCoord.x, (int)gl_FragCoord.y, 0));\n");
 		} else if (compat.shaderLanguage == HLSL_D3D9) {
 			WRITE(p, "  vec4 destColor = tex2D(fbotex, gl_FragCoord.xy * u_fbotexSize.xy);\n", compat.texture);
-		} else if (gstate_c.Supports(GPU_SUPPORTS_ANY_FRAMEBUFFER_FETCH)) {
-			// If we have EXT_shader_framebuffer_fetch / ARM_shader_framebuffer_fetch, we skip the blit.
-			// We can just read the prev value more directly.
-			WRITE(p, "  lowp vec4 destColor = %s;\n", compat.lastFragData);
+		} else if (compat.shaderLanguage == GLSL_VULKAN) {
+			WRITE(p, "  lowp vec4 destColor = %s(fbotex, ivec3(gl_FragCoord.x, gl_FragCoord.y, %s), 0);\n", compat.texelFetch, useStereo ? "float(gl_ViewIndex)" : "0");
 		} else if (!compat.texelFetch) {
 			WRITE(p, "  lowp vec4 destColor = %s(fbotex, gl_FragCoord.xy * u_fbotexSize.xy);\n", compat.texture);
 		} else {
 			WRITE(p, "  lowp vec4 destColor = %s(fbotex, ivec2(gl_FragCoord.x, gl_FragCoord.y), 0);\n", compat.texelFetch);
+		}
+	} else if (fetchFramebuffer) {
+		// If we have EXT_shader_framebuffer_fetch / ARM_shader_framebuffer_fetch, we skip the blit.
+		// We can just read the prev value more directly.
+		if (compat.shaderLanguage == GLSL_3xx) {
+			WRITE(p, "  lowp vec4 destColor = %s;\n", compat.lastFragData);
+		} else if (compat.shaderLanguage == GLSL_VULKAN) {
+			WRITE(p, "  lowp vec4 destColor = subpassLoad(inputColor);\n");
+		} else {
+			_assert_msg_(false, "Need fetch destColor, but not a compatible language");
 		}
 	}
 
@@ -605,6 +667,18 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 						} else {
 							WRITE(p, "  vec4 t = %s(tex, vec3(%s.xy, u_mipBias));\n", compat.texture3D, texcoord);
 						}
+					} else if (arrayTexture) {
+						_dbg_assert_(compat.shaderLanguage == GLSL_VULKAN);
+						// Used for stereo rendering.
+						const char *arrayIndex = useStereo ? "float(gl_ViewIndex)" : "0.0";
+						if (doTextureProjection) {
+							// There's no textureProj for array textures, so we need to emulate it.
+							// Should be fine on any Vulkan-compatible hardware.
+							WRITE(p, "  vec2 uv_proj = (%s.xy) / (%s.z);\n", texcoord, texcoord);
+							WRITE(p, "  vec4 t = %s(tex, vec3(uv_proj, %s));\n", compat.texture, texcoord, arrayIndex);
+						} else {
+							WRITE(p, "  vec4 t = %s(tex, vec3(%s.xy, %s));\n", compat.texture, texcoord, arrayIndex);
+						}
 					} else {
 						if (doTextureProjection) {
 							WRITE(p, "  vec4 t = %sProj(tex, %s);\n", compat.texture, texcoord);
@@ -640,7 +714,7 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 				p.C("    if (depalShift == 5u) { index0 = t.g; }\n");
 				p.C("    else if (depalShift == 10u) { index0 = t.b; }\n");
 				p.C("  }\n");
-				p.F("  t = ").SampleTexture2D("pal", "vec2(index0 * factor, 0.0)").C(";\n");
+				p.F("  t = ").SampleTexture2D("pal", "vec2(index0 * factor * 0.5, 0.0)").C(";\n");  // 0.5 for 512-entry CLUT.
 				break;
 			case ShaderDepalMode::NORMAL:
 				if (doTextureProjection) {
@@ -734,8 +808,27 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 				WRITE(p, "  }\n");
 				break;
 			case ShaderDepalMode::CLUT8_8888:
-				// Not yet implemented.
-				WRITE(p, "    vec4 t = vec4(0.0, 0.0, 0.0, 0.0);\n");
+				if (doTextureProjection) {
+					// We don't use textureProj because we need better control and it's probably not much of a savings anyway.
+					// However it is good for precision on older hardware like PowerVR.
+					p.F("  vec2 uv = %s.xy/%s.z;\n  vec2 uv_round;\n", texcoord, texcoord);
+				} else {
+					p.F("  vec2 uv = %s.xy;\n  vec2 uv_round;\n", texcoord);
+				}
+				p.C("  vec2 tsize = vec2(textureSize(tex, 0).xy);\n");
+				p.C("  uv_round = floor(uv * tsize);\n");
+				p.C("  int component = int(uv_round.x) & 3;\n");
+				p.C("  uv_round.x *= 0.25;\n");
+				p.C("  uv_round /= tsize;\n");
+				p.C("  vec4 t = ").SampleTexture2D("tex", "uv_round").C(";\n");
+				p.C("  int index;\n");
+				p.C("  switch (component) {\n");
+				p.C("  case 0: index = int(t.x * 254.99); break;\n");  // TODO: Not sure why 254.99 instead of 255.99, but it's currently needed.
+				p.C("  case 1: index = int(t.y * 254.99); break;\n");
+				p.C("  case 2: index = int(t.z * 254.99); break;\n");
+				p.C("  case 3: index = int(t.w * 254.99); break;\n");
+				p.C("  }\n");
+				p.C("  t = ").LoadTexture2D("pal", "ivec2(index, 0)", 0).C(";\n");
 				break;
 			}
 
@@ -825,6 +918,8 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 
 		const char *discardStatement = testForceToZero ? "v.a = 0.0;" : "DISCARD;";
 		if (enableAlphaTest) {
+			*fragmentShaderFlags |= FragmentShaderFlags::USES_DISCARD;
+
 			if (alphaTestAgainstZero) {
 				// When testing against 0 (extremely common), we can avoid some math.
 				// 0.002 is approximately half of 1.0 / 255.0.
@@ -845,7 +940,7 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 				const char *alphaTestFuncs[] = { "#", "#", " != ", " == ", " >= ", " > ", " <= ", " < " };
 				if (alphaTestFuncs[alphaTestFunc][0] != '#') {
 					if (compat.bitwiseOps) {
-						WRITE(p, "  if ((roundAndScaleTo255i(v.a) & u_alphacolormask.a) %s int(u_alphacolorref.a)) %s\n", alphaTestFuncs[alphaTestFunc], discardStatement);
+						WRITE(p, "  if ((roundAndScaleTo255i(v.a) & int(u_alphacolormask >> 24)) %s int(u_alphacolorref >> 24)) %s\n", alphaTestFuncs[alphaTestFunc], discardStatement);
 					} else if (gl_extensions.gpuVendor == GPU_VENDOR_IMGTEC) {
 						// Work around bad PVR driver problem where equality check + discard just doesn't work.
 						if (alphaTestFunc != GE_COMP_NOTEQUAL) {
@@ -862,6 +957,8 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		}
 
 		if (enableColorTest) {
+			*fragmentShaderFlags |= FragmentShaderFlags::USES_DISCARD;
+
 			if (colorTestAgainstZero) {
 				// When testing against 0 (common), we can avoid some math.
 				// 0.002 is approximately half of 1.0 / 255.0.
@@ -899,34 +996,22 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 				}
 			} else {
 				const char *colorTestFuncs[] = { "#", "#", " != ", " == " };
-				if (colorTestFuncs[colorTestFunc][0] != '#') {
+				const char *test = colorTestFuncs[colorTestFunc];
+				if (test[0] != '#') {
 					// TODO: Unify these paths better.
-					if (compat.shaderLanguage == HLSL_D3D11) {
-						const char *test = colorTestFuncs[colorTestFunc];
-						WRITE(p, "  uvec3 v_scaled = roundAndScaleTo255iv(v.rgb);\n");
-						WRITE(p, "  uvec3 v_masked = v_scaled & u_alphacolormask.rgb;\n");
-						WRITE(p, "  uvec3 colorTestRef = u_alphacolorref.rgb & u_alphacolormask.rgb;\n");
-						// We have to test the components separately, or we get incorrect results.  See #10629.
-						WRITE(p, "  if (v_masked.r %s colorTestRef.r && v_masked.g %s colorTestRef.g && v_masked.b %s colorTestRef.b) %s\n", test, test, test, discardStatement);
-					} else if (compat.shaderLanguage == HLSL_D3D9) {
-						const char *test = colorTestFuncs[colorTestFunc];
+					if (compat.shaderLanguage == HLSL_D3D9) {
 						// TODO: Use a texture to lookup bitwise ops instead?
 						WRITE(p, "  vec3 colortest = roundAndScaleTo255v(v.rgb);\n");
 						WRITE(p, "  if ((colortest.r %s u_alphacolorref.r) && (colortest.g %s u_alphacolorref.g) && (colortest.b %s u_alphacolorref.b)) %s\n", test, test, test, discardStatement);
 					} else if (compat.bitwiseOps) {
-						WRITE(p, "  ivec3 v_scaled = roundAndScaleTo255iv(v.rgb);\n");
-						if (compat.shaderLanguage == GLSL_VULKAN) {
-							// Apparently GLES3 does not support vector bitwise ops, but Vulkan does?
-							WRITE(p, "  if ((v_scaled & u_alphacolormask.rgb) %s (u_alphacolorref.rgb & u_alphacolormask.rgb)) %s\n", colorTestFuncs[colorTestFunc], discardStatement);
-						} else {
-							const char *maskedFragColor = "ivec3(v_scaled.r & u_alphacolormask.r, v_scaled.g & u_alphacolormask.g, v_scaled.b & u_alphacolormask.b)";
-							const char *maskedColorRef = "ivec3(int(u_alphacolorref.r) & u_alphacolormask.r, int(u_alphacolorref.g) & u_alphacolormask.g, int(u_alphacolorref.b) & u_alphacolormask.b)";
-							WRITE(p, "  if (%s %s %s) %s\n", maskedFragColor, colorTestFuncs[colorTestFunc], maskedColorRef, discardStatement);
-						}
+						WRITE(p, "  uint v_uint = roundAndScaleTo8x4(v.rgb);\n");
+						WRITE(p, "  uint v_masked = v_uint & u_alphacolormask;\n");
+						WRITE(p, "  uint colorTestRef = (u_alphacolorref & u_alphacolormask) & 0xFFFFFFu;\n");
+						WRITE(p, "  if (v_masked %s colorTestRef) %s\n", test, discardStatement);
 					} else if (gl_extensions.gpuVendor == GPU_VENDOR_IMGTEC) {
-						WRITE(p, "  if (roundTo255thv(v.rgb) %s u_alphacolorref.rgb) %s\n", colorTestFuncs[colorTestFunc], discardStatement);
+						WRITE(p, "  if (roundTo255thv(v.rgb) %s u_alphacolorref.rgb) %s\n", test, discardStatement);
 					} else {
-						WRITE(p, "  if (roundAndScaleTo255v(v.rgb) %s u_alphacolorref.rgb) %s\n", colorTestFuncs[colorTestFunc], discardStatement);
+						WRITE(p, "  if (roundAndScaleTo255v(v.rgb) %s u_alphacolorref.rgb) %s\n", test, discardStatement);
 					}
 				} else {
 					WRITE(p, "  %s\n", discardStatement);
@@ -1126,12 +1211,15 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		case GE_LOGIC_COPY_INVERTED: p.C("  v32 = (~v32 & 0x00FFFFFFu) | (v32 & 0xFF000000u);\n"); break;
 		case GE_LOGIC_OR_INVERTED:   p.C("  v32 = ((~v32 | d32) & 0x00FFFFFFu) | (v32 & 0xFF000000u);\n"); break;
 		case GE_LOGIC_NAND:          p.C("  v32 = (~(v32 & d32) & 0x00FFFFFFu) | (v32 & 0xFF000000u);\n"); break;
-		case GE_LOGIC_SET:           p.C("  v32 |= 0x00FFFFFF;\n"); break;
+		case GE_LOGIC_SET:           p.C("  v32 |= 0x00FFFFFFu;\n"); break;
 		}
 
 		// Note that the mask has already been flipped to the PC way - 1 means write.
 		if (colorWriteMask) {
-			WRITE(p, "  v32 = (v32 & u_colorWriteMask) | (d32 & ~u_colorWriteMask);\n");
+			if (stencilToAlpha != REPLACE_ALPHA_NO)
+				WRITE(p, "  v32 = (v32 & u_colorWriteMask) | (d32 & ~u_colorWriteMask);\n");
+			else
+				WRITE(p, "  v32 = (v32 & u_colorWriteMask & 0x00FFFFFFu) | (d32 & (~u_colorWriteMask | 0xFF000000u));\n");
 		}
 		WRITE(p, "  %s = unpackUnorm4x8(v32);\n", compat.fragColor0);
 	}
@@ -1140,11 +1228,11 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		WRITE(p, "  %s = vec4(0.0, 0.0, 0.0, %s.z);  // blue to alpha\n", compat.fragColor0, compat.fragColor0);
 	}
 
-	if (gstate_c.Supports(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT)) {
+	if (gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT)) {
 		const double scale = DepthSliceFactor() * 65535.0;
 
 		WRITE(p, "  highp float z = gl_FragCoord.z;\n");
-		if (gstate_c.Supports(GPU_SUPPORTS_ACCURATE_DEPTH)) {
+		if (gstate_c.Use(GPU_USE_ACCURATE_DEPTH)) {
 			// We center the depth with an offset, but only its fraction matters.
 			// When (DepthSliceFactor() - 1) is odd, it will be 0.5, otherwise 0.
 			if (((int)(DepthSliceFactor() - 1.0f) & 1) == 1) {

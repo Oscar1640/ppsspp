@@ -35,8 +35,8 @@ static const InputDef vsInputs[2] = {
 
 // TODO: Deduplicate with TextureShaderCommon.cpp
 static const SamplerDef samplers[2] = {
-	{ "tex" },
-	{ "pal" },
+	{ 0, "tex", SamplerFlags::ARRAY_ON_VULKAN },
+	{ 1, "pal" },
 };
 
 static const VaryingDef varyings[1] = {
@@ -84,6 +84,9 @@ void GenerateDepalShader300(ShaderWriter &writer, const DepalConfig &config) {
 
 	int shiftedMask = mask << shift;
 	switch (config.bufferFormat) {
+	case GE_FORMAT_CLUT8:
+		writer.C("  int index = int(color.r * 255.99);\n");
+		break;
 	case GE_FORMAT_8888:
 		if (shiftedMask & 0xFF) writer.C("  int r = int(color.r * 255.99);\n"); else writer.C("  int r = 0;\n");
 		if (shiftedMask & 0xFF00) writer.C("  int g = int(color.g * 255.99);\n"); else writer.C("  int g = 0;\n");
@@ -132,10 +135,7 @@ void GenerateDepalShader300(ShaderWriter &writer, const DepalConfig &config) {
 		break;
 	}
 
-	float texturePixels = 256.0f;
-	if (config.clutFormat != GE_CMODE_32BIT_ABGR8888) {
-		texturePixels = 512.0f;
-	}
+	float texturePixels = 512.0f;
 
 	if (shift) {
 		writer.F("  index = (int(uint(index) >> uint(%d)) & 0x%02x)", shift, mask);
@@ -171,6 +171,19 @@ void GenerateDepalShaderFloat(ShaderWriter &writer, const DepalConfig &config) {
 	// pixelformat is the format of the texture we are sampling.
 	bool formatOK = true;
 	switch (config.bufferFormat) {
+	case GE_FORMAT_CLUT8:
+		if (shift == 0 && mask == 0xFF) {
+			// Easy peasy.
+			if (writer.Lang().shaderLanguage == HLSL_D3D9)
+				sprintf(lookupMethod, "index.a");
+			else
+				sprintf(lookupMethod, "index.r");
+			formatOK = true;
+		} else {
+			// Deal with this if we find it.
+			formatOK = false;
+		}
+		break;
 	case GE_FORMAT_8888:
 		if ((mask & (mask + 1)) == 0) {
 			// If the value has all bits contiguous (bitmask check above), we can mod by it + 1.
@@ -278,11 +291,9 @@ void GenerateDepalShaderFloat(ShaderWriter &writer, const DepalConfig &config) {
 		break;
 	}
 
-	float texturePixels = 256.f;
-	if (config.clutFormat != GE_CMODE_32BIT_ABGR8888) {
-		texturePixels = 512.f;
-		index_multiplier *= 0.5f;
-	}
+	// We always use 512-sized textures now.
+	float texturePixels = 512.f;
+	index_multiplier *= 0.5f;
 
 	// Adjust index_multiplier, similar to the use of 15.99 instead of 16 in the ES 3 path.
 	// index_multiplier -= 0.01f / texturePixels;
@@ -294,6 +305,10 @@ void GenerateDepalShaderFloat(ShaderWriter &writer, const DepalConfig &config) {
 	// Offset by half a texel (plus clutBase) to turn NEAREST filtering into FLOOR.
 	// Technically, the clutBase should be |'d, not added, but that's hard with floats.
 	float texel_offset = ((float)config.startPos + 0.5f) / texturePixels;
+	if (writer.Lang().shaderLanguage == HLSL_D3D9) {
+		// Seems to need a half-pixel offset fix?  Might mean it was rendered wrong...
+		texel_offset += 0.5f / texturePixels;
+	}
 	char offset[128] = "";
 	sprintf(offset, " + %f", texel_offset);
 
@@ -326,11 +341,7 @@ void GenerateDepalSmoothed(ShaderWriter &writer, const DepalConfig &config) {
 	}
 
 	writer.C("  float index = ").SampleTexture2D("tex", "v_texcoord").F(".%s * %0.1f;\n", sourceChannel, indexMultiplier);
-	float texturePixels = 256.f;
-	if (config.clutFormat != GE_CMODE_32BIT_ABGR8888) {
-		texturePixels = 512.f;
-	}
-
+	float texturePixels = 512.f;
 	writer.F("  float coord = (index + 0.5) * %f;\n", 1.0 / texturePixels);
 	writer.C("  vec4 outColor = ").SampleTexture2D("pal", "vec2(coord, 0.0)").C(";\n");
 }
@@ -338,7 +349,7 @@ void GenerateDepalSmoothed(ShaderWriter &writer, const DepalConfig &config) {
 void GenerateDepalFs(ShaderWriter &writer, const DepalConfig &config) {
 	writer.DeclareSamplers(samplers);
 	writer.HighPrecisionFloat();
-	writer.BeginFSMain(config.bufferFormat == GE_FORMAT_DEPTH16 ? g_draw2Duniforms : Slice<UniformDef>::empty(), varyings, FSFLAG_NONE);
+	writer.BeginFSMain(config.bufferFormat == GE_FORMAT_DEPTH16 ? g_draw2Duniforms : Slice<UniformDef>::empty(), varyings);
 	if (config.smoothedDepal) {
 		// Handles a limited set of cases, but doesn't need any integer math so we don't
 		// need two variants.
@@ -358,5 +369,5 @@ void GenerateDepalFs(ShaderWriter &writer, const DepalConfig &config) {
 			_assert_msg_(false, "Shader language not supported for depal: %d", (int)writer.Lang().shaderLanguage);
 		}
 	}
-	writer.EndFSMain("outColor", FSFLAG_NONE);
+	writer.EndFSMain("outColor");
 }

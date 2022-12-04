@@ -51,6 +51,8 @@ public:
 	void sendMessage(const char *message, const char *value) override;
 protected:
 	Path gamePath_;
+
+	bool darkenGameBackground_ = false;
 };
 
 class UIDialogScreenWithBackground : public UIDialogScreen {
@@ -71,16 +73,19 @@ public:
 	void sendMessage(const char *message, const char *value) override;
 protected:
 	Path gamePath_;
+	bool darkenGameBackground_ = true;
 };
 
-class PromptScreen : public UIDialogScreenWithBackground {
+class PromptScreen : public UIDialogScreenWithGameBackground {
 public:
-	PromptScreen(std::string message, std::string yesButtonText, std::string noButtonText,
+	PromptScreen(const Path& gamePath, std::string message, std::string yesButtonText, std::string noButtonText,
 		std::function<void(bool)> callback = &NoOpVoidBool);
 
 	void CreateViews() override;
 
 	void TriggerFinish(DialogResult result) override;
+
+	const char *tag() const override { return "Prompt"; }
 
 private:
 	UI::EventReturn OnYes(UI::EventParams &e);
@@ -96,6 +101,8 @@ class NewLanguageScreen : public ListPopupScreen {
 public:
 	NewLanguageScreen(const std::string &title);
 
+	const char *tag() const override { return "NewLanguage"; }
+
 private:
 	void OnCompleted(DialogResult result) override;
 	bool ShowButtons() const override { return true; }
@@ -106,15 +113,19 @@ private:
 
 class PostProcScreen : public ListPopupScreen {
 public:
-	PostProcScreen(const std::string &title, int id);
+	PostProcScreen(const std::string &title, int id, bool showStereoShaders);
 
 	void CreateViews() override;
+
+	const char *tag() const override { return "PostProc"; }
 
 private:
 	void OnCompleted(DialogResult result) override;
 	bool ShowButtons() const override { return true; }
 	std::vector<ShaderInfo> shaders_;
 	int id_;
+	bool showStereoShaders_;
+	std::vector<int> indexTranslation_;
 };
 
 class TextureShaderScreen : public ListPopupScreen {
@@ -122,6 +133,8 @@ public:
 	TextureShaderScreen(const std::string &title);
 
 	void CreateViews() override;
+
+	const char *tag() const override { return "TextureShader"; }
 
 private:
 	void OnCompleted(DialogResult result) override;
@@ -146,6 +159,8 @@ public:
 	void sendMessage(const char *message, const char *value) override;
 	void CreateViews() override {}
 
+	const char *tag() const override { return "Logo"; }
+
 private:
 	void Next();
 	int frames_ = 0;
@@ -161,6 +176,8 @@ public:
 	void render() override;
 
 	void CreateViews() override;
+
+	const char *tag() const override { return "Credits"; }
 
 private:
 	UI::EventReturn OnOK(UI::EventParams &e);

@@ -55,7 +55,7 @@ public:
 		lastBoundTexture = nullptr;
 	}
 
-	bool GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level) override;
+	bool GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) override;
 
 	void DeviceLost();
 	void DeviceRestore(Draw::DrawContext *draw);
@@ -66,6 +66,7 @@ protected:
 	void ReleaseTexture(TexCacheEntry *entry, bool delete_them) override;
 
 	void BindAsClutTexture(Draw::Texture *tex, bool smooth) override;
+	void *GetNativeTextureView(const TexCacheEntry *entry) override;
 
 private:
 	void ApplySamplingParams(const SamplerCacheKey &key) override;

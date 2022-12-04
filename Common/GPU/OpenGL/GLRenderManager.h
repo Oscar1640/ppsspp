@@ -10,6 +10,7 @@
 #include <condition_variable>
 
 #include "Common/GPU/OpenGL/GLCommon.h"
+#include "Common/GPU/MiscTypes.h"
 #include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Log.h"
 #include "GLQueueRunner.h"
@@ -91,6 +92,13 @@ public:
 	std::string error;
 };
 
+struct GLRProgramFlags {
+	bool supportDualSource : 1;
+	bool useClipDistance0 : 1;
+	bool useClipDistance1 : 1;
+	bool useClipDistance2 : 1;
+};
+
 class GLRProgram {
 public:
 	~GLRProgram() {
@@ -119,7 +127,7 @@ public:
 	std::vector<Semantic> semantics_;
 	std::vector<UniformLocQuery> queries_;
 	std::vector<Initializer> initialize_;
-	bool use_clip_distance0 = false;
+	bool use_clip_distance[8]{};
 
 	struct UniformInfo {
 		int loc_;
@@ -361,6 +369,9 @@ public:
 	GLRenderManager() {}
 	~GLRenderManager();
 
+	void SetInvalidationCallback(InvalidationCallback callback) {
+		invalidationCallback_ = callback;
+	}
 	void SetErrorCallback(ErrorCallbackFn callback, void *userdata) {
 		queueRunner_.SetErrorCallback(callback, userdata);
 	}
@@ -427,15 +438,17 @@ public:
 	// not be an active render pass.
 	GLRProgram *CreateProgram(
 		std::vector<GLRShader *> shaders, std::vector<GLRProgram::Semantic> semantics, std::vector<GLRProgram::UniformLocQuery> queries,
-		std::vector<GLRProgram::Initializer> initializers, bool supportDualSource, bool useClipDistance0) {
+		std::vector<GLRProgram::Initializer> initializers, const GLRProgramFlags &flags) {
 		GLRInitStep step{ GLRInitStepType::CREATE_PROGRAM };
 		_assert_(shaders.size() <= ARRAY_SIZE(step.create_program.shaders));
 		step.create_program.program = new GLRProgram();
 		step.create_program.program->semantics_ = semantics;
 		step.create_program.program->queries_ = queries;
 		step.create_program.program->initialize_ = initializers;
-		step.create_program.program->use_clip_distance0 = useClipDistance0;
-		step.create_program.support_dual_source = supportDualSource;
+		step.create_program.program->use_clip_distance[0] = flags.useClipDistance0;
+		step.create_program.program->use_clip_distance[1] = flags.useClipDistance1;
+		step.create_program.program->use_clip_distance[2] = flags.useClipDistance2;
+		step.create_program.support_dual_source = flags.supportDualSource;
 		_assert_msg_(shaders.size() > 0, "Can't create a program with zero shaders");
 		for (size_t i = 0; i < shaders.size(); i++) {
 			step.create_program.shaders[i] = shaders[i];
@@ -517,7 +530,7 @@ public:
 	void BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRenderPassAction color, GLRRenderPassAction depth, GLRRenderPassAction stencil, uint32_t clearColor, float clearDepth, uint8_t clearStencil, const char *tag);
 
 	// Binds a framebuffer as a texture, for the following draws.
-	void BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit, int attachment);
+	void BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit);
 
 	bool CopyFramebufferToMemorySync(GLRFramebuffer *src, int aspectBits, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, const char *tag);
 	void CopyImageToMemorySync(GLRTexture *texture, int mipLevel, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, const char *tag);
@@ -971,12 +984,6 @@ public:
 		skipGLCalls_ = true;
 	}
 
-	// Gets a frame-unique ID of the current step being recorded. Can be used to figure out
-	// when the current step has changed, which means the caller will need to re-record its state.
-	int GetCurrentStepId() const {
-		return renderStepOffset_ + (int)steps_.size();
-	}
-
 private:
 	void BeginSubmitFrame(int frame);
 	void EndSubmitFrame(int frame);
@@ -1003,6 +1010,7 @@ private:
 		bool readyForFence = true;
 		bool readyForRun = false;
 		bool readyForSubmit = false;
+
 		bool skipSwap = false;
 		GLRRunType type = GLRRunType::END;
 
@@ -1023,8 +1031,7 @@ private:
 
 	// Submission time state
 	bool insideFrame_ = false;
-	// This is the offset within this frame, in case of a mid-frame sync.
-	int renderStepOffset_ = 0;
+
 	GLRStep *curRenderStep_ = nullptr;
 	std::vector<GLRStep *> steps_;
 	std::vector<GLRInitStep> initSteps_;
@@ -1064,4 +1071,6 @@ private:
 	GLRProgram *curProgram_ = nullptr;
 #endif
 	Draw::DeviceCaps caps_{};
+
+	InvalidationCallback invalidationCallback_;
 };

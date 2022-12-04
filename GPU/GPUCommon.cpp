@@ -87,9 +87,9 @@ const CommonCommandTableEntry commonCommandTable[] = {
 	{ GE_CMD_FOG2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FOGCOEF },
 
 	// These affect the fragment shader so need flushing.
-	{ GE_CMD_CLEARMODE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_BLEND_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },
-	{ GE_CMD_TEXTUREMAPENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },
-	{ GE_CMD_FOGENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE},
+	{ GE_CMD_CLEARMODE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_BLEND_STATE | DIRTY_DEPTHSTENCIL_STATE | DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE },
+	{ GE_CMD_TEXTUREMAPENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE },
+	{ GE_CMD_FOGENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAGMENTSHADER_STATE },
 	{ GE_CMD_TEXMODE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_TEXTURE_PARAMS | DIRTY_FRAGMENTSHADER_STATE },
 	{ GE_CMD_TEXSHADELS, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE },
 	// Raster state for Direct3D 9, uncommon.
@@ -102,19 +102,19 @@ const CommonCommandTableEntry commonCommandTable[] = {
 
 	// These change the vertex shader so need flushing.
 	{ GE_CMD_REVERSENORMAL, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE },
-	{ GE_CMD_LIGHTINGENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },
-	{ GE_CMD_LIGHTENABLE0, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE  },
-	{ GE_CMD_LIGHTENABLE1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE  },
-	{ GE_CMD_LIGHTENABLE2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE  },
-	{ GE_CMD_LIGHTENABLE3, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE  },
+	{ GE_CMD_LIGHTINGENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE },
+	{ GE_CMD_LIGHTENABLE0, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE },
+	{ GE_CMD_LIGHTENABLE1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE },
+	{ GE_CMD_LIGHTENABLE2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE },
+	{ GE_CMD_LIGHTENABLE3, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE },
 	{ GE_CMD_LIGHTTYPE0, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_LIGHT0 },
 	{ GE_CMD_LIGHTTYPE1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_LIGHT1 },
 	{ GE_CMD_LIGHTTYPE2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_LIGHT2 },
 	{ GE_CMD_LIGHTTYPE3, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_LIGHT3 },
-	{ GE_CMD_MATERIALUPDATE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },  // TODO: This should not need to dirty the fragment shader?
+	{ GE_CMD_MATERIALUPDATE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE },
 
 	// These change both shaders so need flushing.
-	{ GE_CMD_LIGHTMODE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE },
+	{ GE_CMD_LIGHTMODE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE },
 
 	{ GE_CMD_TEXFILTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_TEXTURE_PARAMS },
 	{ GE_CMD_TEXWRAP, FLAG_FLUSHBEFOREONCHANGE, DIRTY_TEXTURE_PARAMS | DIRTY_FRAGMENTSHADER_STATE },
@@ -425,6 +425,7 @@ GPUCommon::GPUCommon(GraphicsContext *gfxCtx, Draw::DrawContext *draw) :
 
 	UpdateCmdInfo();
 	UpdateVsyncInterval(true);
+	ResetMatrices();
 
 	PPGeSetDrawContext(draw);
 }
@@ -450,18 +451,49 @@ void GPUCommon::UpdateCmdInfo() {
 		cmdInfo_[GE_CMD_JUMP].func = &GPUCommon::Execute_Jump;
 		cmdInfo_[GE_CMD_CALL].func = &GPUCommon::Execute_Call;
 	}
+
+	// Reconfigure for light ubershader or not.
+	for (int i = 0; i < 4; i++) {
+		if (gstate_c.Use(GPU_USE_LIGHT_UBERSHADER)) {
+			cmdInfo_[GE_CMD_LIGHTENABLE0 + i].RemoveDirty(DIRTY_VERTEXSHADER_STATE);
+			cmdInfo_[GE_CMD_LIGHTENABLE0 + i].AddDirty(DIRTY_LIGHT_CONTROL);
+			cmdInfo_[GE_CMD_LIGHTTYPE0 + i].RemoveDirty(DIRTY_VERTEXSHADER_STATE);
+			cmdInfo_[GE_CMD_LIGHTTYPE0 + i].AddDirty(DIRTY_LIGHT_CONTROL);
+		} else {
+			cmdInfo_[GE_CMD_LIGHTENABLE0 + i].RemoveDirty(DIRTY_LIGHT_CONTROL);
+			cmdInfo_[GE_CMD_LIGHTENABLE0 + i].AddDirty(DIRTY_VERTEXSHADER_STATE);
+			cmdInfo_[GE_CMD_LIGHTTYPE0 + i].RemoveDirty(DIRTY_LIGHT_CONTROL);
+			cmdInfo_[GE_CMD_LIGHTTYPE0 + i].AddDirty(DIRTY_VERTEXSHADER_STATE);
+		}
+	}
+
+	if (gstate_c.Use(GPU_USE_LIGHT_UBERSHADER)) {
+		cmdInfo_[GE_CMD_MATERIALUPDATE].RemoveDirty(DIRTY_VERTEXSHADER_STATE);
+		cmdInfo_[GE_CMD_MATERIALUPDATE].AddDirty(DIRTY_LIGHT_CONTROL);
+	} else {
+		cmdInfo_[GE_CMD_MATERIALUPDATE].RemoveDirty(DIRTY_LIGHT_CONTROL);
+		cmdInfo_[GE_CMD_MATERIALUPDATE].AddDirty(DIRTY_VERTEXSHADER_STATE);
+	}
 }
 
 void GPUCommon::BeginHostFrame() {
-	UpdateVsyncInterval(resized_);
+	UpdateVsyncInterval(displayResized_);
 	ReapplyGfxState();
 
 	// TODO: Assume config may have changed - maybe move to resize.
 	gstate_c.Dirty(DIRTY_ALL);
+
+	UpdateCmdInfo();
+	CheckConfigChanged();
+	CheckDisplayResized();
+	CheckRenderResized();
 }
 
 void GPUCommon::EndHostFrame() {
-
+	// Probably not necessary.
+	if (draw_) {
+		draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
+	}
 }
 
 void GPUCommon::Reinitialize() {
@@ -583,8 +615,53 @@ bool GPUCommon::BusyDrawing() {
 	return false;
 }
 
-void GPUCommon::Resized() {
-	resized_ = true;
+void GPUCommon::NotifyConfigChanged() {
+	configChanged_ = true;
+}
+
+void GPUCommon::NotifyRenderResized() {
+	renderResized_ = true;
+}
+
+void GPUCommon::NotifyDisplayResized() {
+	displayResized_ = true;
+}
+
+void GPUCommon::ClearCacheNextFrame() {
+	textureCache_->ClearNextFrame();
+}
+
+// Called once per frame. Might also get called during the pause screen
+// if "transparent".
+void GPUCommon::CheckConfigChanged() {
+	if (configChanged_) {
+		ClearCacheNextFrame();
+		gstate_c.useFlags = CheckGPUFeatures();
+		drawEngineCommon_->NotifyConfigChanged();
+		textureCache_->NotifyConfigChanged();
+		framebufferManager_->NotifyConfigChanged();
+		BuildReportingInfo();
+		configChanged_ = false;
+	}
+
+	// Check needed when running tests.
+	if (framebufferManager_) {
+		framebufferManager_->CheckPostShaders();
+	}
+}
+
+void GPUCommon::CheckDisplayResized() {
+	if (displayResized_) {
+		framebufferManager_->NotifyDisplayResized();
+		displayResized_ = false;
+	}
+}
+
+void GPUCommon::CheckRenderResized() {
+	if (renderResized_) {
+		framebufferManager_->NotifyRenderResized();
+		renderResized_ = false;
+	}
 }
 
 void GPUCommon::DumpNextFrame() {
@@ -706,6 +783,59 @@ int GPUCommon::GetStack(int index, u32 stackPtr) {
 	}
 
 	return currentList->stackptr;
+}
+
+static void CopyMatrix24(u32_le *result, const float *mtx, u32 count, u32 cmdbits) {
+	for (u32 i = 0; i < count; ++i) {
+		result[i] = toFloat24(mtx[i]) | cmdbits;
+	}
+}
+
+bool GPUCommon::GetMatrix24(GEMatrixType type, u32_le *result, u32 cmdbits) {
+	switch (type) {
+	case GE_MTX_BONE0:
+	case GE_MTX_BONE1:
+	case GE_MTX_BONE2:
+	case GE_MTX_BONE3:
+	case GE_MTX_BONE4:
+	case GE_MTX_BONE5:
+	case GE_MTX_BONE6:
+	case GE_MTX_BONE7:
+		CopyMatrix24(result, gstate.boneMatrix + (type - GE_MTX_BONE0) * 12, 12, cmdbits);
+		break;
+	case GE_MTX_TEXGEN:
+		CopyMatrix24(result, gstate.tgenMatrix, 12, cmdbits);
+		break;
+	case GE_MTX_WORLD:
+		CopyMatrix24(result, gstate.worldMatrix, 12, cmdbits);
+		break;
+	case GE_MTX_VIEW:
+		CopyMatrix24(result, gstate.viewMatrix, 12, cmdbits);
+		break;
+	case GE_MTX_PROJECTION:
+		CopyMatrix24(result, gstate.projMatrix, 16, cmdbits);
+		break;
+	default:
+		return false;
+	}
+	return true;
+}
+
+void GPUCommon::ResetMatrices() {
+	// This means we restored a context, so update the visible matrix data.
+	for (size_t i = 0; i < ARRAY_SIZE(gstate.boneMatrix); ++i)
+		matrixVisible.bone[i] = toFloat24(gstate.boneMatrix[i]);
+	for (size_t i = 0; i < ARRAY_SIZE(gstate.worldMatrix); ++i)
+		matrixVisible.world[i] = toFloat24(gstate.worldMatrix[i]);
+	for (size_t i = 0; i < ARRAY_SIZE(gstate.viewMatrix); ++i)
+		matrixVisible.view[i] = toFloat24(gstate.viewMatrix[i]);
+	for (size_t i = 0; i < ARRAY_SIZE(gstate.projMatrix); ++i)
+		matrixVisible.proj[i] = toFloat24(gstate.projMatrix[i]);
+	for (size_t i = 0; i < ARRAY_SIZE(gstate.tgenMatrix); ++i)
+		matrixVisible.tgen[i] = toFloat24(gstate.tgenMatrix[i]);
+
+	// Assume all the matrices changed, so dirty things related to them.
+	gstate_c.Dirty(DIRTY_WORLDMATRIX | DIRTY_VIEWMATRIX | DIRTY_PROJMATRIX | DIRTY_TEXMATRIX | DIRTY_FRAGMENTSHADER_STATE | DIRTY_BONE_UNIFORMS);
 }
 
 u32 GPUCommon::EnqueueList(u32 listpc, u32 stall, int subIntrBase, PSPPointer<PspGeListArgs> args, bool head) {
@@ -1117,6 +1247,11 @@ void GPUCommon::BeginFrame() {
 	}
 	GPUDebug::NotifyBeginFrame();
 	GPURecord::NotifyBeginFrame();
+
+	if (drawEngineCommon_->EverUsedExactEqualDepth() && !sawExactEqualDepth_) {
+		sawExactEqualDepth_ = true;
+		gstate_c.useFlags = CheckGPUFeatures();
+	}
 }
 
 void GPUCommon::SlowRunLoop(DisplayList &list)
@@ -1209,6 +1344,15 @@ void GPUCommon::ReapplyGfxState() {
 	// Let's just skip the transfer size stuff, it's just values.
 }
 
+uint32_t GPUCommon::SetAddrTranslation(uint32_t value) {
+	std::swap(edramTranslation_, value);
+	return value;
+}
+
+uint32_t GPUCommon::GetAddrTranslation() {
+	return edramTranslation_;
+}
+
 inline void GPUCommon::UpdateState(GPURunState state) {
 	gpuState = state;
 	if (state != GPUSTATE_RUNNING)
@@ -1273,7 +1417,8 @@ void GPUCommon::Execute_Iaddr(u32 op, u32 diff) {
 }
 
 void GPUCommon::Execute_Origin(u32 op, u32 diff) {
-	gstate_c.offsetAddr = currentList->pc;
+	if (currentList)
+		gstate_c.offsetAddr = currentList->pc;
 }
 
 void GPUCommon::Execute_Jump(u32 op, u32 diff) {
@@ -1336,7 +1481,7 @@ void GPUCommon::DoExecuteCall(u32 target) {
 		// Check for the end
 		if ((Memory::ReadUnchecked_U32(target + 11 * 4) >> 24) == GE_CMD_BONEMATRIXDATA &&
 				(Memory::ReadUnchecked_U32(target + 12 * 4) >> 24) == GE_CMD_RET &&
-				(gstate.boneMatrixNumber & 0x7F) <= 96 - 12) {
+				(gstate.boneMatrixNumber & 0x00FFFFFF) <= 96 - 12) {
 			// Yep, pretty sure this is a bone matrix call.  Double check stall first.
 			if (target > currentList->stall || target + 12 * 4 < currentList->stall) {
 				FastLoadBoneMatrix(target);
@@ -1602,7 +1747,7 @@ void GPUCommon::Execute_VertexType(u32 op, u32 diff) {
 	if (diff & (GE_VTYPE_TC_MASK | GE_VTYPE_THROUGH_MASK)) {
 		gstate_c.Dirty(DIRTY_UVSCALEOFFSET);
 		if (diff & GE_VTYPE_THROUGH_MASK)
-			gstate_c.Dirty(DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_CULLRANGE);
+			gstate_c.Dirty(DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE | DIRTY_CULLRANGE);
 	}
 }
 
@@ -1629,18 +1774,27 @@ void GPUCommon::Execute_VertexTypeSkinning(u32 op, u32 diff) {
 		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
 	}
 	if (diff & GE_VTYPE_THROUGH_MASK)
-		gstate_c.Dirty(DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_CULLRANGE);
+		gstate_c.Dirty(DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE | DIRTY_CULLRANGE);
 }
 
 void GPUCommon::CheckDepthUsage(VirtualFramebuffer *vfb) {
 	if (!gstate_c.usingDepth) {
-		bool isClearingDepth = gstate.isModeClear() && gstate.isClearModeDepthMask();
+		bool isReadingDepth = false;
+		bool isClearingDepth = false;
+		bool isWritingDepth = false;
+		if (gstate.isModeClear()) {
+			isClearingDepth = gstate.isClearModeDepthMask();
+			isWritingDepth = isClearingDepth;
+		} else if (gstate.isDepthTestEnabled()) {
+			isWritingDepth = gstate.isDepthWriteEnabled();
+			isReadingDepth = gstate.getDepthTestFunction() > GE_COMP_ALWAYS;
+		}
 
-		if ((gstate.isDepthTestEnabled() || isClearingDepth)) {
+		if (isWritingDepth || isReadingDepth) {
 			gstate_c.usingDepth = true;
 			gstate_c.clearingDepth = isClearingDepth;
 			vfb->last_frame_depth_render = gpuStats.numFlips;
-			if (isClearingDepth || gstate.isDepthWriteEnabled()) {
+			if (isWritingDepth) {
 				vfb->last_frame_depth_updated = gpuStats.numFlips;
 			}
 			framebufferManager_->SetDepthFrameBuffer(isClearingDepth);
@@ -1744,7 +1898,7 @@ void GPUCommon::Execute_Prim(u32 op, u32 diff) {
 	// cull mode
 	int cullMode = gstate.getCullMode();
 
-	uint32_t vertTypeID = GetVertTypeID(vertexType, gstate.getUVGenMode());
+	uint32_t vertTypeID = GetVertTypeID(vertexType, gstate.getUVGenMode(), g_Config.bSoftwareSkinning);
 	drawEngineCommon_->SubmitPrim(verts, inds, prim, count, vertTypeID, cullMode, &bytesRead);
 	// After drawing, we advance the vertexAddr (when non indexed) or indexAddr (when indexed).
 	// Some games rely on this, they don't bother reloading VADDR and IADDR.
@@ -1802,7 +1956,7 @@ void GPUCommon::Execute_Prim(u32 op, u32 diff) {
 				goto bail;
 			} else {
 				vertexType = data;
-				vertTypeID = GetVertTypeID(vertexType, gstate.getUVGenMode());
+				vertTypeID = GetVertTypeID(vertexType, gstate.getUVGenMode(), g_Config.bSoftwareSkinning);
 			}
 			break;
 		}
@@ -1870,7 +2024,7 @@ void GPUCommon::Execute_Prim(u32 op, u32 diff) {
 				(Memory::ReadUnchecked_U32(target + 11 * 4) >> 24) == GE_CMD_BONEMATRIXDATA &&
 				(Memory::ReadUnchecked_U32(target + 12 * 4) >> 24) == GE_CMD_RET &&
 				(target > currentList->stall || target + 12 * 4 < currentList->stall) &&
-				(gstate.boneMatrixNumber & 0x7F) <= 96 - 12) {
+				(gstate.boneMatrixNumber & 0x00FFFFFF) <= 96 - 12) {
 				FastLoadBoneMatrix(target);
 			} else {
 				goto bail;
@@ -1948,7 +2102,8 @@ void GPUCommon::Execute_Bezier(u32 op, u32 diff) {
 	}
 
 	// Can't flush after setting gstate_c.submitType below since it'll be a mess - it must be done already.
-	drawEngineCommon_->DispatchFlush();
+	if (flushOnParams_)
+		drawEngineCommon_->DispatchFlush();
 
 	Spline::BezierSurface surface;
 	surface.tess_u = gstate.getPatchDivisionU();
@@ -1962,8 +2117,8 @@ void GPUCommon::Execute_Bezier(u32 op, u32 diff) {
 
 	SetDrawType(DRAW_BEZIER, PatchPrimToPrim(surface.primType));
 
+	gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE);
 	if (drawEngineCommon_->CanUseHardwareTessellation(surface.primType)) {
-		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
 		gstate_c.submitType = SubmitType::HW_BEZIER;
 		if (gstate_c.spline_num_points_u != surface.num_points_u) {
 			gstate_c.Dirty(DIRTY_BEZIERSPLINE);
@@ -1977,7 +2132,7 @@ void GPUCommon::Execute_Bezier(u32 op, u32 diff) {
 	UpdateUVScaleOffset();
 	drawEngineCommon_->SubmitCurve(control_points, indices, surface, gstate.vertType, &bytesRead, "bezier");
 
-	gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
+	gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE);
 	gstate_c.submitType = SubmitType::DRAW;
 
 	// After drawing, we advance pointers - see SubmitPrim which does the same.
@@ -2020,7 +2175,8 @@ void GPUCommon::Execute_Spline(u32 op, u32 diff) {
 	}
 
 	// Can't flush after setting gstate_c.submitType below since it'll be a mess - it must be done already.
-	drawEngineCommon_->DispatchFlush();
+	if (flushOnParams_)
+		drawEngineCommon_->DispatchFlush();
 
 	Spline::SplineSurface surface;
 	surface.tess_u = gstate.getPatchDivisionU();
@@ -2036,8 +2192,8 @@ void GPUCommon::Execute_Spline(u32 op, u32 diff) {
 
 	SetDrawType(DRAW_SPLINE, PatchPrimToPrim(surface.primType));
 
+	gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
 	if (drawEngineCommon_->CanUseHardwareTessellation(surface.primType)) {
-		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
 		gstate_c.submitType = SubmitType::HW_SPLINE;
 		if (gstate_c.spline_num_points_u != surface.num_points_u) {
 			gstate_c.Dirty(DIRTY_BEZIERSPLINE);
@@ -2051,7 +2207,7 @@ void GPUCommon::Execute_Spline(u32 op, u32 diff) {
 	UpdateUVScaleOffset();
 	drawEngineCommon_->SubmitCurve(control_points, indices, surface, gstate.vertType, &bytesRead, "spline");
 
-	gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE);
+	gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE | DIRTY_GEOMETRYSHADER_STATE);
 	gstate_c.submitType = SubmitType::DRAW;
 
 	// After drawing, we advance pointers - see SubmitPrim which does the same.
@@ -2061,29 +2217,50 @@ void GPUCommon::Execute_Spline(u32 op, u32 diff) {
 
 void GPUCommon::Execute_BoundingBox(u32 op, u32 diff) {
 	// Just resetting, nothing to check bounds for.
-	const u32 count = op & 0xFFFFFF;
+	const u32 count = op & 0xFFFF;
 	if (count == 0) {
 		currentList->bboxResult = false;
 		return;
 	}
-	if (((count & 7) == 0) && count <= 64) {  // Sanity check
-		const void *control_points = Memory::GetPointer(gstate_c.vertexAddr);
+
+	// Approximate based on timings of several counts on a PSP.
+	cyclesExecuted += count * 22;
+
+	const bool useInds = (gstate.vertType & GE_VTYPE_IDX_MASK) != 0;
+	VertexDecoder *dec = drawEngineCommon_->GetVertexDecoder(gstate.vertType);
+	int bytesRead = (useInds ? 1 : dec->VertexSize()) * count;
+
+	if (Memory::IsValidRange(gstate_c.vertexAddr, bytesRead)) {
+		const void *control_points = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
 		if (!control_points) {
 			ERROR_LOG_REPORT_ONCE(boundingbox, G3D, "Invalid verts in bounding box check");
 			currentList->bboxResult = true;
 			return;
 		}
 
-		if (gstate.vertType & GE_VTYPE_IDX_MASK) {
-			ERROR_LOG_REPORT_ONCE(boundingbox, G3D, "Indexed bounding box data not supported.");
-			// Data seems invalid. Let's assume the box test passed.
-			currentList->bboxResult = true;
-			return;
+		const void *inds = nullptr;
+		if (useInds) {
+			int indexShift = ((gstate.vertType & GE_VTYPE_IDX_MASK) >> GE_VTYPE_IDX_SHIFT) - 1;
+			inds = Memory::GetPointerUnchecked(gstate_c.indexAddr);
+			if (!inds || !Memory::IsValidRange(gstate_c.indexAddr, count << indexShift)) {
+				ERROR_LOG_REPORT_ONCE(boundingboxInds, G3D, "Invalid inds in bounding box check");
+				currentList->bboxResult = true;
+				return;
+			}
 		}
 
 		// Test if the bounding box is within the drawing region.
-		int bytesRead;
-		currentList->bboxResult = drawEngineCommon_->TestBoundingBox(control_points, count, gstate.vertType, &bytesRead);
+		// The PSP only seems to vary the result based on a single range of 0x100.
+		if (count > 0x200) {
+			// The second to last set of 0x100 is checked (even for odd counts.)
+			size_t skipSize = (count - 0x200) * dec->VertexSize();
+			currentList->bboxResult = drawEngineCommon_->TestBoundingBox((const uint8_t *)control_points + skipSize, inds, 0x100, gstate.vertType);
+		} else if (count > 0x100) {
+			int checkSize = count - 0x100;
+			currentList->bboxResult = drawEngineCommon_->TestBoundingBox(control_points, inds, checkSize, gstate.vertType);
+		} else {
+			currentList->bboxResult = drawEngineCommon_->TestBoundingBox(control_points, inds, count, gstate.vertType);
+		}
 		AdvanceVerts(gstate.vertType, count, bytesRead);
 	} else {
 		ERROR_LOG_REPORT_ONCE(boundingbox, G3D, "Bad bounding box data: %06x", count);
@@ -2105,6 +2282,11 @@ void GPUCommon::Execute_BlockTransferStart(u32 op, u32 diff) {
 }
 
 void GPUCommon::Execute_WorldMtxNum(u32 op, u32 diff) {
+	if (!currentList) {
+		gstate.worldmtxnum = (GE_CMD_WORLDMATRIXNUMBER << 24) | (op & 0xF);
+		return;
+	}
+
 	// This is almost always followed by GE_CMD_WORLDMATRIXDATA.
 	const u32_le *src = (const u32_le *)Memory::GetPointerUnchecked(currentList->pc + 4);
 	u32 *dst = (u32 *)(gstate.worldMatrix + (op & 0xF));
@@ -2112,7 +2294,7 @@ void GPUCommon::Execute_WorldMtxNum(u32 op, u32 diff) {
 	int i = 0;
 
 	// We must record the individual data commands while debugRecording_.
-	bool fastLoad = !debugRecording_;
+	bool fastLoad = !debugRecording_ && end > 0;
 	// Stalling in the middle of a matrix would be stupid, I doubt this check is necessary.
 	if (currentList->pc < currentList->stall && currentList->pc + end * 4 >= currentList->stall) {
 		fastLoad = false;
@@ -2133,7 +2315,7 @@ void GPUCommon::Execute_WorldMtxNum(u32 op, u32 diff) {
 	}
 
 	const int count = i;
-	gstate.worldmtxnum = (GE_CMD_WORLDMATRIXNUMBER << 24) | ((op + count) & 0xF);
+	gstate.worldmtxnum = (GE_CMD_WORLDMATRIXNUMBER << 24) | ((op & 0xF) + count);
 
 	// Skip over the loaded data, it's done now.
 	UpdatePC(currentList->pc, currentList->pc + count * 4);
@@ -2142,7 +2324,7 @@ void GPUCommon::Execute_WorldMtxNum(u32 op, u32 diff) {
 
 void GPUCommon::Execute_WorldMtxData(u32 op, u32 diff) {
 	// Note: it's uncommon to get here now, see above.
-	int num = gstate.worldmtxnum & 0xF;
+	int num = gstate.worldmtxnum & 0x00FFFFFF;
 	u32 newVal = op << 8;
 	if (num < 12 && newVal != ((const u32 *)gstate.worldMatrix)[num]) {
 		Flush();
@@ -2150,18 +2332,23 @@ void GPUCommon::Execute_WorldMtxData(u32 op, u32 diff) {
 		gstate_c.Dirty(DIRTY_WORLDMATRIX);
 	}
 	num++;
-	gstate.worldmtxnum = (GE_CMD_WORLDMATRIXNUMBER << 24) | (num & 0xF);
+	gstate.worldmtxnum = (GE_CMD_WORLDMATRIXNUMBER << 24) | (num & 0x00FFFFFF);
 	gstate.worldmtxdata = GE_CMD_WORLDMATRIXDATA << 24;
 }
 
 void GPUCommon::Execute_ViewMtxNum(u32 op, u32 diff) {
+	if (!currentList) {
+		gstate.viewmtxnum = (GE_CMD_VIEWMATRIXNUMBER << 24) | (op & 0xF);
+		return;
+	}
+
 	// This is almost always followed by GE_CMD_VIEWMATRIXDATA.
 	const u32_le *src = (const u32_le *)Memory::GetPointerUnchecked(currentList->pc + 4);
 	u32 *dst = (u32 *)(gstate.viewMatrix + (op & 0xF));
 	const int end = 12 - (op & 0xF);
 	int i = 0;
 
-	bool fastLoad = !debugRecording_;
+	bool fastLoad = !debugRecording_ && end > 0;
 	if (currentList->pc < currentList->stall && currentList->pc + end * 4 >= currentList->stall) {
 		fastLoad = false;
 	}
@@ -2181,7 +2368,7 @@ void GPUCommon::Execute_ViewMtxNum(u32 op, u32 diff) {
 	}
 
 	const int count = i;
-	gstate.viewmtxnum = (GE_CMD_VIEWMATRIXNUMBER << 24) | ((op + count) & 0xF);
+	gstate.viewmtxnum = (GE_CMD_VIEWMATRIXNUMBER << 24) | ((op & 0xF) + count);
 
 	// Skip over the loaded data, it's done now.
 	UpdatePC(currentList->pc, currentList->pc + count * 4);
@@ -2190,7 +2377,7 @@ void GPUCommon::Execute_ViewMtxNum(u32 op, u32 diff) {
 
 void GPUCommon::Execute_ViewMtxData(u32 op, u32 diff) {
 	// Note: it's uncommon to get here now, see above.
-	int num = gstate.viewmtxnum & 0xF;
+	int num = gstate.viewmtxnum & 0x00FFFFFF;
 	u32 newVal = op << 8;
 	if (num < 12 && newVal != ((const u32 *)gstate.viewMatrix)[num]) {
 		Flush();
@@ -2198,11 +2385,16 @@ void GPUCommon::Execute_ViewMtxData(u32 op, u32 diff) {
 		gstate_c.Dirty(DIRTY_VIEWMATRIX);
 	}
 	num++;
-	gstate.viewmtxnum = (GE_CMD_VIEWMATRIXNUMBER << 24) | (num & 0xF);
+	gstate.viewmtxnum = (GE_CMD_VIEWMATRIXNUMBER << 24) | (num & 0x00FFFFFF);
 	gstate.viewmtxdata = GE_CMD_VIEWMATRIXDATA << 24;
 }
 
 void GPUCommon::Execute_ProjMtxNum(u32 op, u32 diff) {
+	if (!currentList) {
+		gstate.projmtxnum = (GE_CMD_PROJMATRIXNUMBER << 24) | (op & 0xF);
+		return;
+	}
+
 	// This is almost always followed by GE_CMD_PROJMATRIXDATA.
 	const u32_le *src = (const u32_le *)Memory::GetPointerUnchecked(currentList->pc + 4);
 	u32 *dst = (u32 *)(gstate.projMatrix + (op & 0xF));
@@ -2229,7 +2421,7 @@ void GPUCommon::Execute_ProjMtxNum(u32 op, u32 diff) {
 	}
 
 	const int count = i;
-	gstate.projmtxnum = (GE_CMD_PROJMATRIXNUMBER << 24) | ((op + count) & 0x1F);
+	gstate.projmtxnum = (GE_CMD_PROJMATRIXNUMBER << 24) | ((op & 0xF) + count);
 
 	// Skip over the loaded data, it's done now.
 	UpdatePC(currentList->pc, currentList->pc + count * 4);
@@ -2238,27 +2430,32 @@ void GPUCommon::Execute_ProjMtxNum(u32 op, u32 diff) {
 
 void GPUCommon::Execute_ProjMtxData(u32 op, u32 diff) {
 	// Note: it's uncommon to get here now, see above.
-	int num = gstate.projmtxnum & 0x1F;    // NOTE: Changed from 0xF to catch overflows
+	int num = gstate.projmtxnum & 0x00FFFFFF;
 	u32 newVal = op << 8;
-	if (num < 0x10 && newVal != ((const u32 *)gstate.projMatrix)[num]) {
+	if (num < 16 && newVal != ((const u32 *)gstate.projMatrix)[num]) {
 		Flush();
 		((u32 *)gstate.projMatrix)[num] = newVal;
 		gstate_c.Dirty(DIRTY_PROJMATRIX);
 	}
 	num++;
 	if (num <= 16)
-		gstate.projmtxnum = (GE_CMD_PROJMATRIXNUMBER << 24) | (num & 0xF);
+		gstate.projmtxnum = (GE_CMD_PROJMATRIXNUMBER << 24) | (num & 0x00FFFFFF);
 	gstate.projmtxdata = GE_CMD_PROJMATRIXDATA << 24;
 }
 
 void GPUCommon::Execute_TgenMtxNum(u32 op, u32 diff) {
+	if (!currentList) {
+		gstate.texmtxnum = (GE_CMD_TGENMATRIXNUMBER << 24) | (op & 0xF);
+		return;
+	}
+
 	// This is almost always followed by GE_CMD_TGENMATRIXDATA.
 	const u32_le *src = (const u32_le *)Memory::GetPointerUnchecked(currentList->pc + 4);
 	u32 *dst = (u32 *)(gstate.tgenMatrix + (op & 0xF));
 	const int end = 12 - (op & 0xF);
 	int i = 0;
 
-	bool fastLoad = !debugRecording_;
+	bool fastLoad = !debugRecording_ && end > 0;
 	if (currentList->pc < currentList->stall && currentList->pc + end * 4 >= currentList->stall) {
 		fastLoad = false;
 	}
@@ -2269,7 +2466,8 @@ void GPUCommon::Execute_TgenMtxNum(u32 op, u32 diff) {
 			if (dst[i] != newVal) {
 				Flush();
 				dst[i] = newVal;
-				gstate_c.Dirty(DIRTY_TEXMATRIX);
+				// We check the matrix to see if we need projection.
+				gstate_c.Dirty(DIRTY_TEXMATRIX | DIRTY_FRAGMENTSHADER_STATE);
 			}
 			if (++i >= end) {
 				break;
@@ -2278,7 +2476,7 @@ void GPUCommon::Execute_TgenMtxNum(u32 op, u32 diff) {
 	}
 
 	const int count = i;
-	gstate.texmtxnum = (GE_CMD_TGENMATRIXNUMBER << 24) | ((op + count) & 0xF);
+	gstate.texmtxnum = (GE_CMD_TGENMATRIXNUMBER << 24) | ((op & 0xF) + count);
 
 	// Skip over the loaded data, it's done now.
 	UpdatePC(currentList->pc, currentList->pc + count * 4);
@@ -2287,7 +2485,7 @@ void GPUCommon::Execute_TgenMtxNum(u32 op, u32 diff) {
 
 void GPUCommon::Execute_TgenMtxData(u32 op, u32 diff) {
 	// Note: it's uncommon to get here now, see above.
-	int num = gstate.texmtxnum & 0xF;
+	int num = gstate.texmtxnum & 0x00FFFFFF;
 	u32 newVal = op << 8;
 	if (num < 12 && newVal != ((const u32 *)gstate.tgenMatrix)[num]) {
 		Flush();
@@ -2295,11 +2493,16 @@ void GPUCommon::Execute_TgenMtxData(u32 op, u32 diff) {
 		gstate_c.Dirty(DIRTY_TEXMATRIX | DIRTY_FRAGMENTSHADER_STATE);  // We check the matrix to see if we need projection
 	}
 	num++;
-	gstate.texmtxnum = (GE_CMD_TGENMATRIXNUMBER << 24) | (num & 0xF);
+	gstate.texmtxnum = (GE_CMD_TGENMATRIXNUMBER << 24) | (num & 0x00FFFFFF);
 	gstate.texmtxdata = GE_CMD_TGENMATRIXDATA << 24;
 }
 
 void GPUCommon::Execute_BoneMtxNum(u32 op, u32 diff) {
+	if (!currentList) {
+		gstate.boneMatrixNumber = (GE_CMD_BONEMATRIXNUMBER << 24) | (op & 0x7F);
+		return;
+	}
+
 	// This is almost always followed by GE_CMD_BONEMATRIXDATA.
 	const u32_le *src = (const u32_le *)Memory::GetPointerUnchecked(currentList->pc + 4);
 	u32 *dst = (u32 *)(gstate.boneMatrix + (op & 0x7F));
@@ -2345,7 +2548,7 @@ void GPUCommon::Execute_BoneMtxNum(u32 op, u32 diff) {
 	}
 
 	const int count = i;
-	gstate.boneMatrixNumber = (GE_CMD_BONEMATRIXNUMBER << 24) | ((op + count) & 0x7F);
+	gstate.boneMatrixNumber = (GE_CMD_BONEMATRIXNUMBER << 24) | ((op & 0x7F) + count);
 
 	// Skip over the loaded data, it's done now.
 	UpdatePC(currentList->pc, currentList->pc + count * 4);
@@ -2354,7 +2557,7 @@ void GPUCommon::Execute_BoneMtxNum(u32 op, u32 diff) {
 
 void GPUCommon::Execute_BoneMtxData(u32 op, u32 diff) {
 	// Note: it's uncommon to get here now, see above.
-	int num = gstate.boneMatrixNumber & 0x7F;
+	int num = gstate.boneMatrixNumber & 0x00FFFFFF;
 	u32 newVal = op << 8;
 	if (num < 96 && newVal != ((const u32 *)gstate.boneMatrix)[num]) {
 		// Bone matrices should NOT flush when software skinning is enabled!
@@ -2367,7 +2570,7 @@ void GPUCommon::Execute_BoneMtxData(u32 op, u32 diff) {
 		((u32 *)gstate.boneMatrix)[num] = newVal;
 	}
 	num++;
-	gstate.boneMatrixNumber = (GE_CMD_BONEMATRIXNUMBER << 24) | (num & 0x7F);
+	gstate.boneMatrixNumber = (GE_CMD_BONEMATRIXNUMBER << 24) | (num & 0x00FFFFFF);
 	gstate.boneMatrixData = GE_CMD_BONEMATRIXDATA << 24;
 }
 
@@ -2420,10 +2623,10 @@ void GPUCommon::Execute_ImmVertexAlphaPrim(u32 op, u32 diff) {
 		immPrim_ = (GEPrimitiveType)prim;
 		// Flags seem to only be respected from the first prim.
 		immFlags_ = op & 0x00FFF800;
+		immFirstSent_ = false;
 	} else if (prim == GE_PRIM_KEEP_PREVIOUS && immPrim_ != GE_PRIM_INVALID) {
 		static constexpr int flushPrimCount[] = { 1, 2, 0, 3, 0, 0, 2, 0 };
-		// Instead of finding a proper point to flush, we just emit a full rectangle every time one
-		// is finished.
+		// Instead of finding a proper point to flush, we just emit prims when we can.
 		if (immCount_ == flushPrimCount[immPrim_ & 7])
 			FlushImm();
 	} else {
@@ -2445,31 +2648,6 @@ void GPUCommon::FlushImm() {
 	}
 	UpdateUVScaleOffset();
 
-	// Instead of plumbing through properly (we'd need to inject these pretransformed vertices in the middle
-	// of SoftwareTransform(), which would take a lot of refactoring), we'll cheat and just turn these into
-	// through vertices.
-	// Since the only known use is Thrillville and it only uses it to clear, we just use color and pos.
-	struct ImmVertex {
-		float uv[2];
-		uint32_t color;
-		float xyz[3];
-	};
-	ImmVertex temp[MAX_IMMBUFFER_SIZE];
-	uint32_t color1Used = 0;
-	for (int i = 0; i < immCount_; i++) {
-		// Since we're sending through, scale back up to w/h.
-		temp[i].uv[0] = immBuffer_[i].u * gstate.getTextureWidth(0);
-		temp[i].uv[1] = immBuffer_[i].v * gstate.getTextureHeight(0);
-		temp[i].color = immBuffer_[i].color0_32;
-		temp[i].xyz[0] = immBuffer_[i].pos[0];
-		temp[i].xyz[1] = immBuffer_[i].pos[1];
-		temp[i].xyz[2] = immBuffer_[i].pos[2];
-		color1Used |= immBuffer_[i].color1_32;
-	}
-	int vtype = GE_VTYPE_TC_FLOAT | GE_VTYPE_POS_FLOAT | GE_VTYPE_COL_8888 | GE_VTYPE_THROUGH;
-
-	// TODO: Handle fog and secondary color somehow?
-
 	bool antialias = (immFlags_ & GE_IMM_ANTIALIAS) != 0;
 	bool prevAntialias = gstate.isAntiAliasEnabled();
 	bool shading = (immFlags_ & GE_IMM_SHADING) != 0;
@@ -2479,40 +2657,42 @@ void GPUCommon::FlushImm() {
 	int cullMode = (immFlags_ & GE_IMM_CULLFACE) != 0 ? 1 : 0;
 	bool texturing = (immFlags_ & GE_IMM_TEXTURE) != 0;
 	bool prevTexturing = gstate.isTextureMapEnabled();
+	bool fog = (immFlags_ & GE_IMM_FOG) != 0;
+	bool prevFog = gstate.isFogEnabled();
 	bool dither = (immFlags_ & GE_IMM_DITHER) != 0;
 	bool prevDither = gstate.isDitherEnabled();
 
 	if ((immFlags_ & GE_IMM_CLIPMASK) != 0) {
 		WARN_LOG_REPORT_ONCE(geimmclipvalue, G3D, "Imm vertex used clip value, flags=%06x", immFlags_);
-	} else if ((immFlags_ & GE_IMM_FOG) != 0) {
-		WARN_LOG_REPORT_ONCE(geimmfog, G3D, "Imm vertex used fog, flags=%06x", immFlags_);
-	} else if (color1Used != 0 && gstate.isUsingSecondaryColor()) {
-		WARN_LOG_REPORT_ONCE(geimmcolor1, G3D, "Imm vertex used secondary color, flags=%06x", immFlags_);
 	}
 
-	if (texturing != prevTexturing || cullEnable != prevCullEnable || dither != prevDither || prevShading != shading) {
+	bool changed = texturing != prevTexturing || cullEnable != prevCullEnable || dither != prevDither;
+	changed = changed || prevShading != shading || prevFog != fog;
+	if (changed) {
 		DispatchFlush();
 		gstate.antiAliasEnable = (GE_CMD_ANTIALIASENABLE << 24) | (int)antialias;
 		gstate.shademodel = (GE_CMD_SHADEMODE << 24) | (int)shading;
 		gstate.cullfaceEnable = (GE_CMD_CULLFACEENABLE << 24) | (int)cullEnable;
 		gstate.textureMapEnable = (GE_CMD_TEXTUREMAPENABLE << 24) | (int)texturing;
+		gstate.fogEnable = (GE_CMD_FOGENABLE << 24) | (int)fog;
 		gstate.ditherEnable = (GE_CMD_DITHERENABLE << 24) | (int)dither;
-		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_RASTER_STATE);
+		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_UVSCALEOFFSET | DIRTY_CULLRANGE);
 	}
 
-	int bytesRead;
-	uint32_t vertTypeID = GetVertTypeID(vtype, 0);
-	drawEngineCommon_->DispatchSubmitImm(temp, nullptr, immPrim_, immCount_, vertTypeID, cullMode, &bytesRead);
-	// TODO: In the future, make a special path for these.
-	// drawEngineCommon_->DispatchSubmitImm(immBuffer_, immCount_);
+	drawEngineCommon_->DispatchSubmitImm(immPrim_, immBuffer_, immCount_, cullMode, immFirstSent_);
 	immCount_ = 0;
+	immFirstSent_ = true;
 
-	gstate.antiAliasEnable = (GE_CMD_ANTIALIASENABLE << 24) | (int)prevAntialias;
-	gstate.shademodel = (GE_CMD_SHADEMODE << 24) | (int)prevShading;
-	gstate.cullfaceEnable = (GE_CMD_CULLFACEENABLE << 24) | (int)prevCullEnable;
-	gstate.textureMapEnable = (GE_CMD_TEXTUREMAPENABLE << 24) | (int)prevTexturing;
-	gstate.ditherEnable = (GE_CMD_DITHERENABLE << 24) | (int)prevDither;
-	gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_RASTER_STATE);
+	if (changed) {
+		DispatchFlush();
+		gstate.antiAliasEnable = (GE_CMD_ANTIALIASENABLE << 24) | (int)prevAntialias;
+		gstate.shademodel = (GE_CMD_SHADEMODE << 24) | (int)prevShading;
+		gstate.cullfaceEnable = (GE_CMD_CULLFACEENABLE << 24) | (int)prevCullEnable;
+		gstate.textureMapEnable = (GE_CMD_TEXTUREMAPENABLE << 24) | (int)prevTexturing;
+		gstate.fogEnable = (GE_CMD_FOGENABLE << 24) | (int)prevFog;
+		gstate.ditherEnable = (GE_CMD_DITHERENABLE << 24) | (int)prevDither;
+		gstate_c.Dirty(DIRTY_VERTEXSHADER_STATE | DIRTY_FRAGMENTSHADER_STATE | DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_UVSCALEOFFSET | DIRTY_CULLRANGE);
+	}
 }
 
 void GPUCommon::ExecuteOp(u32 op, u32 diff) {
@@ -2629,7 +2809,7 @@ struct DisplayList_v2 {
 };
 
 void GPUCommon::DoState(PointerWrap &p) {
-	auto s = p.Section("GPUCommon", 1, 4);
+	auto s = p.Section("GPUCommon", 1, 6);
 	if (!s)
 		return;
 
@@ -2701,6 +2881,13 @@ void GPUCommon::DoState(PointerWrap &p) {
 	Do(p, isbreak);
 	Do(p, drawCompleteTicks);
 	Do(p, busyTicks);
+
+	if (s >= 5) {
+		Do(p, matrixVisible.all);
+	}
+	if (s >= 6) {
+		Do(p, edramTranslation_);
+	}
 }
 
 void GPUCommon::InterruptStart(int listid) {
@@ -2881,88 +3068,206 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 
 	DEBUG_LOG(G3D, "Block transfer: %08x/%x -> %08x/%x, %ix%ix%i (%i,%i)->(%i,%i)", srcBasePtr, srcStride, dstBasePtr, dstStride, width, height, bpp, srcX, srcY, dstX, dstY);
 
-	if (!Memory::IsValidAddress(srcBasePtr)) {
-		ERROR_LOG_REPORT(G3D, "BlockTransfer: Bad source transfer address %08x!", srcBasePtr);
-		return;
-	}
+	// For VRAM, we wrap around when outside valid memory (mirrors still work.)
+	if ((srcBasePtr & 0x04800000) == 0x04800000)
+		srcBasePtr &= ~0x00800000;
+	if ((dstBasePtr & 0x04800000) == 0x04800000)
+		dstBasePtr &= ~0x00800000;
 
-	if (!Memory::IsValidAddress(dstBasePtr)) {
-		ERROR_LOG_REPORT(G3D, "BlockTransfer: Bad destination transfer address %08x!", dstBasePtr);
-		return;
-	}
+	// Use height less one to account for width, which can be greater or less than stride.
+	const uint32_t src = srcBasePtr + (srcY * srcStride + srcX) * bpp;
+	const uint32_t srcSize = (height - 1) * (srcStride + width) * bpp;
+	const uint32_t dst = dstBasePtr + (dstY * dstStride + dstX) * bpp;
+	const uint32_t dstSize = (height - 1) * (dstStride + width) * bpp;
 
-	// Check that the last address of both source and dest are valid addresses
+	bool srcDstOverlap = src + srcSize > dst && dst + dstSize > src;
+	bool srcValid = Memory::IsValidRange(src, srcSize);
+	bool dstValid = Memory::IsValidRange(dst, dstSize);
+	bool srcWraps = Memory::IsVRAMAddress(srcBasePtr) && !srcValid;
+	bool dstWraps = Memory::IsVRAMAddress(dstBasePtr) && !dstValid;
 
-	u32 srcLastAddr = srcBasePtr + ((srcY + height - 1) * srcStride + (srcX + width - 1)) * bpp;
-	u32 dstLastAddr = dstBasePtr + ((dstY + height - 1) * dstStride + (dstX + width - 1)) * bpp;
-
-	if (!Memory::IsValidAddress(srcLastAddr)) {
-		ERROR_LOG_REPORT(G3D, "Bottom-right corner of source of block transfer is at an invalid address: %08x", srcLastAddr);
-		return;
-	}
-	if (!Memory::IsValidAddress(dstLastAddr)) {
-		ERROR_LOG_REPORT(G3D, "Bottom-right corner of destination of block transfer is at an invalid address: %08x", srcLastAddr);
-		return;
-	}
+	char tag[128];
+	size_t tagSize;
 
 	// Tell the framebuffer manager to take action if possible. If it does the entire thing, let's just return.
-	if (!framebufferManager_->NotifyBlockTransferBefore(dstBasePtr, dstStride, dstX, dstY, srcBasePtr, srcStride, srcX, srcY, width, height, bpp, skipDrawReason)) {
+	if (!framebufferManager_ || !framebufferManager_->NotifyBlockTransferBefore(dstBasePtr, dstStride, dstX, dstY, srcBasePtr, srcStride, srcX, srcY, width, height, bpp, skipDrawReason)) {
 		// Do the copy! (Hm, if we detect a drawn video frame (see below) then we could maybe skip this?)
 		// Can use GetPointerUnchecked because we checked the addresses above. We could also avoid them
 		// entirely by walking a couple of pointers...
-		if (srcStride == dstStride && (u32)width == srcStride) {
-			// Common case in God of War, let's do it all in one chunk.
+
+		// Simple case: just a straight copy, no overlap or wrapping.
+		if (srcStride == dstStride && (u32)width == srcStride && !srcDstOverlap && srcValid && dstValid) {
 			u32 srcLineStartAddr = srcBasePtr + (srcY * srcStride + srcX) * bpp;
 			u32 dstLineStartAddr = dstBasePtr + (dstY * dstStride + dstX) * bpp;
-			const u8 *src = Memory::GetPointerUnchecked(srcLineStartAddr);
-			u8 *dst = Memory::GetPointerWriteUnchecked(dstLineStartAddr);
-			memcpy(dst, src, width * height * bpp);
-			GPURecord::NotifyMemcpy(dstLineStartAddr, srcLineStartAddr, width * height * bpp);
-		} else {
+			u32 bytesToCopy = width * height * bpp;
+
+			const u8 *srcp = Memory::GetPointer(srcLineStartAddr);
+			u8 *dstp = Memory::GetPointerWrite(dstLineStartAddr);
+			memcpy(dstp, srcp, bytesToCopy);
+
+			if (MemBlockInfoDetailed(bytesToCopy)) {
+				tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUBlockTransfer/", src, bytesToCopy);
+				NotifyMemInfo(MemBlockFlags::READ, src, bytesToCopy, tag, tagSize);
+				NotifyMemInfo(MemBlockFlags::WRITE, dst, bytesToCopy, tag, tagSize);
+			}
+		} else if ((srcDstOverlap || srcWraps || dstWraps) && (srcValid || srcWraps) && (dstValid || dstWraps)) {
+			// This path means we have either src/dst overlap, OR one or both of src and dst wrap.
+			// This should be uncommon so it's the slowest path.
+			u32 bytesToCopy = width * bpp;
+			bool notifyDetail = MemBlockInfoDetailed(srcWraps || dstWraps ? 64 : bytesToCopy);
+			bool notifyAll = !notifyDetail && MemBlockInfoDetailed(srcSize, dstSize);
+			if (notifyDetail || notifyAll) {
+				tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUBlockTransfer/", src, srcSize);
+			}
+
+			auto notifyingMemmove = [&](u32 d, u32 s, u32 sz) {
+				const u8 *srcp = Memory::GetPointer(s);
+				u8 *dstp = Memory::GetPointerWrite(d);
+				memmove(dstp, srcp, sz);
+
+				if (notifyDetail) {
+					NotifyMemInfo(MemBlockFlags::READ, s, sz, tag, tagSize);
+					NotifyMemInfo(MemBlockFlags::WRITE, d, sz, tag, tagSize);
+				}
+			};
+
+			for (int y = 0; y < height; y++) {
+				u32 srcLineStartAddr = srcBasePtr + ((y + srcY) * srcStride + srcX) * bpp;
+				u32 dstLineStartAddr = dstBasePtr + ((y + dstY) * dstStride + dstX) * bpp;
+				// If we already passed a wrap, we can use the quicker path.
+				if ((srcLineStartAddr & 0x04800000) == 0x04800000)
+					srcLineStartAddr &= ~0x00800000;
+				if ((dstLineStartAddr & 0x04800000) == 0x04800000)
+					dstLineStartAddr &= ~0x00800000;
+				// These flags mean there's a wrap inside this line.
+				bool srcLineWrap = !Memory::IsValidRange(srcLineStartAddr, bytesToCopy);
+				bool dstLineWrap = !Memory::IsValidRange(dstLineStartAddr, bytesToCopy);
+
+				if (!srcLineWrap && !dstLineWrap) {
+					const u8 *srcp = Memory::GetPointer(srcLineStartAddr);
+					u8 *dstp = Memory::GetPointerWrite(dstLineStartAddr);
+					for (u32 i = 0; i < bytesToCopy; i += 64) {
+						u32 chunk = i + 64 > bytesToCopy ? bytesToCopy - i : 64;
+						memmove(dstp + i, srcp + i, chunk);
+					}
+
+					// If we're tracking detail, it's useful to have the gaps illustrated properly.
+					if (notifyDetail) {
+						NotifyMemInfo(MemBlockFlags::READ, srcLineStartAddr, bytesToCopy, tag, tagSize);
+						NotifyMemInfo(MemBlockFlags::WRITE, dstLineStartAddr, bytesToCopy, tag, tagSize);
+					}
+				} else {
+					// We can wrap at any point, so along with overlap this gets a bit complicated.
+					// We're just going to do this the slow and easy way.
+					u32 srcLinePos = srcLineStartAddr;
+					u32 dstLinePos = dstLineStartAddr;
+					for (u32 i = 0; i < bytesToCopy; i += 64) {
+						u32 chunk = i + 64 > bytesToCopy ? bytesToCopy - i : 64;
+						u32 srcValid = Memory::ValidSize(srcLinePos, chunk);
+						u32 dstValid = Memory::ValidSize(dstLinePos, chunk);
+
+						// First chunk, for which both are valid.
+						u32 bothSize = std::min(srcValid, dstValid);
+						if (bothSize != 0)
+							notifyingMemmove(dstLinePos, srcLinePos, bothSize);
+
+						// Now, whichever side has more valid (or the rest, if only one side must wrap.)
+						u32 exclusiveSize = std::max(srcValid, dstValid) - bothSize;
+						if (exclusiveSize != 0 && srcValid >= dstValid) {
+							notifyingMemmove(PSP_GetVidMemBase(), srcLineStartAddr + bothSize, exclusiveSize);
+						} else if (exclusiveSize != 0 && srcValid < dstValid) {
+							notifyingMemmove(dstLineStartAddr + bothSize, PSP_GetVidMemBase(), exclusiveSize);
+						}
+
+						// Finally, if both src and dst wrapped, that portion.
+						u32 wrappedSize = chunk - bothSize - exclusiveSize;
+						if (wrappedSize != 0 && srcValid >= dstValid) {
+							notifyingMemmove(PSP_GetVidMemBase() + exclusiveSize, PSP_GetVidMemBase(), wrappedSize);
+						} else if (wrappedSize != 0 && srcValid < dstValid) {
+							notifyingMemmove(PSP_GetVidMemBase(), PSP_GetVidMemBase() + exclusiveSize, wrappedSize);
+						}
+
+						srcLinePos += chunk;
+						dstLinePos += chunk;
+						if ((srcLinePos & 0x04800000) == 0x04800000)
+							srcLinePos &= ~0x00800000;
+						if ((dstLinePos & 0x04800000) == 0x04800000)
+							dstLinePos &= ~0x00800000;
+					}
+				}
+			}
+
+			if (notifyAll) {
+				if (srcWraps) {
+					u32 validSize = Memory::ValidSize(src, srcSize);
+					NotifyMemInfo(MemBlockFlags::READ, src, validSize, tag, tagSize);
+					NotifyMemInfo(MemBlockFlags::READ, PSP_GetVidMemBase(), srcSize - validSize, tag, tagSize);
+				} else {
+					NotifyMemInfo(MemBlockFlags::READ, src, srcSize, tag, tagSize);
+				}
+				if (dstWraps) {
+					u32 validSize = Memory::ValidSize(dst, dstSize);
+					NotifyMemInfo(MemBlockFlags::WRITE, dst, validSize, tag, tagSize);
+					NotifyMemInfo(MemBlockFlags::WRITE, PSP_GetVidMemBase(), dstSize - validSize, tag, tagSize);
+				} else {
+					NotifyMemInfo(MemBlockFlags::WRITE, dst, dstSize, tag, tagSize);
+				}
+			}
+		} else if (srcValid && dstValid) {
+			u32 bytesToCopy = width * bpp;
+			bool notifyDetail = MemBlockInfoDetailed(bytesToCopy);
+			bool notifyAll = !notifyDetail && MemBlockInfoDetailed(srcSize, dstSize);
+			if (notifyDetail || notifyAll) {
+				tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUBlockTransfer/", src, srcSize);
+			}
+
 			for (int y = 0; y < height; y++) {
 				u32 srcLineStartAddr = srcBasePtr + ((y + srcY) * srcStride + srcX) * bpp;
 				u32 dstLineStartAddr = dstBasePtr + ((y + dstY) * dstStride + dstX) * bpp;
 
-				const u8 *src = Memory::GetPointerUnchecked(srcLineStartAddr);
-				u8 *dst = Memory::GetPointerWriteUnchecked(dstLineStartAddr);
-				memcpy(dst, src, width * bpp);
-				GPURecord::NotifyMemcpy(dstLineStartAddr, srcLineStartAddr, width * bpp);
+				const u8 *srcp = Memory::GetPointer(srcLineStartAddr);
+				u8 *dstp = Memory::GetPointerWrite(dstLineStartAddr);
+				memcpy(dstp, srcp, bytesToCopy);
+
+				// If we're tracking detail, it's useful to have the gaps illustrated properly.
+				if (notifyDetail) {
+					NotifyMemInfo(MemBlockFlags::READ, srcLineStartAddr, bytesToCopy, tag, tagSize);
+					NotifyMemInfo(MemBlockFlags::WRITE, dstLineStartAddr, bytesToCopy, tag, tagSize);
+				}
 			}
+
+			if (notifyAll) {
+				NotifyMemInfo(MemBlockFlags::READ, src, srcSize, tag, tagSize);
+				NotifyMemInfo(MemBlockFlags::WRITE, dst, dstSize, tag, tagSize);
+			}
+		} else {
+			// This seems to cause the GE to require a break/reset on a PSP.
+			// TODO: Handle that and figure out which bytes are still copied?
+			ERROR_LOG_REPORT_ONCE(invalidtransfer, G3D, "Block transfer invalid: %08x/%x -> %08x/%x, %ix%ix%i (%i,%i)->(%i,%i)", srcBasePtr, srcStride, dstBasePtr, dstStride, width, height, bpp, srcX, srcY, dstX, dstY);
 		}
 
-		// Fixes Gran Turismo's funky text issue, since it overwrites the current texture.
-		textureCache_->Invalidate(dstBasePtr + (dstY * dstStride + dstX) * bpp, height * dstStride * bpp, GPU_INVALIDATE_HINT);
-		framebufferManager_->NotifyBlockTransferAfter(dstBasePtr, dstStride, dstX, dstY, srcBasePtr, srcStride, srcX, srcY, width, height, bpp, skipDrawReason);
-	}
-
-	const uint32_t numBytes = width * height * bpp;
-	const uint32_t srcSize = height * srcStride * bpp;
-	const uint32_t dstSize = height * dstStride * bpp;
-	// We do the check here on the number of bytes to avoid marking really tiny images.
-	// Helps perf in GT menu which does insane amounts of these, one for each text character per frame.
-	if (MemBlockInfoDetailed(numBytes, numBytes)) {
-		const uint32_t src = srcBasePtr + (srcY * srcStride + srcX) * bpp;
-		const uint32_t dst = dstBasePtr + (dstY * dstStride + dstX) * bpp;
-		char tag[128];
-		size_t tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUBlockTransfer/", src, srcSize);
-		NotifyMemInfo(MemBlockFlags::READ, src, srcSize, tag, tagSize);
-		NotifyMemInfo(MemBlockFlags::WRITE, dst, dstSize, tag, tagSize);
+		if (framebufferManager_) {
+			// Fixes Gran Turismo's funky text issue, since it overwrites the current texture.
+			textureCache_->Invalidate(dstBasePtr + (dstY * dstStride + dstX) * bpp, height * dstStride * bpp, GPU_INVALIDATE_HINT);
+			framebufferManager_->NotifyBlockTransferAfter(dstBasePtr, dstStride, dstX, dstY, srcBasePtr, srcStride, srcX, srcY, width, height, bpp, skipDrawReason);
+		}
 	}
 
 	// TODO: Correct timing appears to be 1.9, but erring a bit low since some of our other timing is inaccurate.
 	cyclesExecuted += ((height * width * bpp) * 16) / 10;
 }
 
-bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size) {
+bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags) {
 	// Track stray copies of a framebuffer in RAM. MotoGP does this.
 	if (framebufferManager_->MayIntersectFramebuffer(src) || framebufferManager_->MayIntersectFramebuffer(dest)) {
-		if (!framebufferManager_->NotifyFramebufferCopy(src, dest, size, false, gstate_c.skipDrawReason)) {
-			// We use a little hack for PerformMemoryDownload/PerformMemoryUpload using a VRAM mirror.
+		if (!framebufferManager_->NotifyFramebufferCopy(src, dest, size, flags, gstate_c.skipDrawReason)) {
+			// We use matching values in PerformReadbackToMemory/PerformWriteColorFromMemory.
 			// Since they're identical we don't need to copy.
-			if (!Memory::IsVRAMAddress(dest) || (dest ^ 0x00400000) != src) {
+			if (dest != src) {
 				if (MemBlockInfoDetailed(size)) {
-					const std::string tag = GetMemWriteTagAt("GPUMemcpy/", src, size);
-					Memory::Memcpy(dest, src, size, tag.c_str(), tag.size());
+					char tag[128];
+					size_t tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUMemcpy/", src, size);
+					Memory::Memcpy(dest, src, size, tag, tagSize);
 				} else {
 					Memory::Memcpy(dest, src, size, "GPUMemcpy");
 				}
@@ -2973,12 +3278,14 @@ bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size) {
 	}
 
 	if (MemBlockInfoDetailed(size)) {
-		const std::string tag = GetMemWriteTagAt("GPUMemcpy/", src, size);
-		NotifyMemInfo(MemBlockFlags::READ, src, size, tag.c_str(), tag.size());
-		NotifyMemInfo(MemBlockFlags::WRITE, dest, size, tag.c_str(), tag.size());
+		char tag[128];
+		size_t tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUMemcpy/", src, size);
+		NotifyMemInfo(MemBlockFlags::READ, src, size, tag, tagSize);
+		NotifyMemInfo(MemBlockFlags::WRITE, dest, size, tag, tagSize);
 	}
 	InvalidateCache(dest, size, GPU_INVALIDATE_HINT);
-	GPURecord::NotifyMemcpy(dest, src, size);
+	if (!(flags & GPUCopyFlag::DEBUG_NOTIFIED))
+		GPURecord::NotifyMemcpy(dest, src, size);
 	return false;
 }
 
@@ -2986,7 +3293,7 @@ bool GPUCommon::PerformMemorySet(u32 dest, u8 v, int size) {
 	// This may indicate a memset, usually to 0, of a framebuffer.
 	if (framebufferManager_->MayIntersectFramebuffer(dest)) {
 		Memory::Memset(dest, v, size, "GPUMemset");
-		if (!framebufferManager_->NotifyFramebufferCopy(dest, dest, size, true, gstate_c.skipDrawReason)) {
+		if (!framebufferManager_->NotifyFramebufferCopy(dest, dest, size, GPUCopyFlag::MEMSET, gstate_c.skipDrawReason)) {
 			InvalidateCache(dest, size, GPU_INVALIDATE_HINT);
 		}
 		return true;
@@ -2999,21 +3306,17 @@ bool GPUCommon::PerformMemorySet(u32 dest, u8 v, int size) {
 	return false;
 }
 
-bool GPUCommon::PerformMemoryDownload(u32 dest, int size) {
-	// Cheat a bit to force a download of the framebuffer.
-	// VRAM + 0x00400000 is simply a VRAM mirror.
+bool GPUCommon::PerformReadbackToMemory(u32 dest, int size) {
 	if (Memory::IsVRAMAddress(dest)) {
-		return PerformMemoryCopy(dest ^ 0x00400000, dest, size);
+		return PerformMemoryCopy(dest, dest, size, GPUCopyFlag::FORCE_DST_MEM);
 	}
 	return false;
 }
 
-bool GPUCommon::PerformMemoryUpload(u32 dest, int size) {
-	// Cheat a bit to force an upload of the framebuffer.
-	// VRAM + 0x00400000 is simply a VRAM mirror.
+bool GPUCommon::PerformWriteColorFromMemory(u32 dest, int size) {
 	if (Memory::IsVRAMAddress(dest)) {
 		GPURecord::NotifyUpload(dest, size);
-		return PerformMemoryCopy(dest, dest ^ 0x00400000, size);
+		return PerformMemoryCopy(dest, dest, size, GPUCopyFlag::FORCE_SRC_MEM | GPUCopyFlag::DEBUG_NOTIFIED);
 	}
 	return false;
 }
@@ -3033,17 +3336,17 @@ void GPUCommon::InvalidateCache(u32 addr, int size, GPUInvalidationType type) {
 	}
 }
 
-void GPUCommon::NotifyVideoUpload(u32 addr, int size, int frameWidth, int format) {
+void GPUCommon::PerformWriteFormattedFromMemory(u32 addr, int size, int frameWidth, GEBufferFormat format) {
 	if (Memory::IsVRAMAddress(addr)) {
-		framebufferManager_->NotifyVideoUpload(addr, size, frameWidth, (GEBufferFormat)format);
+		framebufferManager_->PerformWriteFormattedFromMemory(addr, size, frameWidth, format);
 	}
-	textureCache_->NotifyVideoUpload(addr, size, frameWidth, (GEBufferFormat)format);
+	textureCache_->NotifyWriteFormattedFromMemory(addr, size, frameWidth, format);
 	InvalidateCache(addr, size, GPU_INVALIDATE_SAFE);
 }
 
-bool GPUCommon::PerformStencilUpload(u32 dest, int size, StencilUpload flags) {
+bool GPUCommon::PerformWriteStencilFromMemory(u32 dest, int size, WriteStencil flags) {
 	if (framebufferManager_->MayIntersectFramebuffer(dest)) {
-		framebufferManager_->PerformStencilUpload(dest, size, flags);
+		framebufferManager_->PerformWriteStencilFromMemory(dest, size, flags);
 		return true;
 	}
 	return false;
@@ -3088,6 +3391,7 @@ std::vector<FramebufferInfo> GPUCommon::GetFramebufferList() const {
 }
 
 bool GPUCommon::GetCurrentSimpleVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices) {
+	UpdateUVScaleOffset();
 	return drawEngineCommon_->GetCurrentSimpleVertices(count, vertices, indices);
 }
 
@@ -3095,11 +3399,11 @@ bool GPUCommon::GetCurrentClut(GPUDebugBuffer &buffer) {
 	return textureCache_->GetCurrentClutBuffer(buffer);
 }
 
-bool GPUCommon::GetCurrentTexture(GPUDebugBuffer &buffer, int level) {
+bool GPUCommon::GetCurrentTexture(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) {
 	if (!gstate.isTextureMapEnabled()) {
 		return false;
 	}
-	return textureCache_->GetCurrentTextureDebug(buffer, level);
+	return textureCache_->GetCurrentTextureDebug(buffer, level, isFramebuffer);
 }
 
 bool GPUCommon::DescribeCodePtr(const u8 *ptr, std::string &name) {
@@ -3185,4 +3489,94 @@ size_t GPUCommon::FormatGPUStatsCommon(char *buffer, size_t size) {
 		gpuStats.vertexGPUCycles + gpuStats.otherGPUCycles,
 		vertexAverageCycles
 	);
+}
+
+u32 GPUCommon::CheckGPUFeatures() const {
+	u32 features = 0;
+	if (draw_->GetDeviceCaps().logicOpSupported) {
+		features |= GPU_USE_LOGIC_OP;
+	}
+	if (draw_->GetDeviceCaps().anisoSupported) {
+		features |= GPU_USE_ANISOTROPY;
+	}
+	if (draw_->GetDeviceCaps().textureNPOTFullySupported) {
+		features |= GPU_USE_TEXTURE_NPOT;
+	}
+	if (draw_->GetDeviceCaps().dualSourceBlend) {
+		if (!g_Config.bVendorBugChecksEnabled || !draw_->GetBugs().Has(Draw::Bugs::DUAL_SOURCE_BLENDING_BROKEN)) {
+			features |= GPU_USE_DUALSOURCE_BLEND;
+		}
+	}
+	if (draw_->GetDeviceCaps().blendMinMaxSupported) {
+		features |= GPU_USE_BLEND_MINMAX;
+	}
+
+	if (draw_->GetDeviceCaps().clipDistanceSupported) {
+		features |= GPU_USE_CLIP_DISTANCE;
+	}
+
+	if (draw_->GetDeviceCaps().cullDistanceSupported) {
+		features |= GPU_USE_CULL_DISTANCE;
+	}
+
+	if (draw_->GetDeviceCaps().textureDepthSupported) {
+		features |= GPU_USE_DEPTH_TEXTURE;
+	}
+
+	if (draw_->GetDeviceCaps().depthClampSupported) {
+		// Some backends always do GPU_USE_ACCURATE_DEPTH, but it's required for depth clamp.
+		features |= GPU_USE_DEPTH_CLAMP | GPU_USE_ACCURATE_DEPTH;
+	}
+
+	bool canClipOrCull = draw_->GetDeviceCaps().clipDistanceSupported || draw_->GetDeviceCaps().cullDistanceSupported;
+	bool canDiscardVertex = draw_->GetBugs().Has(Draw::Bugs::BROKEN_NAN_IN_CONDITIONAL);
+	if (canClipOrCull || canDiscardVertex) {
+		// We'll dynamically use the parts that are supported, to reduce artifacts as much as possible.
+		features |= GPU_USE_VS_RANGE_CULLING;
+	}
+
+	if (draw_->GetDeviceCaps().framebufferFetchSupported) {
+		features |= GPU_USE_FRAMEBUFFER_FETCH;
+	}
+
+	if (draw_->GetShaderLanguageDesc().bitwiseOps) {
+		features |= GPU_USE_LIGHT_UBERSHADER;
+	}
+
+	if (PSP_CoreParameter().compat.flags().ClearToRAM) {
+		features |= GPU_USE_CLEAR_RAM_HACK;
+	}
+
+	return features;
+}
+
+u32 GPUCommon::CheckGPUFeaturesLate(u32 features) const {
+	// If we already have a 16-bit depth buffer, we don't need to round.
+	bool prefer24 = draw_->GetDeviceCaps().preferredDepthBufferFormat == Draw::DataFormat::D24_S8;
+	bool prefer16 = draw_->GetDeviceCaps().preferredDepthBufferFormat == Draw::DataFormat::D16;
+	if (!prefer16) {
+		if (sawExactEqualDepth_ && (features & GPU_USE_ACCURATE_DEPTH) != 0) {
+			// Exact equal tests tend to have issues unless we use the PSP's depth range.
+			// We use 24-bit depth virtually everwhere, the fallback is just for safety.
+			if (prefer24)
+				features |= GPU_SCALE_DEPTH_FROM_24BIT_TO_16BIT;
+			else
+				features |= GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT;
+		} else if (!g_Config.bHighQualityDepth && (features & GPU_USE_ACCURATE_DEPTH) != 0) {
+			features |= GPU_SCALE_DEPTH_FROM_24BIT_TO_16BIT;
+		} else if (PSP_CoreParameter().compat.flags().PixelDepthRounding) {
+			if (prefer24 && (features & GPU_USE_ACCURATE_DEPTH) != 0) {
+				// Here we can simulate a 16 bit depth buffer by scaling.
+				// Note that the depth buffer is fixed point, not floating, so dividing by 256 is pretty good.
+				features |= GPU_SCALE_DEPTH_FROM_24BIT_TO_16BIT;
+			} else {
+				// Use fragment rounding on where available otherwise.
+				features |= GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT;
+			}
+		} else if (PSP_CoreParameter().compat.flags().VertexDepthRounding) {
+			features |= GPU_ROUND_DEPTH_TO_16BIT;
+		}
+	}
+
+	return features;
 }

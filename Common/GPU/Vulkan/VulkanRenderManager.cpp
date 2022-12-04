@@ -12,9 +12,10 @@
 #include "Common/GPU/Vulkan/VulkanRenderManager.h"
 
 #include "Common/Thread/ThreadUtil.h"
+#include "Common/VR/PPSSPPVR.h"
 
 #if 0 // def _DEBUG
-#define VLOG(...) INFO_LOG(G3D, __VA_ARGS__)
+#define VLOG(...) NOTICE_LOG(G3D, __VA_ARGS__)
 #else
 #define VLOG(...)
 #endif
@@ -26,39 +27,64 @@
 using namespace PPSSPP_VK;
 
 // renderPass is an example of the "compatibility class" or RenderPassType type.
-bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleRenderPass, RenderPassType rpType) {
+bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleRenderPass, RenderPassType rpType, VkSampleCountFlagBits sampleCount) {
+	bool multisample = RenderPassTypeHasMultisample(rpType);
+	if (multisample) {
+		if (sampleCount_ != VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM) {
+			_assert_(sampleCount == sampleCount_);
+		} else {
+			sampleCount_ = sampleCount;
+		}
+	}
+
 	// Fill in the last part of the desc since now it's time to block.
 	VkShaderModule vs = desc->vertexShader->BlockUntilReady();
 	VkShaderModule fs = desc->fragmentShader->BlockUntilReady();
+	VkShaderModule gs = desc->geometryShader ? desc->geometryShader->BlockUntilReady() : VK_NULL_HANDLE;
 
-	if (!vs || !fs) {
+	if (!vs || !fs || (!gs && desc->geometryShader)) {
 		ERROR_LOG(G3D, "Failed creating graphics pipeline - missing shader modules");
 		// We're kinda screwed here?
 		return false;
 	}
 
-	VkPipelineShaderStageCreateInfo ss[2]{};
+	uint32_t stageCount = 2;
+	VkPipelineShaderStageCreateInfo ss[3]{};
 	ss[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	ss[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
 	ss[0].pSpecializationInfo = nullptr;
 	ss[0].module = vs;
 	ss[0].pName = "main";
-	ss[0].flags = 0;
 	ss[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	ss[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
 	ss[1].pSpecializationInfo = nullptr;
 	ss[1].module = fs;
 	ss[1].pName = "main";
-	ss[1].flags = 0;
+	if (gs) {
+		stageCount++;
+		ss[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		ss[2].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
+		ss[2].pSpecializationInfo = nullptr;
+		ss[2].module = gs;
+		ss[2].pName = "main";
+	}
 
 	VkGraphicsPipelineCreateInfo pipe{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
 	pipe.pStages = ss;
-	pipe.stageCount = 2;
+	pipe.stageCount = stageCount;
 	pipe.renderPass = compatibleRenderPass;
 	pipe.basePipelineIndex = 0;
 	pipe.pColorBlendState = &desc->cbs;
 	pipe.pDepthStencilState = &desc->dss;
 	pipe.pRasterizationState = &desc->rs;
+
+	VkPipelineMultisampleStateCreateInfo ms{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+	ms.rasterizationSamples = multisample ? sampleCount : VK_SAMPLE_COUNT_1_BIT;
+	if (multisample && (flags_ & PipelineFlags::USES_DISCARD)) {
+		// Extreme quality
+		ms.sampleShadingEnable = true;
+		ms.minSampleShading = 1.0f;
+	}
 
 	// We will use dynamic viewport state.
 	pipe.pVertexInputState = &desc->vis;
@@ -66,7 +92,7 @@ bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleR
 	pipe.pTessellationState = nullptr;
 	pipe.pDynamicState = &desc->ds;
 	pipe.pInputAssemblyState = &desc->inputAssembly;
-	pipe.pMultisampleState = &desc->ms;
+	pipe.pMultisampleState = &ms;
 	pipe.layout = desc->pipelineLayout;
 	pipe.basePipelineHandle = VK_NULL_HANDLE;
 	pipe.basePipelineIndex = 0;
@@ -75,8 +101,12 @@ bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleR
 	double start = time_now_d();
 	VkPipeline vkpipeline;
 	VkResult result = vkCreateGraphicsPipelines(vulkan->GetDevice(), desc->pipelineCache, 1, &pipe, nullptr, &vkpipeline);
+	double taken_ms = (time_now_d() - start) * 1000.0;
 
-	INFO_LOG(G3D, "Pipeline creation time: %0.2f ms", (time_now_d() - start) * 1000.0);
+	if (taken_ms < 0.1)
+		DEBUG_LOG(G3D, "Pipeline creation time: %0.2f ms (fast)", taken_ms);
+	else
+		INFO_LOG(G3D, "Pipeline creation time: %0.2f ms", taken_ms);
 
 	bool success = true;
 	if (result == VK_INCOMPLETE) {
@@ -84,30 +114,45 @@ bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleR
 		// Would really like to log more here, we could probably attach more info to desc.
 		//
 		// At least create a null placeholder to avoid creating over and over if something is broken.
-		pipeline[rpType]->Post(VK_NULL_HANDLE);
+		pipeline[(size_t)rpType]->Post(VK_NULL_HANDLE);
+		ERROR_LOG(G3D, "Failed creating graphics pipeline! VK_INCOMPLETE");
+		LogCreationFailure();
 		success = false;
 	} else if (result != VK_SUCCESS) {
-		pipeline[rpType]->Post(VK_NULL_HANDLE);
+		pipeline[(size_t)rpType]->Post(VK_NULL_HANDLE);
 		ERROR_LOG(G3D, "Failed creating graphics pipeline! result='%s'", VulkanResultToString(result));
+		LogCreationFailure();
 		success = false;
 	} else {
 		// Success!
-		if (!tag.empty()) {
-			vulkan->SetDebugName(vkpipeline, VK_OBJECT_TYPE_PIPELINE, tag.c_str());
+		if (!tag_.empty()) {
+			vulkan->SetDebugName(vkpipeline, VK_OBJECT_TYPE_PIPELINE, tag_.c_str());
 		}
-		pipeline[rpType]->Post(vkpipeline);
+		pipeline[(size_t)rpType]->Post(vkpipeline);
 	}
 
 	return success;
 }
 
-void VKRGraphicsPipeline::QueueForDeletion(VulkanContext *vulkan) {
-	for (int i = 0; i < RP_TYPE_COUNT; i++) {
-		if (!pipeline[i])
+void VKRGraphicsPipeline::DestroyVariants(VulkanContext *vulkan, bool msaaOnly) {
+	for (size_t i = 0; i < (size_t)RenderPassType::TYPE_COUNT; i++) {
+		if (!this->pipeline[i])
 			continue;
+		if (msaaOnly && (i & (int)RenderPassType::MULTISAMPLE) == 0)
+			continue;
+
 		VkPipeline pipeline = this->pipeline[i]->BlockUntilReady();
-		vulkan->Delete().QueueDeletePipeline(pipeline);
+		// pipeline can be nullptr here, if it failed to compile before.
+		if (pipeline) {
+			vulkan->Delete().QueueDeletePipeline(pipeline);
+		}
+		this->pipeline[i] = nullptr;
 	}
+	sampleCount_ = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
+}
+
+void VKRGraphicsPipeline::QueueForDeletion(VulkanContext *vulkan) {
+	DestroyVariants(vulkan, false);
 	vulkan->Delete().QueueCallback([](void *p) {
 		VKRGraphicsPipeline *pipeline = (VKRGraphicsPipeline *)p;
 		delete pipeline;
@@ -116,12 +161,22 @@ void VKRGraphicsPipeline::QueueForDeletion(VulkanContext *vulkan) {
 
 u32 VKRGraphicsPipeline::GetVariantsBitmask() const {
 	u32 bitmask = 0;
-	for (int i = 0; i < RP_TYPE_COUNT; i++) {
+	for (size_t i = 0; i < (size_t)RenderPassType::TYPE_COUNT; i++) {
 		if (pipeline[i]) {
 			bitmask |= 1 << i;
 		}
 	}
 	return bitmask;
+}
+
+void VKRGraphicsPipeline::LogCreationFailure() const {
+	ERROR_LOG(G3D, "vs: %s\n[END VS]", desc->vertexShaderSource.c_str());
+	ERROR_LOG(G3D, "fs: %s\n[END FS]", desc->fragmentShaderSource.c_str());
+	if (desc->geometryShader) {
+		ERROR_LOG(G3D, "gs: %s\n[END GS]", desc->geometryShaderSource.c_str());
+	}
+	// TODO: Maybe log various other state?
+	ERROR_LOG(G3D, "======== END OF PIPELINE ==========");
 }
 
 bool VKRComputePipeline::Create(VulkanContext *vulkan) {
@@ -146,193 +201,21 @@ bool VKRComputePipeline::Create(VulkanContext *vulkan) {
 	return success;
 }
 
-VKRFramebuffer::VKRFramebuffer(VulkanContext *vk, VkCommandBuffer initCmd, VKRRenderPass *compatibleRenderPass, int _width, int _height, const char *tag) : vulkan_(vk), tag_(tag) {
-	width = _width;
-	height = _height;
-
-	CreateImage(vulkan_, initCmd, color, width, height, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, true, tag);
-	CreateImage(vulkan_, initCmd, depth, width, height, vulkan_->GetDeviceInfo().preferredDepthStencilFormat, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, false, tag);
-
-	// We create the actual framebuffer objects on demand, because some combinations might not make sense.
-}
-
-VkFramebuffer VKRFramebuffer::Get(VKRRenderPass *compatibleRenderPass, RenderPassType renderPassType) {
-	if (framebuf[(int)renderPassType]) {
-		return framebuf[(int)renderPassType];
-	}
-
-	VkFramebufferCreateInfo fbci{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-	VkImageView views[2]{};
-
-	fbci.renderPass = compatibleRenderPass->Get(vulkan_, renderPassType);
-	fbci.attachmentCount = 2;
-	fbci.pAttachments = views;
-	views[0] = color.imageView;
-	views[1] = depth.imageView;
-	fbci.width = width;
-	fbci.height = height;
-	fbci.layers = 1;
-
-	VkResult res = vkCreateFramebuffer(vulkan_->GetDevice(), &fbci, nullptr, &framebuf[(int)renderPassType]);
-	_assert_(res == VK_SUCCESS);
-
-	if (!tag_.empty() && vulkan_->Extensions().EXT_debug_utils) {
-		vulkan_->SetDebugName(color.image, VK_OBJECT_TYPE_IMAGE, StringFromFormat("fb_color_%s", tag_.c_str()).c_str());
-		vulkan_->SetDebugName(depth.image, VK_OBJECT_TYPE_IMAGE, StringFromFormat("fb_depth_%s", tag_.c_str()).c_str());
-		vulkan_->SetDebugName(framebuf[(int)renderPassType], VK_OBJECT_TYPE_FRAMEBUFFER, StringFromFormat("fb_%s", tag_.c_str()).c_str());
-	}
-
-	return framebuf[(int)renderPassType];
-}
-
-VKRFramebuffer::~VKRFramebuffer() {
-	if (color.imageView)
-		vulkan_->Delete().QueueDeleteImageView(color.imageView);
-	if (depth.imageView)
-		vulkan_->Delete().QueueDeleteImageView(depth.imageView);
-	if (color.image) {
-		_dbg_assert_(color.alloc);
-		vulkan_->Delete().QueueDeleteImageAllocation(color.image, color.alloc);
-	}
-	if (depth.image) {
-		_dbg_assert_(depth.alloc);
-		vulkan_->Delete().QueueDeleteImageAllocation(depth.image, depth.alloc);
-	}
-	if (depth.depthSampleView)
-		vulkan_->Delete().QueueDeleteImageView(depth.depthSampleView);
-	for (auto &fb : framebuf) {
-		if (fb)
-			vulkan_->Delete().QueueDeleteFramebuffer(fb);
-	}
-}
-
-void CreateImage(VulkanContext *vulkan, VkCommandBuffer cmd, VKRImage &img, int width, int height, VkFormat format, VkImageLayout initialLayout, bool color, const char *tag) {
-	VkImageCreateInfo ici{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-	ici.arrayLayers = 1;
-	ici.mipLevels = 1;
-	ici.extent.width = width;
-	ici.extent.height = height;
-	ici.extent.depth = 1;
-	ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	ici.imageType = VK_IMAGE_TYPE_2D;
-	ici.samples = VK_SAMPLE_COUNT_1_BIT;
-	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-	ici.format = format;
-	// Strictly speaking we don't yet need VK_IMAGE_USAGE_SAMPLED_BIT for depth buffers since we do not yet sample depth buffers.
-	ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-	if (color) {
-		ici.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-	} else {
-		ici.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-	}
-
-	VmaAllocationCreateInfo allocCreateInfo{};
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	VmaAllocationInfo allocInfo{};
-
-	VkResult res = vmaCreateImage(vulkan->Allocator(), &ici, &allocCreateInfo, &img.image, &img.alloc, &allocInfo);
-	_dbg_assert_(res == VK_SUCCESS);
-
-	VkImageAspectFlags aspects = color ? VK_IMAGE_ASPECT_COLOR_BIT : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
-
-	VkImageViewCreateInfo ivci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-	ivci.components = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
-	ivci.format = ici.format;
-	ivci.image = img.image;
-	ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-	ivci.subresourceRange.aspectMask = aspects;
-	ivci.subresourceRange.layerCount = 1;
-	ivci.subresourceRange.levelCount = 1;
-	res = vkCreateImageView(vulkan->GetDevice(), &ivci, nullptr, &img.imageView);
-	_dbg_assert_(res == VK_SUCCESS);
-
-	// Separate view for texture sampling that only exposes depth.
-	if (!color) {
-		ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-		res = vkCreateImageView(vulkan->GetDevice(), &ivci, nullptr, &img.depthSampleView);
-		_dbg_assert_(res == VK_SUCCESS);
-	} else {
-		img.depthSampleView = VK_NULL_HANDLE;
-	}
-
-	VkPipelineStageFlags dstStage;
-	VkAccessFlagBits dstAccessMask;
-	switch (initialLayout) {
-	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-		dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		break;
-	case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-		dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-		break;
-	case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-		dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		dstStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-		break;
-	default:
-		Crash();
-		return;
-	}
-
-	TransitionImageLayout2(cmd, img.image, 0, 1, aspects,
-		VK_IMAGE_LAYOUT_UNDEFINED, initialLayout,
-		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dstStage,
-		0, dstAccessMask);
-	img.layout = initialLayout;
-
-	img.format = format;
-	img.tag = tag ? tag : "N/A";
-}
-
-VulkanRenderManager::VulkanRenderManager(VulkanContext *vulkan) : vulkan_(vulkan), queueRunner_(vulkan) {
-	VkSemaphoreCreateInfo semaphoreCreateInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-	semaphoreCreateInfo.flags = 0;
-	VkResult res = vkCreateSemaphore(vulkan_->GetDevice(), &semaphoreCreateInfo, nullptr, &acquireSemaphore_);
-	_dbg_assert_(res == VK_SUCCESS);
-	res = vkCreateSemaphore(vulkan_->GetDevice(), &semaphoreCreateInfo, nullptr, &renderingCompleteSemaphore_);
-	_dbg_assert_(res == VK_SUCCESS);
-
+VulkanRenderManager::VulkanRenderManager(VulkanContext *vulkan)
+	: vulkan_(vulkan), queueRunner_(vulkan),
+	initTimeMs_("initTimeMs"),
+	totalGPUTimeMs_("totalGPUTimeMs"),
+	renderCPUTimeMs_("renderCPUTimeMs")
+{
 	inflightFramesAtStart_ = vulkan_->GetInflightFrames();
+
+	frameDataShared_.Init(vulkan);
+
 	for (int i = 0; i < inflightFramesAtStart_; i++) {
-		VkCommandPoolCreateInfo cmd_pool_info = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
-		cmd_pool_info.queueFamilyIndex = vulkan_->GetGraphicsQueueFamilyIndex();
-		cmd_pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-		VkResult res = vkCreateCommandPool(vulkan_->GetDevice(), &cmd_pool_info, nullptr, &frameData_[i].cmdPoolInit);
-		_dbg_assert_(res == VK_SUCCESS);
-		res = vkCreateCommandPool(vulkan_->GetDevice(), &cmd_pool_info, nullptr, &frameData_[i].cmdPoolMain);
-		_dbg_assert_(res == VK_SUCCESS);
-
-		VkCommandBufferAllocateInfo cmd_alloc = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-		cmd_alloc.commandPool = frameData_[i].cmdPoolInit;
-		cmd_alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		cmd_alloc.commandBufferCount = 1;
-
-		res = vkAllocateCommandBuffers(vulkan_->GetDevice(), &cmd_alloc, &frameData_[i].initCmd);
-		_dbg_assert_(res == VK_SUCCESS);
-		cmd_alloc.commandPool = frameData_[i].cmdPoolMain;
-		res = vkAllocateCommandBuffers(vulkan_->GetDevice(), &cmd_alloc, &frameData_[i].mainCmd);
-		_dbg_assert_(res == VK_SUCCESS);
-
-		// Creating the frame fence with true so they can be instantly waited on the first frame
-		frameData_[i].fence = vulkan_->CreateFence(true);
-
-		// This fence one is used for synchronizing readbacks. Does not need preinitialization.
-		frameData_[i].readbackFence = vulkan_->CreateFence(false);
-
-		VkQueryPoolCreateInfo query_ci{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
-		query_ci.queryCount = MAX_TIMESTAMP_QUERIES;
-		query_ci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-		res = vkCreateQueryPool(vulkan_->GetDevice(), &query_ci, nullptr, &frameData_[i].profile.queryPool);
+		frameData_[i].Init(vulkan, i);
 	}
 
 	queueRunner_.CreateDeviceObjects();
-
-	// AMD hack for issue #10097 (older drivers only.)
-	const auto &props = vulkan_->GetPhysicalDeviceProperties().properties;
-	if (props.vendorID == VULKAN_VENDOR_AMD && props.apiVersion < VK_API_VERSION_1_1) {
-		useThread_ = false;
-	}
 }
 
 bool VulkanRenderManager::CreateBackbuffers() {
@@ -340,52 +223,14 @@ bool VulkanRenderManager::CreateBackbuffers() {
 		ERROR_LOG(G3D, "No swapchain - can't create backbuffers");
 		return false;
 	}
-	VkResult res = vkGetSwapchainImagesKHR(vulkan_->GetDevice(), vulkan_->GetSwapchain(), &swapchainImageCount_, nullptr);
-	_dbg_assert_(res == VK_SUCCESS);
 
-	VkImage *swapchainImages = new VkImage[swapchainImageCount_];
-	res = vkGetSwapchainImagesKHR(vulkan_->GetDevice(), vulkan_->GetSwapchain(), &swapchainImageCount_, swapchainImages);
-	if (res != VK_SUCCESS) {
-		ERROR_LOG(G3D, "vkGetSwapchainImagesKHR failed");
-		delete[] swapchainImages;
-		return false;
-	}
 
 	VkCommandBuffer cmdInit = GetInitCmd();
 
-	for (uint32_t i = 0; i < swapchainImageCount_; i++) {
-		SwapchainImageData sc_buffer{};
-		sc_buffer.image = swapchainImages[i];
-
-		VkImageViewCreateInfo color_image_view = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-		color_image_view.format = vulkan_->GetSwapchainFormat();
-		color_image_view.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-		color_image_view.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-		color_image_view.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-		color_image_view.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-		color_image_view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		color_image_view.subresourceRange.baseMipLevel = 0;
-		color_image_view.subresourceRange.levelCount = 1;
-		color_image_view.subresourceRange.baseArrayLayer = 0;
-		color_image_view.subresourceRange.layerCount = 1;
-		color_image_view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		color_image_view.flags = 0;
-		color_image_view.image = sc_buffer.image;
-
-		// We leave the images as UNDEFINED, there's no need to pre-transition them as
-		// the backbuffer renderpass starts out with them being auto-transitioned from UNDEFINED anyway.
-		// Also, turns out it's illegal to transition un-acquired images, thanks Hans-Kristian. See #11417.
-
-		res = vkCreateImageView(vulkan_->GetDevice(), &color_image_view, nullptr, &sc_buffer.view);
-		swapchainImages_.push_back(sc_buffer);
-		_dbg_assert_(res == VK_SUCCESS);
+	if (!queueRunner_.CreateSwapchain(cmdInit)) {
+		return false;
 	}
-	delete[] swapchainImages;
 
-	// Must be before InitBackbufferRenderPass.
-	if (InitDepthStencilBuffer(cmdInit)) {
-		InitBackbufferFramebuffers(vulkan_->GetBackbufferWidth(), vulkan_->GetBackbufferHeight());
-	}
 	curWidthRaw_ = -1;
 	curHeightRaw_ = -1;
 
@@ -402,11 +247,10 @@ bool VulkanRenderManager::CreateBackbuffers() {
 	outOfDateFrames_ = 0;
 
 	// Start the thread.
-	if (useThread_ && HasBackbuffers()) {
-		run_ = true;
-		// Won't necessarily be 0.
-		threadInitFrame_ = vulkan_->GetCurFrame();
-		INFO_LOG(G3D, "Starting Vulkan submission thread (threadInitFrame_ = %d)", vulkan_->GetCurFrame());
+	if (HasBackbuffers()) {
+		run_ = true;  // For controlling the compiler thread's exit
+
+		INFO_LOG(G3D, "Starting Vulkan submission thread");
 		thread_ = std::thread(&VulkanRenderManager::ThreadFunc, this);
 		INFO_LOG(G3D, "Starting Vulkan compiler thread");
 		compileThread_ = std::thread(&VulkanRenderManager::CompileThreadFunc, this);
@@ -414,58 +258,58 @@ bool VulkanRenderManager::CreateBackbuffers() {
 	return true;
 }
 
+// Called from main thread.
 void VulkanRenderManager::StopThread() {
-	if (useThread_ && run_) {
-		run_ = false;
-		// Stop the thread.
-		for (int i = 0; i < vulkan_->GetInflightFrames(); i++) {
-			auto &frameData = frameData_[i];
-			{
-				std::unique_lock<std::mutex> lock(frameData.push_mutex);
-				frameData.push_condVar.notify_all();
-			}
-			{
-				std::unique_lock<std::mutex> lock(frameData.pull_mutex);
-				frameData.pull_condVar.notify_all();
-			}
-			// Zero the queries so we don't try to pull them later.
-			frameData.profile.timestampDescriptions.clear();
+	{
+		// Tell the render thread to quit when it's done.
+		VKRRenderThreadTask task;
+		task.frame = vulkan_->GetCurFrame();
+		task.runType = VKRRunType::EXIT;
+		std::unique_lock<std::mutex> lock(pushMutex_);
+		renderThreadQueue_.push(task);
+		pushCondVar_.notify_one();
+	}
+
+	// Compiler thread still relies on this.
+	run_ = false;
+
+	// Stop the thread.
+	thread_.join();
+
+	for (int i = 0; i < vulkan_->GetInflightFrames(); i++) {
+		auto &frameData = frameData_[i];
+		// Zero the queries so we don't try to pull them later.
+		frameData.profile.timestampDescriptions.clear();
+	}
+
+	INFO_LOG(G3D, "Vulkan submission thread joined. Frame=%d", vulkan_->GetCurFrame());
+
+	compileCond_.notify_all();
+	compileThread_.join();
+	INFO_LOG(G3D, "Vulkan compiler thread joined.");
+
+	// Eat whatever has been queued up for this frame if anything.
+	Wipe();
+
+	// Clean out any remaining queued data, which might refer to things that might not be valid
+	// when we restart the thread...
+
+	// Not sure if this is still needed
+	for (int i = 0; i < vulkan_->GetInflightFrames(); i++) {
+		auto &frameData = frameData_[i];
+		if (frameData.hasInitCommands) {
+			// Clear 'em out.  This can happen on restart sometimes.
+			vkEndCommandBuffer(frameData.initCmd);
+			frameData.hasInitCommands = false;
 		}
-		thread_.join();
-		INFO_LOG(G3D, "Vulkan submission thread joined. Frame=%d", vulkan_->GetCurFrame());
-		compileCond_.notify_all();
-		compileThread_.join();
-		INFO_LOG(G3D, "Vulkan compiler thread joined.");
-
-		// Eat whatever has been queued up for this frame if anything.
-		Wipe();
-
-		// Wait for any fences to finish and be resignaled, so we don't have sync issues.
-		// Also clean out any queued data, which might refer to things that might not be valid
-		// when we restart...
-		for (int i = 0; i < vulkan_->GetInflightFrames(); i++) {
-			auto &frameData = frameData_[i];
-			_assert_(!frameData.readyForRun);
-			_assert_(frameData.steps.empty());
-			if (frameData.hasInitCommands) {
-				// Clear 'em out.  This can happen on restart sometimes.
-				vkEndCommandBuffer(frameData.initCmd);
-				frameData.hasInitCommands = false;
-			}
-			frameData.readyForRun = false;
-			for (size_t i = 0; i < frameData.steps.size(); i++) {
-				delete frameData.steps[i];
-			}
-			frameData.steps.clear();
-
-			std::unique_lock<std::mutex> lock(frameData.push_mutex);
-			while (!frameData.readyForFence) {
-				VLOG("PUSH: Waiting for frame[%d].readyForFence = 1 (stop)", i);
-				frameData.push_condVar.wait(lock);
-			}
+		if (frameData.hasMainCommands) {
+			vkEndCommandBuffer(frameData.mainCmd);
+			frameData.hasMainCommands = false;
 		}
-	} else {
-		INFO_LOG(G3D, "Vulkan submission thread was already stopped.");
+		if (frameData.hasPresentCommands) {
+			vkEndCommandBuffer(frameData.presentCmd);
+			frameData.hasPresentCommands = false;
+		}
 	}
 }
 
@@ -473,45 +317,21 @@ void VulkanRenderManager::DestroyBackbuffers() {
 	StopThread();
 	vulkan_->WaitUntilQueueIdle();
 
-	for (auto &image : swapchainImages_) {
-		vulkan_->Delete().QueueDeleteImageView(image.view);
-	}
-	swapchainImages_.clear();
-
-	if (depth_.view) {
-		vulkan_->Delete().QueueDeleteImageView(depth_.view);
-	}
-	if (depth_.image) {
-		_dbg_assert_(depth_.alloc);
-		vulkan_->Delete().QueueDeleteImageAllocation(depth_.image, depth_.alloc);
-	}
-	depth_ = {};
-	for (uint32_t i = 0; i < framebuffers_.size(); i++) {
-		_dbg_assert_(framebuffers_[i] != VK_NULL_HANDLE);
-		vulkan_->Delete().QueueDeleteFramebuffer(framebuffers_[i]);
-	}
-	framebuffers_.clear();
-
-	INFO_LOG(G3D, "Backbuffers destroyed");
+	queueRunner_.DestroyBackBuffers();
 }
 
 VulkanRenderManager::~VulkanRenderManager() {
 	INFO_LOG(G3D, "VulkanRenderManager destructor");
-	StopThread();
+
+	_dbg_assert_(!run_);  // StopThread should already have been called from DestroyBackbuffers.
+
 	vulkan_->WaitUntilQueueIdle();
 
 	DrainCompileQueue();
 	VkDevice device = vulkan_->GetDevice();
-	vkDestroySemaphore(device, acquireSemaphore_, nullptr);
-	vkDestroySemaphore(device, renderingCompleteSemaphore_, nullptr);
+	frameDataShared_.Destroy(vulkan_);
 	for (int i = 0; i < inflightFramesAtStart_; i++) {
-		vkFreeCommandBuffers(device, frameData_[i].cmdPoolInit, 1, &frameData_[i].initCmd);
-		vkFreeCommandBuffers(device, frameData_[i].cmdPoolMain, 1, &frameData_[i].mainCmd);
-		vkDestroyCommandPool(device, frameData_[i].cmdPoolInit, nullptr);
-		vkDestroyCommandPool(device, frameData_[i].cmdPoolMain, nullptr);
-		vkDestroyFence(device, frameData_[i].fence, nullptr);
-		vkDestroyFence(device, frameData_[i].readbackFence, nullptr);
-		vkDestroyQueryPool(device, frameData_[i].profile.queryPool, nullptr);
+		frameData_[i].Destroy(vulkan_);
 	}
 	queueRunner_.DestroyDeviceObjects();
 }
@@ -532,7 +352,9 @@ void VulkanRenderManager::CompileThreadFunc() {
 			break;
 		}
 
-		INFO_LOG(G3D, "Compilation thread has %d pipelines to create", (int)toCompile.size());
+		if (!toCompile.empty()) {
+			INFO_LOG(G3D, "Compilation thread has %d pipelines to create", (int)toCompile.size());
+		}
 
 		// TODO: Here we can sort the pending pipelines by vertex and fragment shaders,
 		// and split up further.
@@ -540,7 +362,7 @@ void VulkanRenderManager::CompileThreadFunc() {
 		for (auto &entry : toCompile) {
 			switch (entry.type) {
 			case CompileQueueEntry::Type::GRAPHICS:
-				entry.graphics->Create(vulkan_, entry.compatibleRenderPass, entry.renderPassType);
+				entry.graphics->Create(vulkan_, entry.compatibleRenderPass, entry.renderPassType, entry.sampleCount);
 				break;
 			case CompileQueueEntry::Type::COMPUTE:
 				entry.compute->Create(vulkan_);
@@ -561,45 +383,30 @@ void VulkanRenderManager::DrainCompileQueue() {
 
 void VulkanRenderManager::ThreadFunc() {
 	SetCurrentThreadName("RenderMan");
-	int threadFrame = threadInitFrame_;
-	bool nextFrame = false;
-	bool firstFrame = true;
 	while (true) {
+		// Pop a task of the queue and execute it.
+		VKRRenderThreadTask task;
 		{
-			if (nextFrame) {
-				threadFrame++;
-				if (threadFrame >= vulkan_->GetInflightFrames())
-					threadFrame = 0;
+			std::unique_lock<std::mutex> lock(pushMutex_);
+			while (renderThreadQueue_.empty()) {
+				pushCondVar_.wait(lock);
 			}
-			FrameData &frameData = frameData_[threadFrame];
-			std::unique_lock<std::mutex> lock(frameData.pull_mutex);
-			while (!frameData.readyForRun && run_) {
-				VLOG("PULL: Waiting for frame[%d].readyForRun", threadFrame);
-				frameData.pull_condVar.wait(lock);
-			}
-			if (!frameData.readyForRun && !run_) {
-				// This means we're out of frames to render and run_ is false, so bail.
-				break;
-			}
-			VLOG("PULL: frame[%d].readyForRun = false", threadFrame);
-			frameData.readyForRun = false;
-			// Previously we had a quick exit here that avoided calling Run() if run_ was suddenly false,
-			// but that created a race condition where frames could end up not finished properly on resize etc.
+			task = renderThreadQueue_.front();
+			renderThreadQueue_.pop();
+		}
 
-			// Only increment next time if we're done.
-			nextFrame = frameData.type == VKRRunType::END;
-			_dbg_assert_(frameData.type == VKRRunType::END || frameData.type == VKRRunType::SYNC);
+		// Oh, we got a task! We can now have pushMutex_ unlocked, allowing the host to
+		// push more work when it feels like it, and just start working.
+		if (task.runType == VKRRunType::EXIT) {
+			// Oh, host wanted out. Let's leave.
+			break;
 		}
-		VLOG("PULL: Running frame %d", threadFrame);
-		if (firstFrame) {
-			INFO_LOG(G3D, "Running first frame (%d)", threadFrame);
-			firstFrame = false;
-		}
-		Run(threadFrame);
-		VLOG("PULL: Finished frame %d", threadFrame);
+
+		Run(task);
 	}
 
 	// Wait for the device to be done with everything, before tearing stuff down.
+	// TODO: Do we need this?
 	vkDeviceWaitIdle(vulkan_->GetDevice());
 
 	VLOG("PULL: Quitting");
@@ -612,18 +419,20 @@ void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfile
 	int curFrame = vulkan_->GetCurFrame();
 	FrameData &frameData = frameData_[curFrame];
 
-	// Make sure the very last command buffer from the frame before the previous has been fully executed.
-	if (useThread_) {
-		std::unique_lock<std::mutex> lock(frameData.push_mutex);
+	VLOG("PUSH: Fencing %d", curFrame);
+
+	// Makes sure the submission from the previous time around has happened. Otherwise
+	// we are not allowed to wait from another thread here..
+	{
+		std::unique_lock<std::mutex> lock(frameData.fenceMutex);
 		while (!frameData.readyForFence) {
-			VLOG("PUSH: Waiting for frame[%d].readyForFence = 1", curFrame);
-			frameData.push_condVar.wait(lock);
+			frameData.fenceCondVar.wait(lock);
 		}
 		frameData.readyForFence = false;
 	}
 
-	VLOG("PUSH: Fencing %d", curFrame);
-
+	// This must be the very first Vulkan call we do in a new frame.
+	// Makes sure the very last command buffer from the frame before the previous has been fully executed.
 	if (vkWaitForFences(device, 1, &frameData.fence, true, UINT64_MAX) == VK_ERROR_DEVICE_LOST) {
 		_assert_msg_(false, "Device lost in vkWaitForFences");
 	}
@@ -631,7 +440,6 @@ void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfile
 
 	// Can't set this until after the fence.
 	frameData.profilingEnabled_ = enableProfiling;
-	frameData.readbackFenceUsed = false;
 
 	uint64_t queryResults[MAX_TIMESTAMP_QUERIES];
 
@@ -650,14 +458,25 @@ void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfile
 				std::stringstream str;
 
 				char line[256];
-				snprintf(line, sizeof(line), "Total GPU time: %0.3f ms\n", ((double)((queryResults[numQueries - 1] - queryResults[0]) & timestampDiffMask) * timestampConversionFactor));
+				totalGPUTimeMs_.Update(((double)((queryResults[numQueries - 1] - queryResults[0]) & timestampDiffMask) * timestampConversionFactor));
+				totalGPUTimeMs_.Format(line, sizeof(line));
 				str << line;
-				snprintf(line, sizeof(line), "Render CPU time: %0.3f ms\n", (frameData.profile.cpuEndTime - frameData.profile.cpuStartTime) * 1000.0);
+				renderCPUTimeMs_.Update((frameData.profile.cpuEndTime - frameData.profile.cpuStartTime) * 1000.0);
+				renderCPUTimeMs_.Format(line, sizeof(line));
 				str << line;
 				for (int i = 0; i < numQueries - 1; i++) {
 					uint64_t diff = (queryResults[i + 1] - queryResults[i]) & timestampDiffMask;
 					double milliseconds = (double)diff * timestampConversionFactor;
-					snprintf(line, sizeof(line), "%s: %0.3f ms\n", frameData.profile.timestampDescriptions[i + 1].c_str(), milliseconds);
+
+					// Can't use SimpleStat for these very easily since these are dynamic per frame.
+					// Only the first one is static, the initCmd.
+					// Could try some hashtable tracking for the rest, later.
+					if (i == 0) {
+						initTimeMs_.Update(milliseconds);
+						initTimeMs_.Format(line, sizeof(line));
+					} else {
+						snprintf(line, sizeof(line), "%s: %0.3f ms\n", frameData.profile.timestampDescriptions[i + 1].c_str(), milliseconds);
+					}
 					str << line;
 				}
 				frameData.profile.profileSummary = str.str();
@@ -671,14 +490,9 @@ void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfile
 
 	// Must be after the fence - this performs deletes.
 	VLOG("PUSH: BeginFrame %d", curFrame);
-	if (!run_) {
-		WARN_LOG(G3D, "BeginFrame while !run_!");
-	}
-
-	vulkan_->BeginFrame(enableLogProfiler ? GetInitCmd() : VK_NULL_HANDLE);
 
 	insideFrame_ = true;
-	renderStepOffset_ = 0;
+	vulkan_->BeginFrame(enableLogProfiler ? GetInitCmd() : VK_NULL_HANDLE);
 
 	frameData.profile.timestampDescriptions.clear();
 	if (frameData.profilingEnabled_) {
@@ -689,36 +503,20 @@ void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfile
 		frameData.profile.timestampDescriptions.push_back("initCmd Begin");
 		frameData.profile.timestampDescriptions.push_back("initCmd");
 		VkCommandBuffer initCmd = GetInitCmd();
-		vkCmdResetQueryPool(initCmd, frameData.profile.queryPool, 0, MAX_TIMESTAMP_QUERIES);
-		vkCmdWriteTimestamp(initCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frameData.profile.queryPool, 0);
 	}
 }
 
 VkCommandBuffer VulkanRenderManager::GetInitCmd() {
 	int curFrame = vulkan_->GetCurFrame();
-	FrameData &frameData = frameData_[curFrame];
-	if (!frameData.hasInitCommands) {
-		VkCommandBufferBeginInfo begin = {
-			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-			nullptr,
-			VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
-		};
-		vkResetCommandPool(vulkan_->GetDevice(), frameData.cmdPoolInit, 0);
-		VkResult res = vkBeginCommandBuffer(frameData.initCmd, &begin);
-		if (res != VK_SUCCESS) {
-			return VK_NULL_HANDLE;
-		}
-		frameData.hasInitCommands = true;
-	}
-	return frameData_[curFrame].initCmd;
+	return frameData_[curFrame].GetInitCmd(vulkan_);
 }
 
-VKRGraphicsPipeline *VulkanRenderManager::CreateGraphicsPipeline(VKRGraphicsPipelineDesc *desc, uint32_t variantBitmask, const char *tag) {
-	VKRGraphicsPipeline *pipeline = new VKRGraphicsPipeline();
+VKRGraphicsPipeline *VulkanRenderManager::CreateGraphicsPipeline(VKRGraphicsPipelineDesc *desc, PipelineFlags pipelineFlags, uint32_t variantBitmask, VkSampleCountFlagBits sampleCount, const char *tag) {
+	VKRGraphicsPipeline *pipeline = new VKRGraphicsPipeline(pipelineFlags, tag);
 	_dbg_assert_(desc->vertexShader);
 	_dbg_assert_(desc->fragmentShader);
 	pipeline->desc = desc;
-	pipeline->tag = tag;
+	pipeline->desc->AddRef();
 	if (curRenderStep_) {
 		// The common case
 		pipelinesToCheck_.push_back(pipeline);
@@ -735,12 +533,27 @@ VKRGraphicsPipeline *VulkanRenderManager::CreateGraphicsPipeline(VKRGraphicsPipe
 		VKRRenderPass *compatibleRenderPass = queueRunner_.GetRenderPass(key);
 		compileMutex_.lock();
 		bool needsCompile = false;
-		for (int i = 0; i < RP_TYPE_COUNT; i++) {
+		for (size_t i = 0; i < (size_t)RenderPassType::TYPE_COUNT; i++) {
 			if (!(variantBitmask & (1 << i)))
 				continue;
 			RenderPassType rpType = (RenderPassType)i;
-			pipeline->pipeline[rpType] = Promise<VkPipeline>::CreateEmpty();
-			compileQueue_.push_back(CompileQueueEntry(pipeline, compatibleRenderPass->Get(vulkan_, rpType), rpType));
+
+			// Sanity check - don't compile incompatible types (could be caused by corrupt caches, changes in data structures, etc).
+			if (pipelineFlags & PipelineFlags::USES_DEPTH_STENCIL) {
+				if (!RenderPassTypeHasDepth(rpType)) {
+					WARN_LOG(G3D, "Not compiling pipeline that requires depth, for non depth renderpass type");
+					continue;
+				}
+			}
+			if (pipelineFlags & PipelineFlags::USES_INPUT_ATTACHMENT) {
+				if (!RenderPassTypeHasInput(rpType)) {
+					WARN_LOG(G3D, "Not compiling pipeline that requires input attachment, for non input renderpass type");
+					continue;
+				}
+			}
+
+			pipeline->pipeline[i] = Promise<VkPipeline>::CreateEmpty();
+			compileQueue_.push_back(CompileQueueEntry(pipeline, compatibleRenderPass->Get(vulkan_, rpType, sampleCount), rpType, sampleCount));
 			needsCompile = true;
 		}
 		if (needsCompile)
@@ -768,23 +581,47 @@ void VulkanRenderManager::EndCurRenderStep() {
 		curRenderStep_->render.colorLoad, curRenderStep_->render.depthLoad, curRenderStep_->render.stencilLoad,
 		curRenderStep_->render.colorStore, curRenderStep_->render.depthStore, curRenderStep_->render.stencilStore,
 	};
-	RenderPassType rpType = RP_TYPE_COLOR_DEPTH;
+	// Save the accumulated pipeline flags so we can use that to configure the render pass.
+	// We'll often be able to avoid loading/saving the depth/stencil buffer.
 	curRenderStep_->render.pipelineFlags = curPipelineFlags_;
+	bool depthStencil = (curPipelineFlags_ & PipelineFlags::USES_DEPTH_STENCIL) != 0;
+	RenderPassType rpType = depthStencil ? RenderPassType::HAS_DEPTH : RenderPassType::DEFAULT;
+
+	if (curRenderStep_->render.framebuffer && (rpType & RenderPassType::HAS_DEPTH) && !curRenderStep_->render.framebuffer->HasDepth()) {
+		WARN_LOG(G3D, "Trying to render with a depth-writing pipeline to a framebuffer without depth: %s", curRenderStep_->render.framebuffer->Tag());
+		rpType = RenderPassType::DEFAULT;
+	}
+
 	if (!curRenderStep_->render.framebuffer) {
-		rpType = RP_TYPE_BACKBUFFER;
+		rpType = RenderPassType::BACKBUFFER;
+	} else {
+		if (curPipelineFlags_ & PipelineFlags::USES_INPUT_ATTACHMENT) {
+			// Not allowed on backbuffers.
+			rpType = depthStencil ? (RenderPassType::HAS_DEPTH | RenderPassType::COLOR_INPUT) : RenderPassType::COLOR_INPUT;
+		}
+		// Framebuffers can be stereo, and if so, will control the render pass type to match.
+		// Pipelines can be mono and render fine to stereo etc, so not checking them here.
+		// Note that we don't support rendering to just one layer of a multilayer framebuffer!
+		if (curRenderStep_->render.framebuffer->numLayers > 1) {
+			rpType = (RenderPassType)(rpType | RenderPassType::MULTIVIEW);
+		}
+
+		if (curRenderStep_->render.framebuffer->sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+			rpType = (RenderPassType)(rpType | RenderPassType::MULTISAMPLE);
+		}
 	}
 
 	VKRRenderPass *renderPass = queueRunner_.GetRenderPass(key);
 	curRenderStep_->render.renderPassType = rpType;
 
-	// Save the accumulated pipeline flags so we can use that to configure the render pass.
-	// We'll often be able to avoid loading/saving the depth/stencil buffer.
+	VkSampleCountFlagBits sampleCount = curRenderStep_->render.framebuffer ? curRenderStep_->render.framebuffer->sampleCount : VK_SAMPLE_COUNT_1_BIT;
+
 	compileMutex_.lock();
 	bool needsCompile = false;
 	for (VKRGraphicsPipeline *pipeline : pipelinesToCheck_) {
-		if (!pipeline->pipeline[rpType]) {
-			pipeline->pipeline[rpType] = Promise<VkPipeline>::CreateEmpty();
-			compileQueue_.push_back(CompileQueueEntry(pipeline, renderPass->Get(vulkan_, rpType), rpType));
+		if (!pipeline->pipeline[(size_t)rpType]) {
+			pipeline->pipeline[(size_t)rpType] = Promise<VkPipeline>::CreateEmpty();
+			compileQueue_.push_back(CompileQueueEntry(pipeline, renderPass->Get(vulkan_, rpType, sampleCount), rpType, sampleCount));
 			needsCompile = true;
 		}
 	}
@@ -804,7 +641,12 @@ void VulkanRenderManager::EndCurRenderStep() {
 
 	// We no longer have a current render step.
 	curRenderStep_ = nullptr;
-	curPipelineFlags_ = 0;
+	curPipelineFlags_ = (PipelineFlags)0;
+}
+
+void VulkanRenderManager::BindCurrentFramebufferAsInputAttachment0(VkImageAspectFlags aspectBits) {
+	_dbg_assert_(curRenderStep_);
+	curRenderStep_->commands.push_back(VkRenderData{ VKRRenderCommand::SELF_DEPENDENCY_BARRIER });
 }
 
 void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRRenderPassLoadAction color, VKRRenderPassLoadAction depth, VKRRenderPassLoadAction stencil, uint32_t clearColor, float clearDepth, uint8_t clearStencil, const char *tag) {
@@ -817,9 +659,11 @@ void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRR
 		}
 		if (depth == VKRRenderPassLoadAction::CLEAR) {
 			clearMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
+			curPipelineFlags_ |= PipelineFlags::USES_DEPTH_STENCIL;
 		}
 		if (stencil == VKRRenderPassLoadAction::CLEAR) {
 			clearMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+			curPipelineFlags_ |= PipelineFlags::USES_DEPTH_STENCIL;
 		}
 
 		// If we need a clear and the previous step has commands already, it's best to just add a clear and keep going.
@@ -942,6 +786,10 @@ void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRR
 		data.clear.clearMask = lateClearMask;
 		curRenderStep_->commands.push_back(data);
 	}
+
+	if (invalidationCallback_) {
+		invalidationCallback_(InvalidationCallbackFlags::RENDER_PASS_STATE);
+	}
 }
 
 bool VulkanRenderManager::CopyFramebufferToMemorySync(VKRFramebuffer *src, VkImageAspectFlags aspectBits, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, const char *tag) {
@@ -1026,98 +874,6 @@ void VulkanRenderManager::CopyImageToMemorySync(VkImage image, int mipLevel, int
 	queueRunner_.CopyReadbackBuffer(w, h, destFormat, destFormat, pixelStride, pixels);
 }
 
-bool VulkanRenderManager::InitBackbufferFramebuffers(int width, int height) {
-	VkResult res;
-	// We share the same depth buffer but have multiple color buffers, see the loop below.
-	VkImageView attachments[2] = { VK_NULL_HANDLE, depth_.view };
-
-	VkFramebufferCreateInfo fb_info = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-	fb_info.renderPass = queueRunner_.GetCompatibleRenderPass()->Get(vulkan_, RP_TYPE_BACKBUFFER);
-	fb_info.attachmentCount = 2;
-	fb_info.pAttachments = attachments;
-	fb_info.width = width;
-	fb_info.height = height;
-	fb_info.layers = 1;
-
-	framebuffers_.resize(swapchainImageCount_);
-
-	for (uint32_t i = 0; i < swapchainImageCount_; i++) {
-		attachments[0] = swapchainImages_[i].view;
-		res = vkCreateFramebuffer(vulkan_->GetDevice(), &fb_info, nullptr, &framebuffers_[i]);
-		_dbg_assert_(res == VK_SUCCESS);
-		if (res != VK_SUCCESS) {
-			framebuffers_.clear();
-			return false;
-		}
-	}
-
-	return true;
-}
-
-bool VulkanRenderManager::InitDepthStencilBuffer(VkCommandBuffer cmd) {
-	const VkFormat depth_format = vulkan_->GetDeviceInfo().preferredDepthStencilFormat;
-	int aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-	VkImageCreateInfo image_info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-	image_info.imageType = VK_IMAGE_TYPE_2D;
-	image_info.format = depth_format;
-	image_info.extent.width = vulkan_->GetBackbufferWidth();
-	image_info.extent.height = vulkan_->GetBackbufferHeight();
-	image_info.extent.depth = 1;
-	image_info.mipLevels = 1;
-	image_info.arrayLayers = 1;
-	image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-	image_info.queueFamilyIndexCount = 0;
-	image_info.pQueueFamilyIndices = nullptr;
-	image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-	image_info.flags = 0;
-
-	depth_.format = depth_format;
-
-	VmaAllocationCreateInfo allocCreateInfo{};
-	VmaAllocationInfo allocInfo{};
-
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-	VkResult res = vmaCreateImage(vulkan_->Allocator(), &image_info, &allocCreateInfo, &depth_.image, &depth_.alloc, &allocInfo);
-	_dbg_assert_(res == VK_SUCCESS);
-	if (res != VK_SUCCESS)
-		return false;
-
-	vulkan_->SetDebugName(depth_.image, VK_OBJECT_TYPE_IMAGE, "BackbufferDepth");
-
-	TransitionImageLayout2(cmd, depth_.image, 0, 1,
-		aspectMask,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-		0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
-	VkImageViewCreateInfo depth_view_info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-	depth_view_info.image = depth_.image;
-	depth_view_info.format = depth_format;
-	depth_view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-	depth_view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-	depth_view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-	depth_view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-	depth_view_info.subresourceRange.aspectMask = aspectMask;
-	depth_view_info.subresourceRange.baseMipLevel = 0;
-	depth_view_info.subresourceRange.levelCount = 1;
-	depth_view_info.subresourceRange.baseArrayLayer = 0;
-	depth_view_info.subresourceRange.layerCount = 1;
-	depth_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-	depth_view_info.flags = 0;
-
-	VkDevice device = vulkan_->GetDevice();
-
-	res = vkCreateImageView(device, &depth_view_info, NULL, &depth_.view);
-	_dbg_assert_(res == VK_SUCCESS);
-	if (res != VK_SUCCESS)
-		return false;
-
-	return true;
-}
-
 static void RemoveDrawCommands(std::vector<VkRenderData> *cmds) {
 	// Here we remove any DRAW type commands when we hit a CLEAR.
 	for (auto &c : *cmds) {
@@ -1182,6 +938,7 @@ void VulkanRenderManager::Clear(uint32_t clearColor, float clearZ, int clearSten
 	_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
 	if (!clearMask)
 		return;
+
 	// If this is the first drawing command or clears everything, merge it into the pass.
 	int allAspects = VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
 	if (curRenderStep_->render.numDraws == 0 || clearMask == allAspects) {
@@ -1191,6 +948,14 @@ void VulkanRenderManager::Clear(uint32_t clearColor, float clearZ, int clearSten
 		curRenderStep_->render.colorLoad = (clearMask & VK_IMAGE_ASPECT_COLOR_BIT) ? VKRRenderPassLoadAction::CLEAR : VKRRenderPassLoadAction::KEEP;
 		curRenderStep_->render.depthLoad = (clearMask & VK_IMAGE_ASPECT_DEPTH_BIT) ? VKRRenderPassLoadAction::CLEAR : VKRRenderPassLoadAction::KEEP;
 		curRenderStep_->render.stencilLoad = (clearMask & VK_IMAGE_ASPECT_STENCIL_BIT) ? VKRRenderPassLoadAction::CLEAR : VKRRenderPassLoadAction::KEEP;
+
+		if (clearMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+			if (curRenderStep_->render.framebuffer && !curRenderStep_->render.framebuffer->HasDepth()) {
+				WARN_LOG(G3D, "Trying to clear depth/stencil on a non-depth framebuffer: %s", curRenderStep_->render.framebuffer->Tag());
+			} else {
+				curPipelineFlags_ |= PipelineFlags::USES_DEPTH_STENCIL;
+			}
+		}
 
 		// In case there were commands already.
 		curRenderStep_->render.numDraws = 0;
@@ -1268,7 +1033,6 @@ void VulkanRenderManager::CopyFramebuffer(VKRFramebuffer *src, VkRect2D srcRect,
 	if (dstPos.x != 0 || dstPos.y != 0 || !fillsDst)
 		step->dependencies.insert(dst);
 
-	std::unique_lock<std::mutex> lock(mutex_);
 	steps_.push_back(step);
 }
 
@@ -1314,12 +1078,15 @@ void VulkanRenderManager::BlitFramebuffer(VKRFramebuffer *src, VkRect2D srcRect,
 	if (!fillsDst)
 		step->dependencies.insert(dst);
 
-	std::unique_lock<std::mutex> lock(mutex_);
 	steps_.push_back(step);
 }
 
-VkImageView VulkanRenderManager::BindFramebufferAsTexture(VKRFramebuffer *fb, int binding, VkImageAspectFlags aspectBit, int attachment) {
+VkImageView VulkanRenderManager::BindFramebufferAsTexture(VKRFramebuffer *fb, int binding, VkImageAspectFlags aspectBit, int layer) {
 	_dbg_assert_(curRenderStep_ != nullptr);
+
+	// We don't support texturing from stencil, neither do we support texturing from depth|stencil together (nonsensical).
+	_dbg_assert_(aspectBit == VK_IMAGE_ASPECT_COLOR_BIT || aspectBit == VK_IMAGE_ASPECT_DEPTH_BIT);
+
 	// Mark the dependency, check for required transitions, and return the image.
 
 	// Optimization: If possible, use final*Layout to put the texture into the correct layout "early".
@@ -1346,17 +1113,20 @@ VkImageView VulkanRenderManager::BindFramebufferAsTexture(VKRFramebuffer *fb, in
 	// Track dependencies fully.
 	curRenderStep_->dependencies.insert(fb);
 
-	if (!curRenderStep_->preTransitions.empty() &&
-		curRenderStep_->preTransitions.back().fb == fb &&
-		curRenderStep_->preTransitions.back().targetLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-		// We're done.
-		return aspectBit == VK_IMAGE_ASPECT_COLOR_BIT ? fb->color.imageView : fb->depth.depthSampleView;
+	// Add this pretransition unless we already have it.
+	TransitionRequest rq{ fb, aspectBit, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	curRenderStep_->preTransitions.insert(rq);  // Note that insert avoids inserting duplicates.
+
+	if (layer == -1) {
+		return aspectBit == VK_IMAGE_ASPECT_COLOR_BIT ? fb->color.texAllLayersView : fb->depth.texAllLayersView;
 	} else {
-		curRenderStep_->preTransitions.push_back({ fb, aspectBit, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
-		return aspectBit == VK_IMAGE_ASPECT_COLOR_BIT ? fb->color.imageView : fb->depth.depthSampleView;
+		return aspectBit == VK_IMAGE_ASPECT_COLOR_BIT ? fb->color.texLayerViews[layer] : fb->depth.texLayerViews[layer];
 	}
 }
 
+// Called on main thread.
+// Sends the collected commands to the render thread. Submit-latency should be
+// measured from here, probably.
 void VulkanRenderManager::Finish() {
 	EndCurRenderStep();
 
@@ -1369,22 +1139,20 @@ void VulkanRenderManager::Finish() {
 
 	int curFrame = vulkan_->GetCurFrame();
 	FrameData &frameData = frameData_[curFrame];
-	if (!useThread_) {
-		frameData.steps = std::move(steps_);
-		steps_.clear();
-		frameData.type = VKRRunType::END;
-		Run(curFrame);
-	} else {
-		std::unique_lock<std::mutex> lock(frameData.pull_mutex);
-		VLOG("PUSH: Frame[%d].readyForRun = true", curFrame);
-		frameData.steps = std::move(steps_);
-		steps_.clear();
-		frameData.readyForRun = true;
-		frameData.type = VKRRunType::END;
-		frameData.pull_condVar.notify_all();
-	}
-	vulkan_->EndFrame();
 
+	{
+		VLOG("PUSH: Frame[%d]", curFrame);
+		VKRRenderThreadTask task;
+		task.frame = curFrame;
+		task.runType = VKRRunType::PRESENT;
+		std::unique_lock<std::mutex> lock(pushMutex_);
+		renderThreadQueue_.push(task);
+		renderThreadQueue_.back().steps = std::move(steps_);
+		pushCondVar_.notify_one();
+	}
+
+	steps_.clear();
+	vulkan_->EndFrame();
 	insideFrame_ = false;
 }
 
@@ -1395,223 +1163,122 @@ void VulkanRenderManager::Wipe() {
 	steps_.clear();
 }
 
-// Can be called multiple times with no bad side effects. This is so that we can either begin a frame the normal way,
-// or stop it in the middle for a synchronous readback, then start over again mostly normally but without repeating
-// the backbuffer image acquisition.
-void VulkanRenderManager::BeginSubmitFrame(int frame) {
-	FrameData &frameData = frameData_[frame];
-	if (!frameData.hasBegun) {
-		// Get the index of the next available swapchain image, and a semaphore to block command buffer execution on.
-		VkResult res = vkAcquireNextImageKHR(vulkan_->GetDevice(), vulkan_->GetSwapchain(), UINT64_MAX, acquireSemaphore_, (VkFence)VK_NULL_HANDLE, &frameData.curSwapchainImage);
-		if (res == VK_SUBOPTIMAL_KHR) {
-			// Hopefully the resize will happen shortly. Ignore - one frame might look bad or something.
-			WARN_LOG(G3D, "VK_SUBOPTIMAL_KHR returned - ignoring");
-		} else if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-			WARN_LOG(G3D, "VK_ERROR_OUT_OF_DATE_KHR returned - processing the frame, but not presenting");
-			frameData.skipSwap = true;
-		} else {
-			_assert_msg_(res == VK_SUCCESS, "vkAcquireNextImageKHR failed! result=%s", VulkanResultToString(res));
-		}
+// Called on the render thread.
+//
+// Can be called again after a VKRRunType::SYNC on the same frame.
+void VulkanRenderManager::Run(VKRRenderThreadTask &task) {
+	FrameData &frameData = frameData_[task.frame];
 
+	_dbg_assert_(!frameData.hasPresentCommands);
+	frameData.SubmitPending(vulkan_, FrameSubmitType::Pending, frameDataShared_);
+
+	if (!frameData.hasMainCommands) {
+		// Effectively resets both main and present command buffers, since they both live in this pool.
+		// We always record main commands first, so we don't need to reset the present command buffer separately.
 		vkResetCommandPool(vulkan_->GetDevice(), frameData.cmdPoolMain, 0);
+
 		VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 		begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-		res = vkBeginCommandBuffer(frameData.mainCmd, &begin);
-
+		VkResult res = vkBeginCommandBuffer(frameData.mainCmd, &begin);
+		frameData.hasMainCommands = true;
 		_assert_msg_(res == VK_SUCCESS, "vkBeginCommandBuffer failed! result=%s", VulkanResultToString(res));
-
-		queueRunner_.SetBackbuffer(framebuffers_[frameData.curSwapchainImage], swapchainImages_[frameData.curSwapchainImage].image);
-
-		frameData.hasBegun = true;
-	}
-}
-
-void VulkanRenderManager::Submit(int frame, bool triggerFrameFence) {
-	FrameData &frameData = frameData_[frame];
-	if (frameData.hasInitCommands) {
-		if (frameData.profilingEnabled_ && triggerFrameFence) {
-			// Pre-allocated query ID 1.
-			vkCmdWriteTimestamp(frameData.initCmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frameData.profile.queryPool, 1);
-		}
-		VkResult res = vkEndCommandBuffer(frameData.initCmd);
-		_assert_msg_(res == VK_SUCCESS, "vkEndCommandBuffer failed (init)! result=%s", VulkanResultToString(res));
 	}
 
-	VkResult res = vkEndCommandBuffer(frameData.mainCmd);
-	_assert_msg_(res == VK_SUCCESS, "vkEndCommandBuffer failed (main)! result=%s", VulkanResultToString(res));
-
-	VkCommandBuffer cmdBufs[2];
-	int numCmdBufs = 0;
-	if (frameData.hasInitCommands) {
-		cmdBufs[numCmdBufs++] = frameData.initCmd;
-		if (splitSubmit_) {
-			// Send the init commands off separately. Used this once to confirm that the cause of a device loss was in the init cmdbuf.
-			VkSubmitInfo submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-			submit_info.commandBufferCount = (uint32_t)numCmdBufs;
-			submit_info.pCommandBuffers = cmdBufs;
-			res = vkQueueSubmit(vulkan_->GetGraphicsQueue(), 1, &submit_info, VK_NULL_HANDLE);
-			if (res == VK_ERROR_DEVICE_LOST) {
-				_assert_msg_(false, "Lost the Vulkan device in split submit! If this happens again, switch Graphics Backend away from Vulkan");
-			} else {
-				_assert_msg_(res == VK_SUCCESS, "vkQueueSubmit failed (init)! result=%s", VulkanResultToString(res));
-			}
-			numCmdBufs = 0;
-		}
-	}
-	cmdBufs[numCmdBufs++] = frameData.mainCmd;
-
-	VkSubmitInfo submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-	VkPipelineStageFlags waitStage[1]{ VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-	if (triggerFrameFence && !frameData.skipSwap) {
-		submit_info.waitSemaphoreCount = 1;
-		submit_info.pWaitSemaphores = &acquireSemaphore_;
-		submit_info.pWaitDstStageMask = waitStage;
-	}
-	submit_info.commandBufferCount = (uint32_t)numCmdBufs;
-	submit_info.pCommandBuffers = cmdBufs;
-	if (triggerFrameFence && !frameData.skipSwap) {
-		submit_info.signalSemaphoreCount = 1;
-		submit_info.pSignalSemaphores = &renderingCompleteSemaphore_;
-	}
-	res = vkQueueSubmit(vulkan_->GetGraphicsQueue(), 1, &submit_info, triggerFrameFence ? frameData.fence : frameData.readbackFence);
-	if (res == VK_ERROR_DEVICE_LOST) {
-		_assert_msg_(false, "Lost the Vulkan device in vkQueueSubmit! If this happens again, switch Graphics Backend away from Vulkan");
-	} else {
-		_assert_msg_(res == VK_SUCCESS, "vkQueueSubmit failed (main, split=%d)! result=%s", (int)splitSubmit_, VulkanResultToString(res));
-	}
-
-	// When !triggerFence, we notify after syncing with Vulkan.
-	if (useThread_ && triggerFrameFence) {
-		VLOG("PULL: Frame %d.readyForFence = true", frame);
-		std::unique_lock<std::mutex> lock(frameData.push_mutex);
-		frameData.readyForFence = true;
-		frameData.push_condVar.notify_all();
-	}
-
-	frameData.hasInitCommands = false;
-}
-
-void VulkanRenderManager::EndSubmitFrame(int frame) {
-	FrameData &frameData = frameData_[frame];
-	frameData.hasBegun = false;
-
-	Submit(frame, true);
-
-	if (!frameData.skipSwap) {
-		VkSwapchainKHR swapchain = vulkan_->GetSwapchain();
-		VkPresentInfoKHR present = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
-		present.swapchainCount = 1;
-		present.pSwapchains = &swapchain;
-		present.pImageIndices = &frameData.curSwapchainImage;
-		present.pWaitSemaphores = &renderingCompleteSemaphore_;
-		present.waitSemaphoreCount = 1;
-
-		VkResult res = vkQueuePresentKHR(vulkan_->GetGraphicsQueue(), &present);
-		if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-			// We clearly didn't get this in vkAcquireNextImageKHR because of the skipSwap check above.
-			// Do the increment.
-			outOfDateFrames_++;
-		} else if (res == VK_SUBOPTIMAL_KHR) {
-			outOfDateFrames_++;
-		} else if (res != VK_SUCCESS) {
-			_assert_msg_(false, "vkQueuePresentKHR failed! result=%s", VulkanResultToString(res));
-		} else {
-			// Success
-			outOfDateFrames_ = 0;
-		}
-	} else {
-		// We only get here if vkAcquireNextImage returned VK_ERROR_OUT_OF_DATE.
-		outOfDateFrames_++;
-		frameData.skipSwap = false;
-	}
-}
-
-void VulkanRenderManager::Run(int frame) {
-	BeginSubmitFrame(frame);
-
-	FrameData &frameData = frameData_[frame];
-	auto &stepsOnThread = frameData_[frame].steps;
-	VkCommandBuffer cmd = frameData.mainCmd;
-	queueRunner_.PreprocessSteps(stepsOnThread);
+	queueRunner_.PreprocessSteps(task.steps);
+	// Likely during shutdown, happens in headless.
+	if (task.steps.empty() && !frameData.hasAcquired)
+		frameData.skipSwap = true;
 	//queueRunner_.LogSteps(stepsOnThread, false);
-	queueRunner_.RunSteps(cmd, stepsOnThread, frameData.profilingEnabled_ ? &frameData.profile : nullptr);
-	stepsOnThread.clear();
+	if (IsVREnabled()) {
+		int passes = GetVRPassesCount();
+		for (int i = 0; i < passes; i++) {
+			PreVRFrameRender(i);
+			queueRunner_.RunSteps(task.steps, frameData, frameDataShared_, i < passes - 1);
+			PostVRFrameRender();
+		}
+	} else {
+		queueRunner_.RunSteps(task.steps, frameData, frameDataShared_);
+	}
 
-	switch (frameData.type) {
-	case VKRRunType::END:
-		EndSubmitFrame(frame);
+	switch (task.runType) {
+	case VKRRunType::PRESENT:
+		frameData.SubmitPending(vulkan_, FrameSubmitType::Present, frameDataShared_);
+
+		if (!frameData.skipSwap) {
+			VkResult res = frameData.QueuePresent(vulkan_, frameDataShared_);
+			if (res == VK_ERROR_OUT_OF_DATE_KHR) {
+				// We clearly didn't get this in vkAcquireNextImageKHR because of the skipSwap check above.
+				// Do the increment.
+				outOfDateFrames_++;
+			} else if (res == VK_SUBOPTIMAL_KHR) {
+				outOfDateFrames_++;
+			} else if (res != VK_SUCCESS) {
+				_assert_msg_(false, "vkQueuePresentKHR failed! result=%s", VulkanResultToString(res));
+			} else {
+				// Success
+				outOfDateFrames_ = 0;
+			}
+		} else {
+			// We only get here if vkAcquireNextImage returned VK_ERROR_OUT_OF_DATE.
+			outOfDateFrames_++;
+			frameData.skipSwap = false;
+		}
 		break;
 
 	case VKRRunType::SYNC:
-		EndSyncFrame(frame);
+		// The submit will trigger the readbackFence, and also do the wait for it.
+		frameData.SubmitPending(vulkan_, FrameSubmitType::Sync, frameDataShared_);
+
+		{
+			std::unique_lock<std::mutex> lock(syncMutex_);
+			syncCondVar_.notify_one();
+		}
+
+		// At this point the GPU is idle, and we can resume filling the command buffers for the
+		// current frame since and thus all previously enqueued command buffers have been
+		// processed. No need to switch to the next frame number, would just be confusing.
 		break;
 
 	default:
 		_dbg_assert_(false);
 	}
 
-	VLOG("PULL: Finished running frame %d", frame);
+	VLOG("PULL: Finished running frame %d", task.frame);
 }
 
-void VulkanRenderManager::EndSyncFrame(int frame) {
-	FrameData &frameData = frameData_[frame];
-
-	frameData.readbackFenceUsed = true;
-
-	// The submit will trigger the readbackFence.
-	Submit(frame, false);
-
-	// Hard stall of the GPU, not ideal, but necessary so the CPU has the contents of the readback.
-	vkWaitForFences(vulkan_->GetDevice(), 1, &frameData.readbackFence, true, UINT64_MAX);
-	vkResetFences(vulkan_->GetDevice(), 1, &frameData.readbackFence);
-
-	// At this point we can resume filling the command buffers for the current frame since
-	// we know the device is idle - and thus all previously enqueued command buffers have been processed.
-	// No need to switch to the next frame number.
-	VkCommandBufferBeginInfo begin{
-		VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-		nullptr,
-		VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
-	};
-	vkResetCommandPool(vulkan_->GetDevice(), frameData.cmdPoolMain, 0);
-	VkResult res = vkBeginCommandBuffer(frameData.mainCmd, &begin);
-	_assert_(res == VK_SUCCESS);
-
-	if (useThread_) {
-		std::unique_lock<std::mutex> lock(frameData.push_mutex);
-		frameData.readyForFence = true;
-		frameData.push_condVar.notify_all();
-	}
-}
-
+// Called from main thread.
 void VulkanRenderManager::FlushSync() {
-	renderStepOffset_ += (int)steps_.size();
+	if (invalidationCallback_) {
+		invalidationCallback_(InvalidationCallbackFlags::COMMAND_BUFFER_STATE);
+	}
 
 	int curFrame = vulkan_->GetCurFrame();
 	FrameData &frameData = frameData_[curFrame];
-	if (!useThread_) {
-		frameData.steps = std::move(steps_);
-		steps_.clear();
-		frameData.type = VKRRunType::SYNC;
-		Run(curFrame);
-	} else {
-		std::unique_lock<std::mutex> lock(frameData.pull_mutex);
-		VLOG("PUSH: Frame[%d].readyForRun = true (sync)", curFrame);
-		frameData.steps = std::move(steps_);
-		steps_.clear();
-		frameData.readyForRun = true;
-		_dbg_assert_(!frameData.readyForFence);
-		frameData.type = VKRRunType::SYNC;
-		frameData.pull_condVar.notify_all();
+	
+	{
+		VLOG("PUSH: Frame[%d]", curFrame);
+		VKRRenderThreadTask task;
+		task.frame = curFrame;
+		task.runType = VKRRunType::SYNC;
+		std::unique_lock<std::mutex> lock(pushMutex_);
+		renderThreadQueue_.push(task);
+		renderThreadQueue_.back().steps = std::move(steps_);
+		pushCondVar_.notify_one();
 	}
 
-	if (useThread_) {
-		std::unique_lock<std::mutex> lock(frameData.push_mutex);
+	{
+		std::unique_lock<std::mutex> lock(syncMutex_);
 		// Wait for the flush to be hit, since we're syncing.
-		while (!frameData.readyForFence) {
+		while (!frameData.syncDone) {
 			VLOG("PUSH: Waiting for frame[%d].readyForFence = 1 (sync)", curFrame);
-			frameData.push_condVar.wait(lock);
+			syncCondVar_.wait(lock);
 		}
-		frameData.readyForFence = false;
+		frameData.syncDone = false;
 	}
+}
+
+void VulkanRenderManager::ResetStats() {
+	initTimeMs_.Reset();
+	totalGPUTimeMs_.Reset();
+	renderCPUTimeMs_.Reset();
 }

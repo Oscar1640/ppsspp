@@ -32,7 +32,7 @@ public:
 
 	void update() override;
 	void onFinish(DialogResult result) override;
-	std::string tag() const override { return "settings"; }
+	const char *tag() const override { return "GameSettings"; }
 
 protected:
 	void sendMessage(const char *message, const char *value) override;
@@ -55,7 +55,6 @@ private:
 	bool lastVertical_;
 	UI::CheckBox *enableReportsCheckbox_;
 	UI::Choice *layoutEditorChoice_;
-	UI::Choice *postProcChoice_;
 	UI::Choice *displayEditor_;
 	UI::Choice *backgroundChoice_ = nullptr;
 	UI::PopupMultiChoice *resolutionChoice_;
@@ -106,7 +105,6 @@ private:
 	UI::EventReturn OnChangeBackground(UI::EventParams &e);
 	UI::EventReturn OnFullscreenChange(UI::EventParams &e);
 	UI::EventReturn OnFullscreenMultiChange(UI::EventParams &e);
-	UI::EventReturn OnDisplayLayoutEditor(UI::EventParams &e);
 	UI::EventReturn OnResolutionChange(UI::EventParams &e);
 	UI::EventReturn OnHwScaleChange(UI::EventParams &e);
 	UI::EventReturn OnRestoreDefaultSettings(UI::EventParams &e);
@@ -143,7 +141,7 @@ private:
 	bool enableReports_ = false;
 	bool enableReportsSet_ = false;
 	bool analogSpeedMapped_ = false;
-	std::string shaderNames_[256];
+
 	std::string searchFilter_;
 
 	//edit the game-specific settings and restore the global settings after exiting
@@ -156,11 +154,14 @@ private:
 	std::string oldSettingInfo_;
 };
 
-class DeveloperToolsScreen : public UIDialogScreenWithBackground {
+class DeveloperToolsScreen : public UIDialogScreenWithGameBackground {
 public:
-	DeveloperToolsScreen() {}
+	DeveloperToolsScreen(const Path &gamePath) : UIDialogScreenWithGameBackground(gamePath) {}
+
 	void update() override;
 	void onFinish(DialogResult result) override;
+
+	const char *tag() const override { return "DeveloperTools"; }
 
 protected:
 	void CreateViews() override;
@@ -168,8 +169,6 @@ protected:
 private:
 	UI::EventReturn OnRunCPUTests(UI::EventParams &e);
 	UI::EventReturn OnLoggingChanged(UI::EventParams &e);
-	UI::EventReturn OnLoadLanguageIni(UI::EventParams &e);
-	UI::EventReturn OnSaveLanguageIni(UI::EventParams &e);
 	UI::EventReturn OnOpenTexturesIniFile(UI::EventParams &e);
 	UI::EventReturn OnLogConfig(UI::EventParams &e);
 	UI::EventReturn OnJitAffectingSetting(UI::EventParams &e);
@@ -190,10 +189,12 @@ private:
 	HasIni hasTexturesIni_ = HasIni::MAYBE;
 };
 
-class OtherSettingsScreen : public UIDialogScreenWithBackground {
+class OtherSettingsScreen : public UIDialogScreenWithGameBackground {
 public:
-	OtherSettingsScreen() {}
+	OtherSettingsScreen(const Path& gamePath) : UIDialogScreenWithGameBackground(gamePath) {}
 	void onFinish(DialogResult result) override;
+
+	const char* tag() const override { return "OtherSettingsScreen"; }
 
 protected:
 	void CreateViews() override;
@@ -218,6 +219,8 @@ public:
 	}
 
 	void CreatePopupContents(UI::ViewGroup *parent) override;
+
+	const char *tag() const override { return "HostnameSelect"; }
 
 protected:
 	void OnCompleted(DialogResult result) override;
@@ -258,7 +261,10 @@ private:
 };
 
 
-class GestureMappingScreen : public UIDialogScreenWithBackground {
+class GestureMappingScreen : public UIDialogScreenWithGameBackground {
 public:
+	GestureMappingScreen(const Path &gamePath) : UIDialogScreenWithGameBackground(gamePath) {}
 	void CreateViews() override;
+
+	const char *tag() const override { return "GestureMapping"; }
 };

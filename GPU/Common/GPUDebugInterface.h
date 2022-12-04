@@ -136,6 +136,8 @@ struct GPUDebugBuffer {
 	void Allocate(u32 stride, u32 height, GPUDebugBufferFormat fmt, bool flipped = false);
 	void Free();
 
+	void ZeroBytes();
+
 	u8 *GetData() {
 		return data_;
 	}
@@ -214,6 +216,9 @@ public:
 	virtual std::string PrintReplacementInfo(u32 texAddr) = 0;
 	virtual void DispatchFlush() = 0;
 
+	virtual uint32_t SetAddrTranslation(uint32_t value) = 0;
+	virtual uint32_t GetAddrTranslation() = 0;
+
 	virtual bool GetCurrentSimpleVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices) {
 		return false;
 	}
@@ -236,7 +241,7 @@ public:
 	}
 
 	// Similar to GetCurrentFramebuffer(), with texture level specification.
-	virtual bool GetCurrentTexture(GPUDebugBuffer &buffer, int level) {
+	virtual bool GetCurrentTexture(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) {
 		return false;
 	}
 

@@ -329,8 +329,7 @@ namespace MainWindow {
 		TranslateMenuItem(menu, ID_OPTIONS_VULKAN);
 
 		TranslateMenuItem(menu, ID_OPTIONS_RENDERMODE_MENU);
-		TranslateMenuItem(menu, ID_OPTIONS_NONBUFFEREDRENDERING);
-		TranslateMenuItem(menu, ID_OPTIONS_BUFFEREDRENDERING);
+		TranslateMenuItem(menu, ID_OPTIONS_SKIP_BUFFER_EFFECTS);
 		TranslateMenuItem(menu, ID_OPTIONS_FRAMESKIP_MENU, g_Config.bSystemControls ? L"\tF7" : L"");
 		TranslateMenuItem(menu, ID_OPTIONS_FRAMESKIP_AUTO);
 		TranslateMenuItem(menu, ID_OPTIONS_FRAMESKIP_0);
@@ -488,7 +487,7 @@ namespace MainWindow {
 	// not static
 	void setTexScalingMultiplier(int level) {
 		g_Config.iTexScalingLevel = level;
-		NativeMessageReceived("gpu_clearCache", "");
+		NativeMessageReceived("gpu_configChanged", "");
 	}
 
 	static void setTexFiltering(int type) {
@@ -501,25 +500,12 @@ namespace MainWindow {
 
 	static void setTexScalingType(int type) {
 		g_Config.iTexScalingType = type;
-		NativeMessageReceived("gpu_clearCache", "");
+		NativeMessageReceived("gpu_configChanged", "");
 	}
 
-	static void setRenderingMode(int mode) {
-		auto gr = GetI18NCategory("Graphics");
-
-		g_Config.iRenderingMode = mode;
-		switch (g_Config.iRenderingMode) {
-		case FB_NON_BUFFERED_MODE:
-			osm.Show(gr->T("Non-Buffered Rendering"));
-			g_Config.bAutoFrameSkip = false;
-			break;
-
-		case FB_BUFFERED_MODE:
-			osm.Show(gr->T("Buffered Rendering"));
-			break;
-		}
-
-		NativeMessageReceived("gpu_resized", "");
+	static void setSkipBufferEffects(bool skip) {
+		g_Config.bSkipBufferEffects = skip;
+		NativeMessageReceived("gpu_configChanged", "");
 	}
 
 	static void setFrameSkipping(int framesToSkip = -1) {
@@ -771,9 +757,9 @@ namespace MainWindow {
 
 		case ID_OPTIONS_FRAMESKIP_AUTO:
 			g_Config.bAutoFrameSkip = !g_Config.bAutoFrameSkip;
-			if (g_Config.bAutoFrameSkip && g_Config.iRenderingMode == FB_NON_BUFFERED_MODE) {
-				g_Config.iRenderingMode = FB_BUFFERED_MODE;
-				NativeMessageReceived("gpu_resized", "");
+			if (g_Config.bAutoFrameSkip && g_Config.bSkipBufferEffects) {
+				g_Config.bSkipBufferEffects = false;
+				NativeMessageReceived("gpu_configChanged", "");
 			}
 			break;
 
@@ -791,7 +777,7 @@ namespace MainWindow {
 
 		case ID_TEXTURESCALING_DEPOSTERIZE:
 			g_Config.bTexDeposterize = !g_Config.bTexDeposterize;
-			NativeMessageReceived("gpu_clearCache", "");
+			NativeMessageReceived("gpu_configChanged", "");
 			break;
 
 		case ID_OPTIONS_DIRECT3D9:
@@ -818,8 +804,11 @@ namespace MainWindow {
 			RestartApp();
 			break;
 
-		case ID_OPTIONS_NONBUFFEREDRENDERING:   setRenderingMode(FB_NON_BUFFERED_MODE); break;
-		case ID_OPTIONS_BUFFEREDRENDERING:      setRenderingMode(FB_BUFFERED_MODE); break;
+		case ID_OPTIONS_SKIP_BUFFER_EFFECTS:
+			g_Config.bSkipBufferEffects = !g_Config.bSkipBufferEffects;
+			NativeMessageReceived("gpu_configChanged", "");
+			osm.ShowOnOff(gr->T("Skip Buffer Effects"), g_Config.bSkipBufferEffects);
+			break;
 
 		case ID_DEBUG_SHOWDEBUGSTATISTICS:
 			g_Config.bShowDebugStats = !g_Config.bShowDebugStats;
@@ -828,7 +817,7 @@ namespace MainWindow {
 
 		case ID_OPTIONS_HARDWARETRANSFORM:
 			g_Config.bHardwareTransform = !g_Config.bHardwareTransform;
-			NativeMessageReceived("gpu_resized", "");
+			NativeMessageReceived("gpu_configChanged", "");
 			osm.ShowOnOff(gr->T("Hardware Transform"), g_Config.bHardwareTransform);
 			break;
 
@@ -927,7 +916,7 @@ namespace MainWindow {
 			if (lastSlash) {
 				fn = lastSlash + 1;
 			} else {
-				fn = "";
+				fn.clear();
 			}
 
 			PSPFileInfo info = pspFileSystem.GetFileInfo(filename);
@@ -1073,7 +1062,7 @@ namespace MainWindow {
 					g_Config.vPostShaderNames.push_back(availableShaders[index]);
 				g_Config.bShaderChainRequires60FPS = PostShaderChainRequires60FPS(GetFullPostShadersChain(g_Config.vPostShaderNames));
 
-				NativeMessageReceived("gpu_resized", "");
+				NativeMessageReceived("gpu_renderResized", "");
 				NativeMessageReceived("postshader_updated", "");
 				break;
 			}
@@ -1114,6 +1103,7 @@ namespace MainWindow {
 		CHECKITEM(ID_FILE_DUMPAUDIO, g_Config.bDumpAudio);
 		CHECKITEM(ID_SIMPLEUI_TOGGLE, g_Config.bSimpleUI);
 		CHECKITEM(ID_SIMPLEUI_HIDE, g_Config.bSimpleUIhide);
+		CHECKITEM(ID_OPTIONS_SKIP_BUFFER_EFFECTS, g_Config.bSkipBufferEffects);
 
 		static const int displayrotationitems[] = {
 			ID_EMULATION_ROTATION_H,
@@ -1256,15 +1246,6 @@ namespace MainWindow {
 
 		for (int i = 0; i < ARRAY_SIZE(bufferfilteritems); i++) {
 			CheckMenuItem(menu, bufferfilteritems[i], MF_BYCOMMAND | ((i + 1) == g_Config.iBufFilter ? MF_CHECKED : MF_UNCHECKED));
-		}
-
-		static const int renderingmode[] = {
-			ID_OPTIONS_NONBUFFEREDRENDERING,
-			ID_OPTIONS_BUFFEREDRENDERING,
-		};
-
-		for (int i = 0; i < ARRAY_SIZE(renderingmode); i++) {
-			CheckMenuItem(menu, renderingmode[i], MF_BYCOMMAND | ((i == g_Config.iRenderingMode) ? MF_CHECKED : MF_UNCHECKED));
 		}
 
 		static const int frameskipping[] = {

@@ -181,8 +181,6 @@ void SoftwareTransform::Decode(int prim, u32 vertType, const DecVtxFormat &decVt
 		vscale /= gstate_c.curTextureHeight;
 	}
 
-	bool skinningEnabled = vertTypeIsSkinningEnabled(vertType);
-
 	const int w = gstate.getTextureWidth(0);
 	const int h = gstate.getTextureHeight(0);
 	float widthFactor = (float) w / (float) gstate_c.curTextureWidth;
@@ -207,6 +205,9 @@ void SoftwareTransform::Decode(int prim, u32 vertType, const DecVtxFormat &decVt
 
 	VertexReader reader(decoded, decVtxFormat, vertType);
 	if (throughmode) {
+		const u32 materialAmbientRGBA = gstate.getMaterialAmbientRGBA();
+		const bool hasColor = reader.hasColor0();
+		const bool hasUV = reader.hasUV();
 		for (int index = 0; index < maxIndex; index++) {
 			// Do not touch the coordinates or the colors. No lighting.
 			reader.Goto(index);
@@ -215,19 +216,19 @@ void SoftwareTransform::Decode(int prim, u32 vertType, const DecVtxFormat &decVt
 			reader.ReadPos(vert.pos);
 			vert.pos_w = 1.0f;
 
-			if (reader.hasColor0()) {
+			if (hasColor) {
 				if (provokeIndOffset != 0 && index + provokeIndOffset < maxIndex) {
 					reader.Goto(index + provokeIndOffset);
-					reader.ReadColor0_8888(vert.color0);
+					vert.color0_32 = reader.ReadColor0_8888();
 					reader.Goto(index);
 				} else {
-					reader.ReadColor0_8888(vert.color0);
+					vert.color0_32 = reader.ReadColor0_8888();
 				}
 			} else {
-				vert.color0_32 = gstate.getMaterialAmbientRGBA();
+				vert.color0_32 = materialAmbientRGBA;
 			}
 
-			if (reader.hasUV()) {
+			if (hasUV) {
 				reader.ReadUV(vert.uv);
 
 				vert.u *= uscale;
@@ -242,6 +243,7 @@ void SoftwareTransform::Decode(int prim, u32 vertType, const DecVtxFormat &decVt
 			// The w of uv is also never used (hardcoded to 1.0.)
 		}
 	} else {
+		const Vec4f materialAmbientRGBA = Vec4f::FromRGBA(gstate.getMaterialAmbientRGBA());
 		// Okay, need to actually perform the full transform.
 		for (int index = 0; index < maxIndex; index++) {
 			reader.Goto(index);
@@ -269,51 +271,17 @@ void SoftwareTransform::Decode(int prim, u32 vertType, const DecVtxFormat &decVt
 			if (reader.hasColor0())
 				reader.ReadColor0(unlitColor.AsArray());
 			else
-				unlitColor = Vec4f::FromRGBA(gstate.getMaterialAmbientRGBA());
+				unlitColor = materialAmbientRGBA;
 			if (reader.hasNormal())
 				reader.ReadNrm(normal.AsArray());
 
-			if (!skinningEnabled) {
-				Vec3ByMatrix43(out, pos, gstate.worldMatrix);
-				if (reader.hasNormal()) {
-					if (gstate.areNormalsReversed()) {
-						normal = -normal;
-					}
-					Norm3ByMatrix43(worldnormal.AsArray(), normal.AsArray(), gstate.worldMatrix);
-					worldnormal = worldnormal.NormalizedOr001(cpu_info.bSSE4_1);
+			Vec3ByMatrix43(out, pos, gstate.worldMatrix);
+			if (reader.hasNormal()) {
+				if (gstate.areNormalsReversed()) {
+					normal = -normal;
 				}
-			} else {
-				float weights[8];
-				// TODO: For flat, are weights from the provoking used for color/normal?
-				reader.Goto(index);
-				reader.ReadWeights(weights);
-
-				// Skinning
-				Vec3f psum(0, 0, 0);
-				Vec3f nsum(0, 0, 0);
-				for (int i = 0; i < vertTypeGetNumBoneWeights(vertType); i++) {
-					if (weights[i] != 0.0f) {
-						Vec3ByMatrix43(out, pos, gstate.boneMatrix+i*12);
-						Vec3f tpos(out);
-						psum += tpos * weights[i];
-						if (reader.hasNormal()) {
-							Vec3f norm;
-							Norm3ByMatrix43(norm.AsArray(), normal.AsArray(), gstate.boneMatrix+i*12);
-							nsum += norm * weights[i];
-						}
-					}
-				}
-
-				// Yes, we really must multiply by the world matrix too.
-				Vec3ByMatrix43(out, psum.AsArray(), gstate.worldMatrix);
-				if (reader.hasNormal()) {
-					normal = nsum;
-					if (gstate.areNormalsReversed()) {
-						normal = -normal;
-					}
-					Norm3ByMatrix43(worldnormal.AsArray(), normal.AsArray(), gstate.worldMatrix);
-					worldnormal = worldnormal.NormalizedOr001(cpu_info.bSSE4_1);
-				}
+				Norm3ByMatrix43(worldnormal.AsArray(), normal.AsArray(), gstate.worldMatrix);
+				worldnormal = worldnormal.NormalizedOr001(cpu_info.bSSE4_1);
 			}
 
 			// Perform lighting here if enabled.
@@ -358,10 +326,8 @@ void SoftwareTransform::Decode(int prim, u32 vertType, const DecVtxFormat &decVt
 
 			case GE_TEXMAP_TEXTURE_MATRIX:
 				{
-					// TODO: What's the correct behavior with flat shading?  Provoked normal or real normal?
-
 					// Projection mapping
-					Vec3f source;
+					Vec3f source(0.0f, 0.0f, 1.0f);
 					switch (gstate.getUVProjMode())	{
 					case GE_PROJMAP_POSITION: // Use model space XYZ as source
 						source = pos;
@@ -372,14 +338,34 @@ void SoftwareTransform::Decode(int prim, u32 vertType, const DecVtxFormat &decVt
 						break;
 
 					case GE_PROJMAP_NORMALIZED_NORMAL: // Use normalized normal as source
-						source = normal.NormalizedOr001(cpu_info.bSSE4_1);
+						// Flat uses the vertex normal, not provoking.
+						if (provokeIndOffset == 0) {
+							source = normal.Normalized(cpu_info.bSSE4_1);
+						} else {
+							reader.Goto(index);
+							if (reader.hasNormal())
+								reader.ReadNrm(source.AsArray());
+							if (gstate.areNormalsReversed())
+								source = -source;
+							source.Normalize();
+						}
 						if (!reader.hasNormal()) {
 							ERROR_LOG_REPORT(G3D, "Normal projection mapping without normal?");
 						}
 						break;
 
 					case GE_PROJMAP_NORMAL: // Use non-normalized normal as source!
-						source = normal;
+						// Flat uses the vertex normal, not provoking.
+						if (provokeIndOffset == 0) {
+							source = normal;
+						} else {
+							// Need to read the normal for this vertex and weight it again..
+							reader.Goto(index);
+							if (reader.hasNormal())
+								reader.ReadNrm(source.AsArray());
+							if (gstate.areNormalsReversed())
+								source = -source;
+						}
 						if (!reader.hasNormal()) {
 							ERROR_LOG_REPORT(G3D, "Normal projection mapping without normal?");
 						}
@@ -604,7 +590,7 @@ void SoftwareTransform::BuildDrawingParams(int prim, int vertexCount, u32 vertTy
 		result->drawIndexed = true;
 
 		// If we don't support custom cull in the shader, process it here.
-		if (!gstate_c.Supports(GPU_SUPPORTS_CULL_DISTANCE) && vertexCount > 0 && !throughmode) {
+		if (!gstate_c.Use(GPU_USE_CULL_DISTANCE) && vertexCount > 0 && !throughmode) {
 			const u16 *indsIn = (const u16 *)inds;
 			u16 *newInds = inds + vertexCount;
 			u16 *indsOut = newInds;
@@ -618,9 +604,9 @@ void SoftwareTransform::BuildDrawingParams(int prim, int vertexCount, u32 vertTy
 			// First, check inside/outside directions for each index.
 			for (int i = 0; i < vertexCount; ++i) {
 				float z = transformed[indsIn[i]].z / transformed[indsIn[i]].pos_w;
-				if (z >= maxZValue)
+				if (z > maxZValue)
 					outsideZ[i] = 1;
-				else if (z <= minZValue)
+				else if (z < minZValue)
 					outsideZ[i] = -1;
 				else
 					outsideZ[i] = 0;
@@ -790,13 +776,13 @@ void SoftwareTransform::ExpandLines(int vertexCount, int &maxIndex, u16 *&inds, 
 			float yoff = addWidth.y * dy;
 
 			// bottom right
-			trans[0].CopyFromWithOffset(transVtx2, xoff, yoff);
+			trans[0].CopyFromWithOffset(transVtx2, xoff * transVtx2.pos_w, yoff * transVtx2.pos_w);
 			// top right
-			trans[1].CopyFromWithOffset(transVtx1, xoff, yoff);
+			trans[1].CopyFromWithOffset(transVtx1, xoff * transVtx1.pos_w, yoff * transVtx1.pos_w);
 			// top left
-			trans[2].CopyFromWithOffset(transVtx1, -xoff, -yoff);
+			trans[2].CopyFromWithOffset(transVtx1, -xoff * transVtx1.pos_w, -yoff * transVtx1.pos_w);
 			// bottom left
-			trans[3].CopyFromWithOffset(transVtx2, -xoff, -yoff);
+			trans[3].CopyFromWithOffset(transVtx2, -xoff * transVtx2.pos_w, -yoff * transVtx2.pos_w);
 
 			// Triangle: BR-TR-TL
 			indsOut[0] = i * 2 + 0;
@@ -835,17 +821,17 @@ void SoftwareTransform::ExpandLines(int vertexCount, int &maxIndex, u16 *&inds, 
 
 			// bottom right
 			trans[0] = transVtxBL;
-			trans[0].x += addWidth.x * dx;
-			trans[0].y += addWidth.y * dy;
-			trans[0].u += addWidth.x * du;
-			trans[0].v += addWidth.y * dv;
+			trans[0].x += addWidth.x * dx * trans[0].pos_w;
+			trans[0].y += addWidth.y * dy * trans[0].pos_w;
+			trans[0].u += addWidth.x * du * trans[0].uv_w;
+			trans[0].v += addWidth.y * dv * trans[0].uv_w;
 
 			// top right
 			trans[1] = transVtxTL;
-			trans[1].x += addWidth.x * dx;
-			trans[1].y += addWidth.y * dy;
-			trans[1].u += addWidth.x * du;
-			trans[1].v += addWidth.y * dv;
+			trans[1].x += addWidth.x * dx * trans[1].pos_w;
+			trans[1].y += addWidth.y * dy * trans[1].pos_w;
+			trans[1].u += addWidth.x * du * trans[1].uv_w;
+			trans[1].v += addWidth.y * dv * trans[1].uv_w;
 
 			// top left
 			trans[2] = transVtxTL;

@@ -107,12 +107,23 @@ enum GPUSyncType {
 	GPU_SYNC_LIST,
 };
 
-enum class StencilUpload {
+enum class WriteStencil {
 	NEEDS_CLEAR = 1,
 	STENCIL_IS_ZERO = 2,
 	IGNORE_ALPHA = 4,
 };
-ENUM_CLASS_BITOPS(StencilUpload);
+ENUM_CLASS_BITOPS(WriteStencil);
+
+enum class GPUCopyFlag {
+	NONE = 0,
+	FORCE_SRC_MEM = 1,
+	FORCE_DST_MEM = 2,
+	// Note: implies src == dst and FORCE_SRC_MEM.
+	MEMSET = 4,
+	DEPTH_REQUESTED = 8,
+	DEBUG_NOTIFIED = 16,
+};
+ENUM_CLASS_BITOPS(GPUCopyFlag);
 
 // Used for debug
 struct FramebufferInfo {
@@ -187,6 +198,9 @@ public:
 	virtual void BeginHostFrame() = 0;
 	virtual void EndHostFrame() = 0;
 
+	virtual void CheckDisplayResized() = 0;
+	virtual void CheckConfigChanged() = 0;
+
 	// Draw queue management
 	virtual DisplayList* getList(int listid) = 0;
 	// TODO: Much of this should probably be shared between the different GPU implementations.
@@ -198,6 +212,9 @@ public:
 	virtual u32  Continue() = 0;
 	virtual u32  Break(int mode) = 0;
 	virtual int  GetStack(int index, u32 stackPtr) = 0;
+	virtual bool GetMatrix24(GEMatrixType type, u32_le *result, u32 cmdbits) = 0;
+	virtual void ResetMatrices() = 0;
+	virtual uint32_t SetAddrTranslation(uint32_t value) = 0;
 
 	virtual void InterruptStart(int listid) = 0;
 	virtual void InterruptEnd(int listid) = 0;
@@ -205,7 +222,6 @@ public:
 
 	virtual void PreExecuteOp(u32 op, u32 diff) = 0;
 	virtual void ExecuteOp(u32 op, u32 diff) = 0;
-	virtual bool InterpretList(DisplayList& list) = 0;
 
 	// Framebuffer management
 	virtual void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) = 0;
@@ -218,13 +234,16 @@ public:
 	// Invalidate any cached content sourced from the specified range.
 	// If size = -1, invalidate everything.
 	virtual void InvalidateCache(u32 addr, int size, GPUInvalidationType type) = 0;
-	virtual void NotifyVideoUpload(u32 addr, int size, int width, int format) = 0;
+	// Clear caches, update hardware framebuffers, or similar based on written pixels of known format (typically video.)
+	virtual void PerformWriteFormattedFromMemory(u32 addr, int size, int width, GEBufferFormat format) = 0;
 	// Update either RAM from VRAM, or VRAM from RAM... or even VRAM from VRAM.
-	virtual bool PerformMemoryCopy(u32 dest, u32 src, int size) = 0;
+	virtual bool PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags = GPUCopyFlag::NONE) = 0;
 	virtual bool PerformMemorySet(u32 dest, u8 v, int size) = 0;
-	virtual bool PerformMemoryDownload(u32 dest, int size) = 0;
-	virtual bool PerformMemoryUpload(u32 dest, int size) = 0;
-	virtual bool PerformStencilUpload(u32 dest, int size, StencilUpload flags = StencilUpload::NEEDS_CLEAR) = 0;
+	// Update PSP memory with render results.
+	virtual bool PerformReadbackToMemory(u32 dest, int size) = 0;
+	// Update rendering data (i.e. hardware framebuffers) with data in PSP memory.  Format unspecified.
+	virtual bool PerformWriteColorFromMemory(u32 dest, int size) = 0;
+	virtual bool PerformWriteStencilFromMemory(u32 dest, int size, WriteStencil flags = WriteStencil::NEEDS_CLEAR) = 0;
 
 	// Will cause the texture cache to be cleared at the start of the next frame.
 	virtual void ClearCacheNextFrame() = 0;
@@ -238,9 +257,10 @@ public:
 	virtual void DoState(PointerWrap &p) = 0;
 
 	// Called by the window system if the window size changed. This will be reflected in PSPCoreParam.pixel*.
-	virtual void Resized() = 0;
-	virtual void ClearShaderCache() = 0;
-	virtual void CleanupBeforeUI() = 0;
+	virtual void NotifyDisplayResized() = 0;
+	virtual void NotifyRenderResized() = 0;
+	virtual void NotifyConfigChanged() = 0;
+
 	virtual bool FramebufferDirty() = 0;
 	virtual bool FramebufferReallyDirty() = 0;
 	virtual bool BusyDrawing() = 0;

@@ -13,8 +13,10 @@
 #include <string>
 #include <vector>
 
+#include "Common/Common.h"
 #include "Common/GPU/DataFormat.h"
 #include "Common/GPU/Shader.h"
+#include "Common/GPU/MiscTypes.h"
 #include "Common/Data/Collections/Slice.h"
 
 namespace Lin {
@@ -114,6 +116,7 @@ enum BufferUsageFlag : int {
 enum Semantic : int {
 	SEM_POSITION,
 	SEM_COLOR0,
+	SEM_COLOR1,
 	SEM_TEXCOORD0,
 	SEM_TEXCOORD1,
 	SEM_NORMAL,
@@ -240,11 +243,16 @@ enum class NativeObject {
 	BACKBUFFER_DEPTH_TEX,
 	FEATURE_LEVEL,
 	INIT_COMMANDBUFFER,
-	BOUND_TEXTURE0_IMAGEVIEW,
-	BOUND_TEXTURE1_IMAGEVIEW,
+	BOUND_TEXTURE0_IMAGEVIEW,  // Layer etc depends on how you bound it...
+	BOUND_TEXTURE1_IMAGEVIEW,  // Layer etc depends on how you bound it...
+	BOUND_FRAMEBUFFER_COLOR_IMAGEVIEW_ALL_LAYERS,
+	BOUND_FRAMEBUFFER_COLOR_IMAGEVIEW_RT,
 	RENDER_MANAGER,
 	TEXTURE_VIEW,
 	NULL_IMAGEVIEW,
+	NULL_IMAGEVIEW_ARRAY,
+	FRAME_DATA_DESC_SET_LAYOUT,
+	THIN3D_PIPELINE_LAYOUT,
 };
 
 enum FBChannel {
@@ -291,7 +299,8 @@ struct FramebufferDesc {
 	int width;
 	int height;
 	int depth;
-	int numColorAttachments;
+	int numLayers;
+	int multiSampleLevel;  // 0 = 1xaa, 1 = 2xaa, and so on.
 	bool z_stencil;
 	const char *tag;  // For graphics debuggers
 };
@@ -328,14 +337,18 @@ public:
 		COLORWRITEMASK_BROKEN_WITH_DEPTHTEST = 5,
 		BROKEN_FLAT_IN_SHADER = 6,
 		EQUAL_WZ_CORRUPTS_DEPTH = 7,
-		MALI_STENCIL_DISCARD_BUG = 8,
-		RASPBERRY_SHADER_COMP_HANG = 9,
-		MALI_CONSTANT_LOAD_BUG = 10,
+		RASPBERRY_SHADER_COMP_HANG = 8,
+		MALI_CONSTANT_LOAD_BUG = 9,
+		SUBPASS_FEEDBACK_BROKEN = 10,
+		GEOMETRY_SHADERS_SLOW_OR_BROKEN = 11,
+		ADRENO_RESOURCE_DEADLOCK = 12,
 		MAX_BUG,
 	};
 
 protected:
 	uint32_t flags_ = 0;
+
+	static_assert(sizeof(flags_) * 8 > MAX_BUG, "Ran out of space for bugs.");
 };
 
 class RefCountedObject {
@@ -383,12 +396,25 @@ struct AutoRef {
 		*this = p.ptr;
 		return *this;
 	}
+	bool operator !=(const AutoRef<T> &p) const {
+		return ptr != p.ptr;
+	}
 
 	T *operator->() const {
 		return ptr;
 	}
 	operator T *() {
 		return ptr;
+	}
+	operator bool() const {
+		return ptr != nullptr;
+	}
+
+	void clear() {
+		if (ptr) {
+			ptr->Release();
+			ptr = nullptr;
+		}
 	}
 
 	T *ptr = nullptr;
@@ -410,8 +436,12 @@ class Framebuffer : public RefCountedObject {
 public:
 	int Width() { return width_; }
 	int Height() { return height_; }
+	int Layers() { return layers_; }
+	int MultiSampleLevel() { return multiSampleLevel_; }
+
+	virtual void UpdateTag(const char *tag) {}
 protected:
-	int width_ = -1, height_ = -1;
+	int width_ = -1, height_ = -1, layers_ = 1, multiSampleLevel_ = 0;
 };
 
 class Buffer : public RefCountedObject {
@@ -528,7 +558,6 @@ struct DeviceCaps {
 	bool depthRangeMinusOneToOne;  // OpenGL style depth
 	bool geometryShaderSupported;
 	bool tesselationShaderSupported;
-	bool multiViewport;
 	bool dualSourceBlend;
 	bool logicOpSupported;
 	bool depthClampSupported;
@@ -545,8 +574,14 @@ struct DeviceCaps {
 	bool fragmentShaderInt32Supported;
 	bool textureNPOTFullySupported;
 	bool fragmentShaderDepthWriteSupported;
+	bool fragmentShaderStencilWriteSupported;
 	bool textureDepthSupported;
+	bool blendMinMaxSupported;
+	bool multiViewSupported;
+	bool isTilingGPU;  // This means that it benefits from correct store-ops, msaa without backing memory, etc.
+	bool sampleRateShadingSupported;
 
+	u32 multiSampleLevelsMask;  // Bit n is set if (1 << n) is a valid multisample level. Bit 0 is always set.
 	std::string deviceName;  // The device name to use when creating the thin3d context, to get the same one.
 };
 
@@ -557,6 +592,7 @@ typedef std::function<bool(uint8_t *data, const uint8_t *initData, uint32_t w, u
 struct TextureDesc {
 	TextureType type;
 	DataFormat format;
+
 	int width;
 	int height;
 	int depth;
@@ -585,6 +621,14 @@ struct RenderPassInfo {
 	const char *tag;
 };
 
+const int ALL_LAYERS = -1;
+
+enum class TextureBindFlags {
+	NONE = 0,
+	VULKAN_BIND_ARRAY = 1,
+};
+ENUM_CLASS_BITOPS(TextureBindFlags);
+
 class DrawContext {
 public:
 	virtual ~DrawContext();
@@ -607,6 +651,8 @@ public:
 	virtual uint32_t GetSupportedShaderLanguages() const = 0;
 
 	virtual void SetErrorCallback(ErrorCallbackFn callback, void *userdata) {}
+
+	virtual void DebugAnnotate(const char *annotation) {}
 
 	// Partial pipeline state, used to create pipelines. (in practice, in d3d11 they'll use the native state objects directly).
 	// TODO: Possibly ditch these and just put the descs directly in PipelineDesc since only D3D11 benefits.
@@ -644,11 +690,14 @@ public:
 
 	// These functions should be self explanatory.
 	// Binding a zero render target means binding the backbuffer.
+	// If an fbo has two layers, we bind for stereo rendering ALWAYS. There's no rendering to one layer anymore.
 	virtual void BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp, const char *tag) = 0;
-	virtual Framebuffer *GetCurrentRenderTarget() = 0;
 
 	// binding must be < MAX_TEXTURE_SLOTS (0, 1 are okay if it's 2).
-	virtual void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int attachment) = 0;
+	virtual void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int layer) = 0;
+
+	// Framebuffer fetch / input attachment support, needs to be explicit in Vulkan.
+	virtual void BindCurrentFramebufferForColorInput() {}
 
 	// deprecated, only used by D3D9
 	virtual uintptr_t GetFramebufferAPITexture(Framebuffer *fbo, int channelBits, int attachment) {
@@ -670,9 +719,16 @@ public:
 	virtual void SetStencilParams(uint8_t refValue, uint8_t writeMask, uint8_t compareMask) = 0;
 
 	virtual void BindSamplerStates(int start, int count, SamplerState **state) = 0;
-	virtual void BindTextures(int start, int count, Texture **textures) = 0;
+	virtual void BindTextures(int start, int count, Texture **textures, TextureBindFlags flags = TextureBindFlags::NONE) = 0;
 	virtual void BindVertexBuffers(int start, int count, Buffer **buffers, const int *offsets) = 0;
 	virtual void BindIndexBuffer(Buffer *indexBuffer, int offset) = 0;
+
+	// Sometimes it's necessary to bind a texture not created by thin3d, and use with a thin3d pipeline.
+	// Not pretty, and one way in the future could be to create all textures through thin3d.
+	// Data types:
+	// * Vulkan: VkImageView
+	// * D3D11: ID3D11ShaderResourceView*
+	virtual void BindNativeTexture(int sampler, void *nativeTexture) = 0;
 
 	// Only supports a single dynamic uniform buffer, for maximum compatibility with the old APIs and ease of emulation.
 	// More modern methods will be added later.
@@ -686,7 +742,7 @@ public:
 	// Clear state cached within thin3d. Must be called after directly calling API functions.
 	// Note that framebuffer state (which framebuffer is bounds) may not be cached.
 	// Must not actually perform any API calls itself since this can be called when no framebuffer is bound for rendering.
-	virtual void InvalidateCachedState() = 0;
+	virtual void Invalidate(InvalidationFlags flags) = 0;
 
 	virtual void BindPipeline(Pipeline *pipeline) = 0;
 
@@ -717,7 +773,12 @@ public:
 	// Flush state like scissors etc so the caller can do its own custom drawing.
 	virtual void FlushState() {}
 
-	virtual int GetCurrentStepId() const = 0;
+	// This is called when we launch a new game, so any collected internal stats in the backends don't carry over.
+	virtual void ResetStats() {}
+
+	// Used by the DrawEngines to know when they have to re-apply some state.
+	// Not very elegant, but more elegant than the old passId hack.
+	virtual void SetInvalidationCallback(InvalidationCallback callback) = 0;
 
 protected:
 	ShaderModule *vsPresets_[VS_MAX_PRESET];

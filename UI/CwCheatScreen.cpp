@@ -35,8 +35,7 @@
 static const int FILE_CHECK_FRAME_INTERVAL = 53;
 
 CwCheatScreen::CwCheatScreen(const Path &gamePath)
-	: UIDialogScreenWithBackground() {
-	gamePath_ = gamePath;
+	: UIDialogScreenWithGameBackground(gamePath) {
 }
 
 CwCheatScreen::~CwCheatScreen() {
@@ -129,7 +128,7 @@ void CwCheatScreen::update() {
 		fileCheckCounter_ = 0;
 	}
 
-	UIDialogScreenWithBackground::update();
+	UIDialogScreenWithGameBackground::update();
 }
 
 void CwCheatScreen::onFinish(DialogResult result) {
@@ -209,7 +208,7 @@ UI::EventReturn CwCheatScreen::ParseCheatDB(std::string line, std::vector<std::s
 	bool parseCheatEntry = false;
 
 	while (in && !feof(in)) {
-		char* line = GetLineNoNewline(linebuf, sizeof(linebuf), in);
+		char *line = GetLineNoNewline(linebuf, sizeof(linebuf), in);
 
 		if (!line) {
 			continue;
@@ -243,16 +242,16 @@ UI::EventReturn CwCheatScreen::ParseCheatDB(std::string line, std::vector<std::s
 
 	std::string title2;
 	// Hmm, this probably gets confused about BOMs?
-	FILE* inTitle2 = File::OpenCFile(engine_->CheatFilename(), "rt");
+	FILE *inTitle2 = File::OpenCFile(engine_->CheatFilename(), "rt");
 	if (inTitle2) {
 		char temp[2048];
-		char* line = GetLineNoNewline(temp, sizeof(temp), inTitle2);
+		char *line = GetLineNoNewline(temp, sizeof(temp), inTitle2);
 		if (line)
 			title2 = line;
 		fclose(inTitle2);
 	}
 
-	FILE* append = File::OpenCFile(engine_->CheatFilename(), "at");
+	FILE *append = File::OpenCFile(engine_->CheatFilename(), "at");
 	if (!append)
 		return UI::EVENT_SKIPPED;
 

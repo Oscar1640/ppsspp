@@ -19,7 +19,10 @@
 
 #include "ppsspp_config.h"
 
+#include <functional>
 #include <unordered_map>
+#include <unordered_set>
+#include "Common/Data/Collections/Hashmaps.h"
 #include "GPU/Math3D.h"
 #include "GPU/Software/FuncId.h"
 #include "GPU/Software/RasterizerRegCache.h"
@@ -34,15 +37,16 @@ namespace Sampler {
 #endif
 
 typedef Rasterizer::Vec4IntResult(SOFTRAST_CALL *FetchFunc)(int u, int v, const u8 *tptr, int bufw, int level, const SamplerID &samplerID);
-FetchFunc GetFetchFunc(SamplerID id);
+FetchFunc GetFetchFunc(SamplerID id, std::function<void()> flushForCompile);
 
-typedef Rasterizer::Vec4IntResult (SOFTRAST_CALL *NearestFunc)(float s, float t, int x, int y, Rasterizer::Vec4IntArg prim_color, const u8 *const *tptr, const int *bufw, int level, int levelFrac, const SamplerID &samplerID);
-NearestFunc GetNearestFunc(SamplerID id);
+typedef Rasterizer::Vec4IntResult (SOFTRAST_CALL *NearestFunc)(float s, float t, Rasterizer::Vec4IntArg prim_color, const u8 *const *tptr, const uint16_t *bufw, int level, int levelFrac, const SamplerID &samplerID);
+NearestFunc GetNearestFunc(SamplerID id, std::function<void()> flushForCompile);
 
-typedef Rasterizer::Vec4IntResult (SOFTRAST_CALL *LinearFunc)(float s, float t, int x, int y, Rasterizer::Vec4IntArg prim_color, const u8 *const *tptr, const int *bufw, int level, int levelFrac, const SamplerID &samplerID);
-LinearFunc GetLinearFunc(SamplerID id);
+typedef Rasterizer::Vec4IntResult (SOFTRAST_CALL *LinearFunc)(float s, float t, Rasterizer::Vec4IntArg prim_color, const u8 *const *tptr, const uint16_t *bufw, int level, int levelFrac, const SamplerID &samplerID);
+LinearFunc GetLinearFunc(SamplerID id, std::function<void()> flushForCompile);
 
 void Init();
+void FlushJit();
 void Shutdown();
 
 bool DescribeCodePtr(const u8 *ptr, std::string &name);
@@ -52,15 +56,17 @@ public:
 	SamplerJitCache();
 
 	// Returns a pointer to the code to run.
-	NearestFunc GetNearest(const SamplerID &id);
-	LinearFunc GetLinear(const SamplerID &id);
-	FetchFunc GetFetch(const SamplerID &id);
+	NearestFunc GetNearest(const SamplerID &id, std::function<void()> flushForCompile);
+	LinearFunc GetLinear(const SamplerID &id, std::function<void()> flushForCompile);
+	FetchFunc GetFetch(const SamplerID &id, std::function<void()> flushForCompile);
 	void Clear() override;
+	void Flush();
 
 	std::string DescribeCodePtr(const u8 *ptr) override;
 
 private:
 	void Compile(const SamplerID &id);
+	NearestFunc GetByID(const SamplerID &id, std::function<void()> flushForCompile);
 	FetchFunc CompileFetch(const SamplerID &id);
 	NearestFunc CompileNearest(const SamplerID &id);
 	LinearFunc CompileLinear(const SamplerID &id);
@@ -121,8 +127,9 @@ private:
 	const u8 *const5551Swizzle_ = nullptr;
 	const u8 *const5650Swizzle_ = nullptr;
 
-	std::unordered_map<SamplerID, NearestFunc> cache_;
+	DenseHashMap<size_t, NearestFunc, nullptr> cache_;
 	std::unordered_map<SamplerID, const u8 *> addresses_;
+	std::unordered_set<SamplerID> compileQueue_;
 };
 
 #if defined(__clang__) || defined(__GNUC__)

@@ -507,7 +507,7 @@ void DrawEngineCommon::SubmitCurve(const void *control_points, const void *indic
 	if (indices)
 		GetIndexBounds(indices, num_points, vertType, &index_lower_bound, &index_upper_bound);
 
-	VertexDecoder *origVDecoder = GetVertexDecoder((vertType & 0xFFFFFF) | (gstate.getUVGenMode() << 24));
+	VertexDecoder *origVDecoder = GetVertexDecoder(GetVertTypeID(vertType, gstate.getUVGenMode(), decOptions_.applySkinInDecode));
 	*bytesRead = num_points * origVDecoder->VertexSize();
 
 	// Simplify away bones and morph before proceeding
@@ -572,12 +572,13 @@ void DrawEngineCommon::SubmitCurve(const void *control_points, const void *indic
 		gstate_c.uv.vOff = 0;
 	}
 
-	uint32_t vertTypeID = GetVertTypeID(vertTypeWithIndex16, gstate.getUVGenMode());
+	uint32_t vertTypeID = GetVertTypeID(vertTypeWithIndex16, gstate.getUVGenMode(), decOptions_.applySkinInDecode);
 	int generatedBytesRead;
 	if (output.count)
 		DispatchSubmitPrim(output.vertices, output.indices, PatchPrimToPrim(surface.primType), output.count, vertTypeID, gstate.getCullMode(), &generatedBytesRead);
 
-	DispatchFlush();
+	if (flushOnParams_)
+		DispatchFlush();
 
 	if (origVertType & GE_VTYPE_TC_MASK) {
 		gstate_c.uv = prevUVScale;

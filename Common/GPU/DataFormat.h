@@ -32,6 +32,8 @@ enum class DataFormat : uint8_t {
 	A1R5G5B5_UNORM_PACK16, // A1 in the UPPER bit.
 	A1B5G5R5_UNORM_PACK16, // A1 in the UPPER bit. OpenGL-only.
 
+	R16_UNORM,
+
 	R16_FLOAT,
 	R16G16_FLOAT,
 	R16G16B16A16_FLOAT,
@@ -63,6 +65,7 @@ enum class DataFormat : uint8_t {
 
 	S8,
 	D16,
+	D16_S8,
 	D24_S8,
 	D32F,
 	D32F_S8,
@@ -73,6 +76,9 @@ bool DataFormatIsDepthStencil(DataFormat fmt);
 inline bool DataFormatIsColor(DataFormat fmt) {
 	return !DataFormatIsDepthStencil(fmt);
 }
+
+// Limited format support for now.
+const char *DataFormatToString(DataFormat fmt);
 
 void ConvertFromRGBA8888(uint8_t *dst, const uint8_t *src, uint32_t dstStride, uint32_t srcStride, uint32_t width, uint32_t height, DataFormat format);
 void ConvertFromBGRA8888(uint8_t *dst, const uint8_t *src, uint32_t dstStride, uint32_t srcStride, uint32_t width, uint32_t height, DataFormat format);

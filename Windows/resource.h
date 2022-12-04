@@ -189,7 +189,7 @@
 #define ID_DISASM_THREAD_KILL            40073
 #define ID_FILE_SAVESTATE_NEXT_SLOT      40074
 #define ID_FILE_SAVESTATE_NEXT_SLOT_HC   40075
-#define ID_OPTIONS_NONBUFFEREDRENDERING  40078
+#define ID_OPTIONS_SKIP_BUFFER_EFFECTS   40078
 #define ID_OPTIONS_FRAMESKIP_0           40079
 #define ID_OPTIONS_FRAMESKIP_1           40080
 #define ID_OPTIONS_FRAMESKIP_2           40081
@@ -219,7 +219,6 @@
 #define ID_OPTIONS_WINDOW3X              40106
 #define ID_OPTIONS_WINDOW4X              40107
 #define ID_OPTIONS_WINDOW5X              40108
-#define ID_OPTIONS_BUFFEREDRENDERING     40109
 #define ID_DEBUG_SHOWDEBUGSTATISTICS     40110
 #define ID_OPTIONS_SCREEN6X              40111
 #define ID_OPTIONS_SCREEN7X              40112
@@ -333,6 +332,10 @@
 #define ID_GEDBG_SHOWONTOPRIGHT          40221
 #define IDC_GEDBG_STEPVSYNC              40222
 #define ID_GEDBG_SETCOND                 40223
+#define ID_GEDBG_COPY_IMAGE              40224
+#define ID_GEDBG_COPY_IMAGE_ALPHA        40225
+#define ID_GEDBG_TRACK_PIXEL             40226
+#define ID_GEDBG_TRACK_PIXEL_STOP        40227
 
 
 // Dummy option to let the buffered rendering hotkey cycle through all the options.
@@ -349,7 +352,7 @@
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        256
-#define _APS_NEXT_COMMAND_VALUE         40224
+#define _APS_NEXT_COMMAND_VALUE         40228
 #define _APS_NEXT_CONTROL_VALUE         1202
 #define _APS_NEXT_SYMED_VALUE           101
 #endif

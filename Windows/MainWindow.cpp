@@ -238,7 +238,7 @@ namespace MainWindow
 				g_Config.iInternalResolution = 0;
 		}
 
-		NativeMessageReceived("gpu_resized", "");
+		NativeMessageReceived("gpu_renderResized", "");
 	}
 
 	void CorrectCursor() {
@@ -302,7 +302,8 @@ namespace MainWindow
 		DEBUG_LOG(SYSTEM, "Pixel width/height: %dx%d", PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
 
 		if (UpdateScreenScale(width, height)) {
-			NativeMessageReceived("gpu_resized", "");
+			NativeMessageReceived("gpu_displayResized", "");
+			NativeMessageReceived("gpu_renderResized", "");
 		}
 
 		// Don't save the window state if fullscreen.
@@ -334,9 +335,6 @@ namespace MainWindow
 			dwStyle &= ~WS_POPUP;
 			// Re-add caption and border styles.
 			dwStyle |= WS_OVERLAPPEDWINDOW;
-
-			// Put back the menu bar.
-			::SetMenu(hWnd, menu);
 		} else {
 			// If the window was maximized before going fullscreen, make sure to restore first
 			// in order not to have the taskbar show up on top of PPSSPP.
@@ -353,8 +351,8 @@ namespace MainWindow
 
 		::SetWindowLong(hWnd, GWL_STYLE, dwStyle);
 
-		// Remove the menu bar. This can trigger WM_SIZE
-		::SetMenu(hWnd, goingFullscreen ? NULL : menu);
+		// Remove the menu bar. This can trigger WM_SIZE because the contents change size.
+		::SetMenu(hWnd, goingFullscreen || !g_Config.bShowMenuBar ? NULL : menu);
 
 		if (g_Config.UseFullScreen() != goingFullscreen) {
 			g_Config.bFullScreen = goingFullscreen;

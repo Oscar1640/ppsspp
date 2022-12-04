@@ -105,7 +105,7 @@ static const GLuint MagFiltGL[2] = {
 };
 
 void TextureCacheGLES::ApplySamplingParams(const SamplerCacheKey &key) {
-	if (gstate_c.Supports(GPU_SUPPORTS_TEXTURE_LOD_CONTROL)) {
+	if (gstate_c.Use(GPU_USE_TEXTURE_LOD_CONTROL)) {
 		float minLod = (float)key.minLevel / 256.0f;
 		float maxLod = (float)key.maxLevel / 256.0f;
 		float lodBias = (float)key.lodBias / 256.0f;
@@ -266,6 +266,8 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 		dstFmt = plan.replaced->Format(plan.baseLevelSrc);
 	} else if (plan.scaleFactor > 1 || plan.saveTexture) {
 		dstFmt = Draw::DataFormat::R8G8B8A8_UNORM;
+	} else if (plan.decodeToClut8) {
+		dstFmt = Draw::DataFormat::R8_UNORM;
 	}
 
 	if (plan.depth == 1) {
@@ -284,7 +286,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 		}
 	} 
 
-	if (!gstate_c.Supports(GPU_SUPPORTS_TEXTURE_LOD_CONTROL)) {
+	if (!gstate_c.Use(GPU_USE_TEXTURE_LOD_CONTROL)) {
 		// If the mip chain is not full..
 		if (plan.levelsToCreate != plan.maxPossibleLevels) {
 			// We need to avoid creating mips at all, or generate them all - can't be incomplete
@@ -313,7 +315,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 				if (plan.scaleFactor > 1) {
 					bpp = 4;
 				} else {
-					bpp = dstFmt == Draw::DataFormat::R8G8B8A8_UNORM ? 4 : 2;
+					bpp = (int)Draw::DataFormatSizeInBytes(dstFmt);
 				}
 			}
 
@@ -325,7 +327,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 				return;
 			}
 
-			LoadTextureLevel(*entry, data, stride, *plan.replaced, srcLevel, plan.scaleFactor, dstFmt, true);
+			LoadTextureLevel(*entry, data, stride, *plan.replaced, srcLevel, plan.scaleFactor, dstFmt, TexDecodeFlags::REVERSE_COLORS);
 
 			// NOTE: TextureImage takes ownership of data, so we don't free it afterwards.
 			render_->TextureImage(entry->textureName, i, mipWidth, mipHeight, 1, dstFmt, data, GLRAllocType::ALIGNED);
@@ -335,7 +337,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 
 		render_->FinalizeTexture(entry->textureName, plan.levelsToLoad, genMips);
 	} else {
-		int bpp = dstFmt == Draw::DataFormat::R8G8B8A8_UNORM ? 4 : 2;
+		int bpp = (int)Draw::DataFormatSizeInBytes(dstFmt);
 		int stride = bpp * (plan.w * plan.scaleFactor);
 		int levelStride = stride * (plan.h * plan.scaleFactor);
 
@@ -344,7 +346,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 		u8 *p = data;
 
 		for (int i = 0; i < plan.depth; i++) {
-			LoadTextureLevel(*entry, p, stride, *plan.replaced, i, plan.scaleFactor, dstFmt, true);
+			LoadTextureLevel(*entry, p, stride, *plan.replaced, i, plan.scaleFactor, dstFmt, TexDecodeFlags::REVERSE_COLORS);
 			p += levelStride;
 		}
 
@@ -383,26 +385,11 @@ Draw::DataFormat TextureCacheGLES::GetDestFormat(GETextureFormat format, GEPalet
 	}
 }
 
-bool TextureCacheGLES::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level) {
+bool TextureCacheGLES::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) {
 	InvalidateLastTexture();
 	SetTexture();
 	if (!nextTexture_) {
-		if (nextFramebufferTexture_) {
-			VirtualFramebuffer *vfb = nextFramebufferTexture_;
-			buffer.Allocate(vfb->bufferWidth, vfb->bufferHeight, GPU_DBG_FORMAT_8888, false);
-			bool retval = draw_->CopyFramebufferToMemorySync(vfb->fbo, Draw::FB_COLOR_BIT, 0, 0, vfb->bufferWidth, vfb->bufferHeight, Draw::DataFormat::R8G8B8A8_UNORM, buffer.GetData(), vfb->bufferWidth, "GetCurrentTextureDebug");
-			// Vulkan requires us to re-apply all dynamic state for each command buffer, and the above will cause us to start a new cmdbuf.
-			// So let's dirty the things that are involved in Vulkan dynamic state. Readbacks are not frequent so this won't hurt other backends.
-			gstate_c.Dirty(DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_BLEND_STATE | DIRTY_DEPTHSTENCIL_STATE);
-			// We may have blitted to a temp FBO.
-			framebufferManager_->RebindFramebuffer("RebindFramebuffer - GetCurrentTextureDebug");
-			if (!retval)
-				ERROR_LOG(G3D, "Failed to get debug texture: copy to memory failed");
-			return retval;
-		} else {
-			ERROR_LOG(G3D, "Failed to get debug texture: no texture set");
-			return false;
-		}
+		return GetCurrentFramebufferTextureDebug(buffer, isFramebuffer);
 	}
 
 	// Apply texture may need to rebuild the texture if we're about to render, or bind a framebuffer.
@@ -428,6 +415,7 @@ bool TextureCacheGLES::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level)
 	gstate_c.Dirty(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS);
 	framebufferManager_->RebindFramebuffer("RebindFramebuffer - GetCurrentTextureDebug");
 
+	*isFramebuffer = false;
 	return result;
 }
 
@@ -442,4 +430,9 @@ void TextureCacheGLES::DeviceRestore(Draw::DrawContext *draw) {
 	draw_ = draw;
 	render_ = (GLRenderManager *)draw_->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
 	textureShaderCache_->DeviceRestore(draw);
+}
+
+void *TextureCacheGLES::GetNativeTextureView(const TexCacheEntry *entry) {
+	GLRTexture *tex = entry->textureName;
+	return (void *)tex;
 }

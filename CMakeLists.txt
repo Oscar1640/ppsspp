@@ -1,11 +1,11 @@
 # vim:noexpandtab:
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.8)
 project(PPSSPP)
 enable_testing()
 
 #This is supposed to work but doesn't!
 if(NOT ANDROID)
-	set(CMAKE_CXX_STANDARD 11)
+	set(CMAKE_CXX_STANDARD 17)
 	set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
 
@@ -119,9 +119,16 @@ add_definitions(-DASSETS_DIR="${CMAKE_INSTALL_FULL_DATADIR}/ppsspp/assets/")
 if(OPENXR)
 	add_definitions(-DOPENXR)
 	add_library(openxr SHARED IMPORTED)
-	include_directories(ext/openxr)
-	set_property(TARGET openxr PROPERTY IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/ext/openxr/libs/arm64-v8a/libopenxr_loader.so")
-	message("OpenXR enabled")
+	if(OPENXR_PLATFORM_PICO)
+	  add_definitions(-DOPENXR_PLATFORM_PICO)
+	  set_property(TARGET openxr PROPERTY IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/ext/openxr/libs/pico/arm64-v8a/libopenxr_loader.so")
+	  message("OpenXR for Pico enabled")
+	endif()
+	if(OPENXR_PLATFORM_QUEST)
+	  add_definitions(-DOPENXR_PLATFORM_QUEST)
+	  set_property(TARGET openxr PROPERTY IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/ext/openxr/libs/quest/arm64-v8a/libopenxr_loader.so")
+	  message("OpenXR for Quest enabled")
+	endif()
 endif()
 
 if(GOLD)
@@ -315,7 +322,7 @@ if(NOT MSVC)
 	add_definitions(-DPNG_ARM_NEON_OPT=0)
 
 	if(ANDROID)
-		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++11")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
 	endif()
 	if(CLANG)
 		add_definitions(-Wno-nullability-completeness)
@@ -370,8 +377,9 @@ if(NOT MSVC)
 	endif()
 
 	if(IOS)
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
 	elseif(APPLE AND NOT CMAKE_CROSSCOMPILING)
-		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.8")
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++ -U__STRICT_ANSI__")
 		set(CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY "libc++")
 	elseif(NOT ANDROID)
@@ -498,6 +506,24 @@ if(WIN32)
 	)
 endif()
 
+set(CommonVR
+	Common/VR/OpenXRLoader.cpp
+	Common/VR/OpenXRLoader.h
+	Common/VR/PPSSPPVR.cpp
+	Common/VR/PPSSPPVR.h
+	Common/VR/VRBase.cpp
+	Common/VR/VRBase.h
+	Common/VR/VRFramebuffer.cpp
+	Common/VR/VRFramebuffer.h
+	Common/VR/VRInput.cpp
+	Common/VR/VRInput.h
+	Common/VR/VRMath.cpp
+	Common/VR/VRMath.h
+	Common/VR/VRRenderer.cpp
+	Common/VR/VRRenderer.h
+)
+include_directories(ext/openxr)
+
 add_library(Common STATIC
 	${CommonX86}
 	${CommonARM}
@@ -505,6 +531,7 @@ add_library(Common STATIC
 	${CommonMIPS}
 	${CommonRISCV64}
 	${CommonD3D}
+	${CommonVR}
 	Common/Serialize/Serializer.cpp
 	Common/Serialize/Serializer.h
 	Common/Serialize/SerializeDeque.h
@@ -579,6 +606,7 @@ add_library(Common STATIC
 	Common/File/FileDescriptor.cpp
 	Common/File/FileDescriptor.h
 	Common/GPU/DataFormat.h
+	Common/GPU/MiscTypes.h
 	Common/GPU/thin3d.cpp
 	Common/GPU/thin3d.h
 	Common/GPU/thin3d_create.h
@@ -610,6 +638,8 @@ add_library(Common STATIC
 	Common/GPU/Vulkan/VulkanDebug.h
 	Common/GPU/Vulkan/VulkanContext.cpp
 	Common/GPU/Vulkan/VulkanContext.h
+	Common/GPU/Vulkan/VulkanFramebuffer.cpp
+	Common/GPU/Vulkan/VulkanFramebuffer.h
 	Common/GPU/Vulkan/VulkanImage.cpp
 	Common/GPU/Vulkan/VulkanImage.h
 	Common/GPU/Vulkan/VulkanLoader.cpp
@@ -623,6 +653,8 @@ add_library(Common STATIC
 	Common/GPU/Vulkan/VulkanRenderManager.h
 	Common/GPU/Vulkan/VulkanQueueRunner.cpp
 	Common/GPU/Vulkan/VulkanQueueRunner.h
+	Common/GPU/Vulkan/VulkanFrameData.cpp
+	Common/GPU/Vulkan/VulkanFrameData.h
 	Common/Input/GestureDetector.cpp
 	Common/Input/GestureDetector.h
 	Common/Input/KeyCodes.h
@@ -639,6 +671,8 @@ add_library(Common STATIC
 	Common/Math/lin/vec3.h
 	Common/Math/math_util.cpp
 	Common/Math/math_util.h
+	Common/Math/Statistics.h
+	Common/Math/Statistics.cpp
 	Common/Net/HTTPClient.cpp
 	Common/Net/HTTPClient.h
 	Common/Net/HTTPHeaders.cpp
@@ -661,6 +695,8 @@ add_library(Common STATIC
 	Common/Render/TextureAtlas.h
 	Common/Render/DrawBuffer.cpp
 	Common/Render/DrawBuffer.h
+	Common/Render/ManagedTexture.cpp
+	Common/Render/ManagedTexture.h
 	Common/Render/Text/draw_text.cpp
 	Common/Render/Text/draw_text.h
 	Common/Render/Text/draw_text_android.cpp
@@ -679,6 +715,8 @@ add_library(Common STATIC
 	Common/Thread/ThreadUtil.h
 	Common/Thread/ThreadManager.cpp
 	Common/Thread/ThreadManager.h
+	Common/UI/AsyncImageFileView.cpp
+	Common/UI/AsyncImageFileView.h
 	Common/UI/Root.cpp
 	Common/UI/Root.h
 	Common/UI/Screen.cpp
@@ -1078,24 +1116,7 @@ if(ANDROID)
 		android/jni/OpenSLContext.cpp
 		android/jni/OpenSLContext.h
 	)
-
 	if (OPENXR)
-		set(nativeExtra ${nativeExtra}
-			Common/VR/PPSSPPVR.cpp
-			Common/VR/PPSSPPVR.h
-			Common/VR/VRBase.cpp
-			Common/VR/VRBase.h
-			Common/VR/VRFramebuffer.cpp
-			Common/VR/VRFramebuffer.h
-			Common/VR/VRInput.cpp
-			Common/VR/VRInput.h
-			Common/VR/VRMath.cpp
-			Common/VR/VRMath.h
-			Common/VR/VRRenderer.cpp
-			Common/VR/VRRenderer.h
-			Common/VR/VRTweaks.cpp
-			Common/VR/VRTweaks.h
-		)
 		set(nativeExtraLibs ${nativeExtraLibs} openxr)
 	endif()
 	# No target
@@ -1229,8 +1250,6 @@ list(APPEND NativeAppSource
 	UI/ChatScreen.cpp
 	UI/DevScreens.cpp
 	UI/DevScreens.h
-	UI/DisplayLayoutEditor.cpp
-	UI/DisplayLayoutEditor.h
 	UI/DisplayLayoutScreen.cpp
 	UI/DisplayLayoutScreen.h
 	UI/EmuScreen.h
@@ -1279,8 +1298,6 @@ list(APPEND NativeAppSource
 	UI/MemStickScreen.cpp
 	UI/ProfilerDraw.h
 	UI/ProfilerDraw.cpp
-	UI/TextureUtil.h
-	UI/TextureUtil.cpp
 	UI/ComboKeyMappingScreen.h
 	UI/ComboKeyMappingScreen.cpp
 	UI/Theme.h
@@ -1551,6 +1568,8 @@ set(GPU_SOURCES
 	GPU/Common/FragmentShaderGenerator.h
 	GPU/Common/VertexShaderGenerator.cpp
 	GPU/Common/VertexShaderGenerator.h
+	GPU/Common/GeometryShaderGenerator.cpp
+	GPU/Common/GeometryShaderGenerator.h
 	GPU/Common/FramebufferManagerCommon.cpp
 	GPU/Common/FramebufferManagerCommon.h
 	GPU/Common/GPUDebugInterface.cpp
@@ -2056,6 +2075,8 @@ endif()
 target_link_libraries(${CoreLibName} Common native kirk cityhash sfmt19937 xbrz xxhash ${GlslangLibs}
 	${CoreExtraLibs} ${OPENGL_LIBRARIES} ${X11_LIBRARIES} ${CMAKE_DL_LIBS})
 
+target_compile_features(${CoreLibName} PUBLIC cxx_std_17)
+
 if(FFmpeg_FOUND)
 	target_compile_definitions(${CoreLibName} PRIVATE USE_FFMPEG=1)
 	set_target_properties(${CoreLibName} PROPERTIES NO_SYSTEM_FROM_IMPORTED true)
@@ -2444,7 +2465,7 @@ if(NOT ANDROID)
 endif()
 # packaging and code signing
 if(IOS)
-	set(DEPLOYMENT_TARGET 8.0)
+	set(DEPLOYMENT_TARGET 11.0)
 	file(GLOB IOSAssets ios/assets/*.png)
 	list(REMOVE_ITEM IOSAssets ${CMAKE_CURRENT_SOURCE_DIR}/ios/assets/Default-568h@2x.png)
 	list(REMOVE_ITEM IOSAssets ${CMAKE_CURRENT_SOURCE_DIR}/ios/assets/Default-568h@3x.png)
@@ -2498,6 +2519,8 @@ if(UNIX AND NOT ANDROID AND NOT APPLE)
 		DIRECTORY "${CMAKE_BINARY_DIR}/assets"
 		DESTINATION "${CMAKE_INSTALL_DATADIR}/ppsspp"
 		PATTERN ".git*" EXCLUDE
+		PATTERN "mime" EXCLUDE
+		PATTERN "lang/README.md" EXCLUDE
 	)
 	install(
 		FILES "${CMAKE_BINARY_DIR}/ppsspp.desktop"
@@ -2510,7 +2533,11 @@ if(UNIX AND NOT ANDROID AND NOT APPLE)
 	)
 	install(
 		FILES "${CMAKE_SOURCE_DIR}/icons/icon-512.svg"
-		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/pixmaps"
-		RENAME ppsspp.svg
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
+		RENAME "ppsspp.svg"
+	)
+	install(
+		FILES "${CMAKE_SOURCE_DIR}/assets/mime/ppsspp.xml"
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/mime/packages"
 	)
 endif()

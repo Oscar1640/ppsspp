@@ -47,6 +47,8 @@ Draw::DataFormat FromD3D9Format(u32 fmt) {
 		return Draw::DataFormat::A1R5G5B5_UNORM_PACK16;
 	case D3DFMT_R5G6B5:
 		return Draw::DataFormat::R5G6B5_UNORM_PACK16;
+	case D3DFMT_A8:
+		return Draw::DataFormat::R8_UNORM;
 	case D3DFMT_A8R8G8B8:
 	default:
 		return Draw::DataFormat::R8G8B8A8_UNORM;
@@ -168,7 +170,7 @@ void TextureCacheDX9::StartFrame() {
 		Decimate();
 	}
 
-	if (gstate_c.Supports(GPU_SUPPORTS_ANISOTROPY)) {
+	if (gstate_c.Use(GPU_USE_ANISOTROPY)) {
 		DWORD aniso = 1 << g_Config.iAnisotropyLevel;
 		DWORD anisotropyLevel = aniso > maxAnisotropyLevel ? maxAnisotropyLevel : aniso;
 		device_->SetSamplerState(0, D3DSAMP_MAXANISOTROPY, anisotropyLevel);
@@ -251,6 +253,8 @@ void TextureCacheDX9::BuildTexture(TexCacheEntry *const entry) {
 		dstFmt = ToD3D9Format(plan.replaced->Format(plan.baseLevelSrc));
 	} else if (plan.scaleFactor > 1 || plan.saveTexture) {
 		dstFmt = D3DFMT_A8R8G8B8;
+	} else if (plan.decodeToClut8) {
+		dstFmt = D3DFMT_A8;
 	}
 
 	int levels;
@@ -290,8 +294,6 @@ void TextureCacheDX9::BuildTexture(TexCacheEntry *const entry) {
 		return;
 	}
 
-	Draw::DataFormat texFmt = FromD3D9Format(dstFmt);
-
 	if (plan.depth == 1) {
 		// Regular loop.
 		for (int i = 0; i < levels; i++) {
@@ -307,7 +309,7 @@ void TextureCacheDX9::BuildTexture(TexCacheEntry *const entry) {
 			}
 			uint8_t *data = (uint8_t *)rect.pBits;
 			int stride = rect.Pitch;
-			LoadTextureLevel(*entry, data, stride, *plan.replaced, (i == 0) ? plan.baseLevelSrc : i, plan.scaleFactor, texFmt, false);
+			LoadTextureLevel(*entry, data, stride, *plan.replaced, (i == 0) ? plan.baseLevelSrc : i, plan.scaleFactor, FromD3D9Format(dstFmt), TexDecodeFlags{});
 			((LPDIRECT3DTEXTURE9)texture)->UnlockRect(dstLevel);
 		}
 	} else {
@@ -322,7 +324,7 @@ void TextureCacheDX9::BuildTexture(TexCacheEntry *const entry) {
 		uint8_t *data = (uint8_t *)box.pBits;
 		int stride = box.RowPitch;
 		for (int i = 0; i < plan.depth; i++) {
-			LoadTextureLevel(*entry, data, stride, *plan.replaced, (i == 0) ? plan.baseLevelSrc : i, plan.scaleFactor, texFmt, false);
+			LoadTextureLevel(*entry, data, stride, *plan.replaced, (i == 0) ? plan.baseLevelSrc : i, plan.scaleFactor, FromD3D9Format(dstFmt), TexDecodeFlags{});
 			data += box.SlicePitch;
 		}
 		((LPDIRECT3DVOLUMETEXTURE9)texture)->UnlockBox(0);
@@ -360,22 +362,12 @@ D3DFORMAT TextureCacheDX9::GetDestFormat(GETextureFormat format, GEPaletteFormat
 	}
 }
 
-CheckAlphaResult TextureCacheDX9::CheckAlpha(const u32 *pixelData, u32 dstFmt, int w) {
-	switch (dstFmt) {
-	case D3DFMT_A4R4G4B4:
-		return CheckAlpha16((const u16 *)pixelData, w, 0xF000);
-	case D3DFMT_A1R5G5B5:
-		return CheckAlpha16((const u16 *)pixelData, w, 0x8000);
-	case D3DFMT_R5G6B5:
-		// Never has any alpha.
-		return CHECKALPHA_FULL;
-	default:
-		return CheckAlpha32(pixelData, w, 0xFF000000);
-	}
-}
-
-bool TextureCacheDX9::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level) {
+bool TextureCacheDX9::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) {
 	SetTexture();
+	if (!nextTexture_) {
+		return GetCurrentFramebufferTextureDebug(buffer, isFramebuffer);
+	}
+
 	ApplyTexture();
 
 	LPDIRECT3DBASETEXTURE9 baseTex;
@@ -408,6 +400,9 @@ bool TextureCacheDX9::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level) 
 					}
 					renderTarget->Release();
 				}
+				*isFramebuffer = true;
+			} else {
+				*isFramebuffer = false;
 			}
 
 			if (SUCCEEDED(hr)) {
@@ -455,4 +450,9 @@ bool TextureCacheDX9::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level) 
 	}
 
 	return success;
+}
+
+void *TextureCacheDX9::GetNativeTextureView(const TexCacheEntry *entry) {
+	LPDIRECT3DBASETEXTURE9 tex = DxTex(entry);
+	return (void *)tex;
 }

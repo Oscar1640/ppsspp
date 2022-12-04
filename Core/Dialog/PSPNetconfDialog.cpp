@@ -194,21 +194,21 @@ void PSPNetconfDialog::DisplayMessage(std::string text1, std::string text2a, std
 
 	PPGeScissor(0, (int)(centerY - h2 - 2), 480, (int)(centerY + h2 + 2));
 	PPGeDrawTextWrapped(text1.c_str(), 240.0f, centerY - h2 - scrollPos_, WRAP_WIDTH, 0, messageStyle);
-	if (text2a != "") {
-		if (text2b != "")
+	if (!text2a.empty()) {
+		if (!text2b.empty())
 			PPGeDrawTextWrapped(text2a.c_str(), 240.0f - 5.0f, centerY - h2 - scrollPos_ + totalHeight1 + marginTop, WRAP_WIDTH, 0, messageStyleRight);
 		else
 			PPGeDrawTextWrapped(text2a.c_str(), 240.0f, centerY - h2 - scrollPos_ + totalHeight1 + marginTop, WRAP_WIDTH, 0, messageStyle);
 	}
-	if (text2b != "")
+	if (!text2b.empty())
 		PPGeDrawTextWrapped(text2b.c_str(), 240.0f + 5.0f, centerY - h2 - scrollPos_ + totalHeight1 + marginTop, WRAP_WIDTH, 0, messageStyleLeft);
-	if (text3a != "") {
-		if (text3b != "")
+	if (!text3a.empty()) {
+		if (!text3b.empty())
 			PPGeDrawTextWrapped(text3a.c_str(), 240.0f - 5.0f, centerY - h2 - scrollPos_ + totalHeight1 + totalHeight2 + marginTop, WRAP_WIDTH, 0, messageStyleRight);
 		else
 			PPGeDrawTextWrapped(text3a.c_str(), 240.0f, centerY - h2 - scrollPos_ + totalHeight1 + totalHeight2 + marginTop, WRAP_WIDTH, 0, messageStyle);
 	}
-	if (text3b != "")
+	if (!text3b.empty())
 		PPGeDrawTextWrapped(text3b.c_str(), 240.0f + 5.0f, centerY - h2 - scrollPos_ + totalHeight1 + totalHeight2 + marginTop, WRAP_WIDTH, 0, messageStyleLeft);
 	PPGeScissorReset();
 
@@ -261,9 +261,9 @@ int PSPNetconfDialog::Update(int animSpeed) {
 		if (!hideNotice) {
 			const float WRAP_WIDTH = 254.0f;
 			const ImageID confirmBtnImage = g_Config.iButtonPreference == PSP_SYSTEMPARAM_BUTTON_CROSS ? ImageID("I_CROSS") : ImageID("I_CIRCLE");
-			const int confirmBtn = g_Config.iButtonPreference == PSP_SYSTEMPARAM_BUTTON_CROSS ? CTRL_CROSS : CTRL_CIRCLE;
+			const int confirmBtn = GetConfirmButton();
 			const ImageID cancelBtnImage = g_Config.iButtonPreference == PSP_SYSTEMPARAM_BUTTON_CROSS ? ImageID("I_CIRCLE") : ImageID("I_CROSS");
-			const int cancelBtn = g_Config.iButtonPreference == PSP_SYSTEMPARAM_BUTTON_CROSS ? CTRL_CIRCLE : CTRL_CROSS;
+			const int cancelBtn = GetCancelButton();
 
 			PPGeStyle textStyle = FadedStyle(PPGeAlign::BOX_CENTER, 0.5f);
 			PPGeStyle buttonStyle = FadedStyle(PPGeAlign::BOX_LEFT, 0.5f);

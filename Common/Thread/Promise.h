@@ -79,7 +79,6 @@ public:
 
 	// Returns T if the data is ready, nullptr if it's not.
 	T Poll() {
-		_dbg_assert_(this != nullptr);
 		std::lock_guard<std::mutex> guard(readyMutex_);
 		if (ready_) {
 			return data_;
@@ -96,7 +95,6 @@ public:
 	}
 
 	T BlockUntilReady() {
-		_dbg_assert_(this != nullptr);
 		std::lock_guard<std::mutex> guard(readyMutex_);
 		if (ready_) {
 			return data_;
@@ -109,7 +107,7 @@ public:
 		}
 	}
 
-	// For outside injection of data, when not using Spawn
+	// For outside injection of data, when not using Spawn.
 	void Post(T data) {
 		rx_->Send(data);
 	}

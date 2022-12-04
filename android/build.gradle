@@ -45,6 +45,8 @@ android {
 		}
 	}
 	compileSdkVersion 32
+	ndkVersion "21.4.7075529"
+
 	defaultConfig {
 		applicationId 'org.ppsspp.ppssppluna'
 		if (androidGitVersion.name() != "unknown" && androidGitVersion.code() >= 14000000) {
@@ -103,7 +105,10 @@ android {
 		gold {
 			res.srcDirs = ['gold/res']
 		}
-		quest {
+		vr_pico {
+			manifest.srcFile 'PicoManifest.xml'
+		}
+		vr_quest {
 			manifest.srcFile 'QuestManifest.xml'
 		}
 	}
@@ -145,7 +150,7 @@ android {
 				abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
 			}
 		}
-		quest {
+		vr_pico {
 			applicationId 'org.ppsspp.ppsspp'
 			dimension "variant"
 			externalNativeBuild {
@@ -157,6 +162,27 @@ android {
 							'-DANDROID_CPP_FEATURES=',
 							'-DANDROID_STL=c++_static',
 							'-DANDROID_ARM_NEON=TRUE',
+							'-DOPENXR_PLATFORM_PICO=TRUE',
+							'-DOPENXR=TRUE'
+				}
+			}
+			ndk {
+				abiFilters 'arm64-v8a'
+			}
+		}
+		vr_quest {
+			applicationId 'org.ppsspp.ppsspp'
+			dimension "variant"
+			externalNativeBuild {
+				cmake {
+					// Available arguments listed at https://developer.android.com/ndk/guides/cmake.html
+					arguments '-DANDROID=true',
+							'-DANDROID_PLATFORM=android-16',
+							'-DANDROID_TOOLCHAIN=clang',
+							'-DANDROID_CPP_FEATURES=',
+							'-DANDROID_STL=c++_static',
+							'-DANDROID_ARM_NEON=TRUE',
+							'-DOPENXR_PLATFORM_QUEST=TRUE',
 							'-DOPENXR=TRUE'
 				}
 			}
@@ -171,9 +197,12 @@ android {
 			'normalOptimized',	// for testing
 			'normalRelease',	// for Google Play releases
 			'goldRelease',		// for Google Play releases
-			'questDebug',		// for VR debugging
-			'questOptimized',	// for VR testing
-			'questRelease',		// for VR releases
+			'vr_picoDebug',    	// for VR debugging on Pico
+			'vr_picoOptimized',	// for VR testing on Pico
+			'vr_picoRelease',  	// for VR releases on Pico
+			'vr_questDebug',    // for VR debugging on Quest
+			'vr_questOptimized',// for VR testing on Quest
+			'vr_questRelease',  // for VR releases on Quest
 		]
 		variant.setIgnore(!needed)
 	}

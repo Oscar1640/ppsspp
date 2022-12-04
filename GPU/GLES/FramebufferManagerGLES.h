@@ -31,17 +31,17 @@ public:
 	FramebufferManagerGLES(Draw::DrawContext *draw);
 	~FramebufferManagerGLES();
 
-	void Resized() override;
+	void NotifyDisplayResized() override;
 	void DeviceLost() override;
 
 	bool GetOutputFramebuffer(GPUDebugBuffer &buffer) override;
 
 protected:
 	void UpdateDownloadTempBuffer(VirtualFramebuffer *nvfb) override;
+	bool ReadbackDepthbufferSync(Draw::Framebuffer *fbo, int x, int y, int w, int h, uint16_t *pixels, int pixelsStride) override;
+	bool ReadbackStencilbufferSync(Draw::Framebuffer *fbo, int x, int y, int w, int h, uint8_t *pixels, int pixelsStride) override;
 
 private:
-	void PackDepthbuffer(VirtualFramebuffer *vfb, int x, int y, int w, int h);
-
 	u8 *convBuf_ = nullptr;
 	u32 convBufSize_ = 0;
 

@@ -71,10 +71,8 @@ public:
 
 	DrawBuffer *Draw() const { return uidrawbuffer_; }
 	DrawBuffer *DrawTop() const { return uidrawbufferTop_; }
-	const UI::Theme *theme;
 
 	// Utility methods
-
 	TextDrawer *Text() const { return textDrawer_; }
 
 	void SetFontStyle(const UI::FontStyle &style);
@@ -95,6 +93,9 @@ public:
 	const Bounds &GetBounds() const { return bounds_; }
 	Bounds GetLayoutBounds() const;
 	Draw::DrawContext *GetDrawContext() { return draw_; }
+	const UI::Theme &GetTheme() const {
+		return *theme;
+	}
 	void SetCurZ(float curZ);
 
 	void PushTransform(const UITransform &transform);
@@ -102,6 +103,13 @@ public:
 	Bounds TransformBounds(const Bounds &bounds);
 
 	void setUIAtlas(const std::string &name);
+
+	void SetScreenTag(const char *tag) {
+		screenTag_ = tag;
+	}
+
+	// TODO: Move to private.
+	const UI::Theme *theme;
 
 private:
 	Draw::DrawContext *draw_ = nullptr;
@@ -126,4 +134,6 @@ private:
 
 	std::string lastUIAtlas_;
 	std::string UIAtlas_ = "ui_atlas_luna.zim";
+
+	const char *screenTag_ = nullptr;
 };

@@ -142,3 +142,5 @@ CMakeFiles
 
 # Clangd 
 .cache/
+/assets/ui_atlas.meta
+/assets/ui_atlas.zim

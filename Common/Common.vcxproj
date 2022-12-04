@@ -136,7 +136,7 @@
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;WIN32;_ARCH_32=1;_M_IX86=1;_DEBUG;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ForcedIncludeFiles>Common/DbgNew.h</ForcedIncludeFiles>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -153,6 +153,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -161,7 +162,7 @@
       <ForcedIncludeFiles>Common/DbgNew.h</ForcedIncludeFiles>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;WIN32;_ARCH_64=1;_M_X64=1;_DEBUG;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
       <OmitFramePointers>false</OmitFramePointers>
@@ -179,6 +180,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
@@ -187,7 +189,7 @@
       <ForcedIncludeFiles>Common/DbgNew.h</ForcedIncludeFiles>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;WIN32;_ARCH_64=1;_DEBUG;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
       <OmitFramePointers>false</OmitFramePointers>
@@ -205,6 +207,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
@@ -214,7 +217,7 @@
       </ForcedIncludeFiles>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;WIN32;_ARCH_32=1;_DEBUG;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
       <OmitFramePointers>false</OmitFramePointers>
@@ -232,6 +235,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -246,7 +250,7 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
@@ -264,6 +268,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -275,7 +280,7 @@
       <PreprocessorDefinitions>USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;WIN32;_ARCH_64=1;_M_X64=1;NDEBUG;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ForcedIncludeFiles>
       </ForcedIncludeFiles>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -298,6 +303,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
@@ -309,7 +315,7 @@
       <PreprocessorDefinitions>USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;WIN32;_ARCH_64=1;NDEBUG;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ForcedIncludeFiles>
       </ForcedIncludeFiles>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -332,6 +338,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
@@ -343,7 +350,7 @@
       <PreprocessorDefinitions>USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;WIN32;_ARCH_32=1;NDEBUG;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ForcedIncludeFiles>
       </ForcedIncludeFiles>
-      <AdditionalIncludeDirectories>../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>../ext/openxr;../ext/glew;../ext/snappy;../ext/glslang;../ext/libpng17;../ext;../ext/zlib;..;../ext/zstd/lib</AdditionalIncludeDirectories>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -366,6 +373,7 @@
       <AdditionalDependencies>ws2_32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>
       </AdditionalLibraryDirectories>
+      <AdditionalOptions>/ignore:4221 %(AdditionalOptions)</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -424,6 +432,7 @@
     <ClInclude Include="GPU\D3D9\D3D9ShaderCompiler.h" />
     <ClInclude Include="GPU\D3D9\D3D9StateCache.h" />
     <ClInclude Include="GPU\DataFormat.h" />
+    <ClInclude Include="GPU\MiscTypes.h" />
     <ClInclude Include="GPU\OpenGL\DataFormatGL.h" />
     <ClInclude Include="GPU\OpenGL\gl3stub.h" />
     <ClInclude Include="GPU\OpenGL\GLFeatures.h" />
@@ -441,6 +450,8 @@
     <ClInclude Include="GPU\Vulkan\VulkanBarrier.h" />
     <ClInclude Include="GPU\Vulkan\VulkanContext.h" />
     <ClInclude Include="GPU\Vulkan\VulkanDebug.h" />
+    <ClInclude Include="GPU\Vulkan\VulkanFramebuffer.h" />
+    <ClInclude Include="GPU\Vulkan\VulkanFrameData.h" />
     <ClInclude Include="GPU\Vulkan\VulkanImage.h" />
     <ClInclude Include="GPU\Vulkan\VulkanLoader.h" />
     <ClInclude Include="GPU\Vulkan\VulkanMemory.h" />
@@ -457,6 +468,7 @@
     <ClInclude Include="Math\lin\matrix4x4.h" />
     <ClInclude Include="Math\lin\vec3.h" />
     <ClInclude Include="Math\math_util.h" />
+    <ClInclude Include="Math\Statistics.h" />
     <ClInclude Include="Net\NetBuffer.h" />
     <ClInclude Include="Net\HTTPClient.h" />
     <ClInclude Include="Net\HTTPHeaders.h" />
@@ -467,6 +479,7 @@
     <ClInclude Include="Net\WebsocketServer.h" />
     <ClInclude Include="Profiler\Profiler.h" />
     <ClInclude Include="Render\DrawBuffer.h" />
+    <ClInclude Include="Render\ManagedTexture.h" />
     <ClInclude Include="Render\TextureAtlas.h" />
     <ClInclude Include="Render\Text\draw_text.h" />
     <ClInclude Include="Render\Text\draw_text_android.h" />
@@ -539,6 +552,7 @@
     <ClInclude Include="Thread\ThreadUtil.h" />
     <ClInclude Include="Thunk.h" />
     <ClInclude Include="TimeUtil.h" />
+    <ClInclude Include="UI\AsyncImageFileView.h" />
     <ClInclude Include="UI\Context.h" />
     <ClInclude Include="UI\Root.h" />
     <ClInclude Include="UI\Screen.h" />
@@ -547,6 +561,13 @@
     <ClInclude Include="UI\UIScreen.h" />
     <ClInclude Include="UI\View.h" />
     <ClInclude Include="UI\ViewGroup.h" />
+    <ClInclude Include="VR\OpenXRLoader.h" />
+    <ClInclude Include="VR\PPSSPPVR.h" />
+    <ClInclude Include="VR\VRBase.h" />
+    <ClInclude Include="VR\VRFramebuffer.h" />
+    <ClInclude Include="VR\VRInput.h" />
+    <ClInclude Include="VR\VRMath.h" />
+    <ClInclude Include="VR\VRRenderer.h" />
     <ClInclude Include="x64Analyzer.h" />
     <ClInclude Include="x64Emitter.h" />
   </ItemGroup>
@@ -861,6 +882,8 @@
     <ClCompile Include="GPU\Vulkan\VulkanBarrier.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanContext.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanDebug.cpp" />
+    <ClCompile Include="GPU\Vulkan\VulkanFramebuffer.cpp" />
+    <ClCompile Include="GPU\Vulkan\VulkanFrameData.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanImage.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanLoader.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanMemory.cpp" />
@@ -876,6 +899,7 @@
     <ClCompile Include="Math\lin\matrix4x4.cpp" />
     <ClCompile Include="Math\lin\vec3.cpp" />
     <ClCompile Include="Math\math_util.cpp" />
+    <ClCompile Include="Math\Statistics.cpp" />
     <ClCompile Include="Net\NetBuffer.cpp" />
     <ClCompile Include="Net\HTTPClient.cpp" />
     <ClCompile Include="Net\HTTPHeaders.cpp" />
@@ -886,6 +910,7 @@
     <ClCompile Include="Net\WebsocketServer.cpp" />
     <ClCompile Include="Profiler\Profiler.cpp" />
     <ClCompile Include="Render\DrawBuffer.cpp" />
+    <ClCompile Include="Render\ManagedTexture.cpp" />
     <ClCompile Include="Render\TextureAtlas.cpp" />
     <ClCompile Include="Render\Text\draw_text.cpp" />
     <ClCompile Include="Render\Text\draw_text_android.cpp" />
@@ -969,6 +994,7 @@
     <ClCompile Include="Thread\ThreadUtil.cpp" />
     <ClCompile Include="Thunk.cpp" />
     <ClCompile Include="TimeUtil.cpp" />
+    <ClCompile Include="UI\AsyncImageFileView.cpp" />
     <ClCompile Include="UI\Context.cpp" />
     <ClCompile Include="UI\Root.cpp" />
     <ClCompile Include="UI\Screen.cpp" />
@@ -977,6 +1003,13 @@
     <ClCompile Include="UI\UIScreen.cpp" />
     <ClCompile Include="UI\View.cpp" />
     <ClCompile Include="UI\ViewGroup.cpp" />
+    <ClCompile Include="VR\OpenXRLoader.cpp" />
+    <ClCompile Include="VR\PPSSPPVR.cpp" />
+    <ClCompile Include="VR\VRBase.cpp" />
+    <ClCompile Include="VR\VRFramebuffer.cpp" />
+    <ClCompile Include="VR\VRInput.cpp" />
+    <ClCompile Include="VR\VRMath.cpp" />
+    <ClCompile Include="VR\VRRenderer.cpp" />
     <ClCompile Include="x64Analyzer.cpp" />
     <ClCompile Include="x64Emitter.cpp" />
   </ItemGroup>

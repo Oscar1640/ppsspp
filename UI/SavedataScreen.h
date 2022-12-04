@@ -27,6 +27,7 @@
 #include "Common/UI/ViewGroup.h"
 
 #include "UI/MiscScreens.h"
+#include "UI/GameInfoCache.h"
 
 enum class SavedataSortOption {
 	FILENAME,
@@ -74,6 +75,8 @@ public:
 	void dialogFinished(const Screen *dialog, DialogResult result) override;
 	void sendMessage(const char *message, const char *value) override;
 
+	const char *tag() const override { return "Savedata"; }
+
 protected:
 	UI::EventReturn OnSavedataButtonClick(UI::EventParams &e);
 	UI::EventReturn OnSortClick(UI::EventParams &e);
@@ -85,4 +88,20 @@ protected:
 	SavedataBrowser *dataBrowser_;
 	SavedataBrowser *stateBrowser_;
 	std::string searchFilter_;
+};
+
+class GameIconView : public UI::InertView {
+public:
+	GameIconView(const Path &gamePath, float scale, UI::LayoutParams *layoutParams = 0)
+		: InertView(layoutParams), gamePath_(gamePath), scale_(scale) {}
+
+	void GetContentDimensions(const UIContext &dc, float &w, float &h) const override;
+	void Draw(UIContext &dc) override;
+	std::string DescribeText() const override { return ""; }
+
+private:
+	Path gamePath_;
+	float scale_ = 1.0f;
+	int textureWidth_ = 0;
+	int textureHeight_ = 0;
 };

@@ -51,7 +51,7 @@ static void ParseExtensionsString(const std::string& str, std::set<std::string> 
 	size_t next = 0;
 	for (size_t pos = 0, len = str.length(); pos < len; ++pos) {
 		if (str[pos] == ' ') {
-			output.insert(str.substr(next, pos - next));
+			output.emplace(str.substr(next, pos - next));
 			// Skip the delimiter itself.
 			next = pos + 1;
 		}
@@ -60,7 +60,7 @@ static void ParseExtensionsString(const std::string& str, std::set<std::string> 
 	if (next == 0 && str.length() != 0) {
 		output.insert(str);
 	} else if (next < str.length()) {
-		output.insert(str.substr(next));
+		output.emplace(str.substr(next));
 	}
 }
 
@@ -371,6 +371,7 @@ void CheckGLExtensions() {
 	gl_extensions.ARB_uniform_buffer_object = g_set_gl_extensions.count("GL_ARB_uniform_buffer_object") != 0;
 	gl_extensions.ARB_explicit_attrib_location = g_set_gl_extensions.count("GL_ARB_explicit_attrib_location") != 0;
 	gl_extensions.ARB_texture_non_power_of_two = g_set_gl_extensions.count("GL_ARB_texture_non_power_of_two") != 0;
+	gl_extensions.ARB_shader_stencil_export = g_set_gl_extensions.count("GL_ARB_shader_stencil_export") != 0;
 	if (gl_extensions.IsGLES) {
 		gl_extensions.EXT_blend_func_extended = g_set_gl_extensions.count("GL_EXT_blend_func_extended") != 0;
 		gl_extensions.OES_texture_npot = g_set_gl_extensions.count("GL_OES_texture_npot") != 0;
@@ -386,6 +387,7 @@ void CheckGLExtensions() {
 		gl_extensions.OES_texture_3D = g_set_gl_extensions.count("GL_OES_texture_3D") != 0;
 		gl_extensions.EXT_buffer_storage = g_set_gl_extensions.count("GL_EXT_buffer_storage") != 0;
 		gl_extensions.EXT_clip_cull_distance = g_set_gl_extensions.count("GL_EXT_clip_cull_distance") != 0;
+		gl_extensions.EXT_depth_clamp = g_set_gl_extensions.count("GL_EXT_depth_clamp") != 0;
 		gl_extensions.APPLE_clip_distance = g_set_gl_extensions.count("GL_APPLE_clip_distance") != 0;
 
 #if defined(__ANDROID__)
@@ -543,8 +545,8 @@ void CheckGLExtensions() {
 		}
 		if (gl_extensions.VersionGEThan(4, 3)) {
 			gl_extensions.ARB_copy_image = true;
+			gl_extensions.ARB_stencil_texturing = true;
 			// ARB_explicit_uniform_location = true;
-			// ARB_stencil_texturing = true;
 			// ARB_texture_view = true;
 			// ARB_vertex_attrib_binding = true;
 		}

@@ -89,7 +89,6 @@ struct CompatFlags {
 	bool DateLimited;
 	bool ShaderColorBitmask;
 	bool DisableFirstFrameReadback;
-	bool DisableRangeCulling;
 	bool MpegAvcWarmUp;
 	bool BlueToAlpha;
 	bool CenteredLines;
@@ -100,7 +99,19 @@ struct CompatFlags {
 	bool DeswizzleDepth;
 	bool SplitFramebufferMargin;
 	bool ForceLowerResolutionForEffectsOn;
+	bool ForceLowerResolutionForEffectsOff;
 	bool AllowDownloadCLUT;
+	bool NearestFilteringOnFramebufferCreate;
+	bool SecondaryTextureCache;
+	bool EnglishOrJapaneseOnly;
+	bool OldAdrenoPixelDepthRoundingGL;
+	bool ForceCircleButtonConfirm;
+};
+
+struct VRCompat {
+	bool IdentityViewHack;
+	bool Skyplane;
+	float UnitsPerMeter;
 };
 
 class IniFile;
@@ -114,13 +125,18 @@ public:
 	// Flags enforced read-only through const. Only way to change them is to load assets/compat.ini.
 	const CompatFlags &flags() const { return flags_; }
 
+	const VRCompat &vrCompat() const { return vrCompat_; }
+
 	void Load(const std::string &gameID);
 
 private:
 	void Clear();
 	void CheckSettings(IniFile &iniFile, const std::string &gameID);
+	void CheckVRSettings(IniFile &iniFile, const std::string &gameID);
 	void CheckSetting(IniFile &iniFile, const std::string &gameID, const char *option, bool *flag);
+	void CheckSetting(IniFile &iniFile, const std::string &gameID, const char *option, float *value);
 
 	CompatFlags flags_{};
+	VRCompat vrCompat_{};
 	std::set<std::string> ignored_;
 };
