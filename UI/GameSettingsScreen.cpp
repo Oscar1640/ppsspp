@@ -92,13 +92,8 @@ extern AndroidAudioState *g_audioState;
 
 GameSettingsScreen::GameSettingsScreen(const Path &gamePath, std::string gameID, bool editThenRestore)
 	: UIDialogScreenWithGameBackground(gamePath), gameID_(gameID), editThenRestore_(editThenRestore) {
-	lastVertical_ = UseVerticalLayout();
 	prevInflightFrames_ = g_Config.iInflightFrames;
 	analogSpeedMapped_ = KeyMap::AxisFromPspButton(VIRTKEY_SPEED_ANALOG, nullptr, nullptr, nullptr);
-}
-
-bool GameSettingsScreen::UseVerticalLayout() const {
-	return dp_yres > dp_xres * 1.1f;
 }
 
 // This needs before run CheckGPUFeatures()
@@ -873,7 +868,30 @@ void GameSettingsScreen::CreateViews() {
 
 	if (!g_Config.bSimpleUI) {
 	systemSettings->Add(new ItemHeader(sy->T("UI")));
-	systemSettings->Add(new Choice(sy->T("Language")))->OnClick.Handle(this, &GameSettingsScreen::OnLanguage);
+
+	auto langCodeToName = [](const char *value) -> std::string {
+		auto &mapping = g_Config.GetLangValuesMapping();
+		auto iter = mapping.find(value);
+		if (iter != mapping.end()) {
+			return iter->second.first;
+		}
+		return value;
+	};
+
+	systemSettings->Add(new ChoiceWithValueDisplay(&g_Config.sLanguageIni, sy->T("Language"), langCodeToName))->OnClick.Add([&](UI::EventParams &e) {
+		auto sy = GetI18NCategory("System");
+		auto langScreen = new NewLanguageScreen(sy->T("Language"));
+		langScreen->OnChoice.Add([&](UI::EventParams &e) {
+			screenManager()->RecreateAllViews();
+			if (host)
+				host->UpdateUI();
+			return UI::EVENT_DONE;
+		});
+		if (e.v)
+			langScreen->SetPopupOrigin(e.v);
+		screenManager()->push(langScreen);
+		return UI::EVENT_DONE;
+	});
 	systemSettings->Add(new CheckBox(&g_Config.bUISound, sy->T("UI Sound")));
 	const Path bgPng = GetSysDirectory(DIRECTORY_SYSTEM) / "background.png";
 	const Path bgJpg = GetSysDirectory(DIRECTORY_SYSTEM) / "background.jpg";
@@ -1318,16 +1336,6 @@ UI::EventReturn GameSettingsScreen::OnHwScaleChange(UI::EventParams &e) {
 	return UI::EVENT_DONE;
 }
 
-void GameSettingsScreen::update() {
-	UIScreen::update();
-
-	bool vertical = UseVerticalLayout();
-	if (vertical != lastVertical_) {
-		RecreateViews();
-		lastVertical_ = vertical;
-	}
-}
-
 void GameSettingsScreen::onFinish(DialogResult result) {
 	if (g_Config.bEnableSound) {
 		if (PSP_IsInited() && !IsAudioInitialised())
@@ -1650,25 +1658,6 @@ UI::EventReturn GameSettingsScreen::OnChangeMacAddress(UI::EventParams &e) {
 	);
 	screenManager()->push(confirmScreen);
 
-	return UI::EVENT_DONE;
-}
-
-UI::EventReturn GameSettingsScreen::OnLanguage(UI::EventParams &e) {
-	auto sy = GetI18NCategory("System");
-	auto langScreen = new NewLanguageScreen(sy->T("Language"));
-	langScreen->OnChoice.Handle(this, &GameSettingsScreen::OnLanguageChange);
-	if (e.v)
-		langScreen->SetPopupOrigin(e.v);
-	screenManager()->push(langScreen);
-	return UI::EVENT_DONE;
-}
-
-UI::EventReturn GameSettingsScreen::OnLanguageChange(UI::EventParams &e) {
-	screenManager()->RecreateAllViews();
-
-	if (host) {
-		host->UpdateUI();
-	}
 	return UI::EVENT_DONE;
 }
 

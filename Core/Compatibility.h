@@ -106,6 +106,7 @@ struct CompatFlags {
 	bool EnglishOrJapaneseOnly;
 	bool OldAdrenoPixelDepthRoundingGL;
 	bool ForceCircleButtonConfirm;
+	bool DisallowFramebufferAtOffset;
 };
 
 struct VRCompat {

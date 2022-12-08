@@ -78,6 +78,7 @@ public:
 	void SetHasDropShadow(bool has) { hasDropShadow_ = has; }
 	void SetDropShadowExpand(float s) { dropShadowExpand_ = s; }
 	void SetExclusiveTouch(bool exclusive) { exclusiveTouch_ = exclusive; }
+	void SetClickableBackground(bool clickableBackground) { clickableBackground_ = clickableBackground; }
 
 	void Lock() { modifyLock_.lock(); }
 	void Unlock() { modifyLock_.unlock(); }
@@ -96,6 +97,7 @@ protected:
 	Drawable bg_;
 	float dropShadowExpand_ = 0.0f;
 	bool hasDropShadow_ = false;
+	bool clickableBackground_ = false;
 	bool clip_ = false;
 	bool exclusiveTouch_ = false;
 };
@@ -104,6 +106,7 @@ protected:
 // It simply centers the child view.
 class FrameLayout : public ViewGroup {
 public:
+	FrameLayout(LayoutParams *layoutParams = nullptr) : ViewGroup(layoutParams) {}
 	void Measure(const UIContext &dc, MeasureSpec horiz, MeasureSpec vert) override;
 	void Layout() override;
 };
@@ -191,6 +194,7 @@ public:
 		spacing_ = spacing;
 	}
 	std::string DescribeLog() const override { return (orientation_ == ORIENT_HORIZONTAL ? "LinearLayoutHoriz: " : "LinearLayoutVert: ") + View::DescribeLog(); }
+	Margins padding;
 
 protected:
 	Orientation orientation_;
