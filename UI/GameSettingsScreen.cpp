@@ -296,6 +296,7 @@ void GameSettingsScreen::CreateViews() {
 	PopupSliderChoice *internalResolutions = graphicsSettings->Add(new PopupSliderChoice(&g_Config.iInternalResolution, 0, 32, gr->T("Rendering Resolution", "Rendering Resolution"), 1, screenManager(), gr->T("* PSP res, 0:Auto")));
 	internalResolutions->SetFormat("%ix");
 	internalResolutions->SetZeroLabel(gr->T("Auto (1:1)"));
+	internalResolutions->OnChange.Handle(this, &GameSettingsScreen::OnResolutionChange);
 	internalResolutions->SetEnabledFunc([]() {
 		return !g_Config.bSoftwareRendering && !g_Config.bSkipBufferEffects; });
 
