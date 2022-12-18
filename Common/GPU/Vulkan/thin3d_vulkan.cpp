@@ -348,7 +348,6 @@ public:
 
 	VkImageView GetImageView() {
 		if (vkTex_) {
-			vkTex_->Touch();
 			return vkTex_->GetImageView();
 		}
 		return VK_NULL_HANDLE;  // This would be bad.
@@ -356,7 +355,6 @@ public:
 
 	VkImageView GetImageArrayView() {
 		if (vkTex_) {
-			vkTex_->Touch();
 			return vkTex_->GetImageArrayView();
 		}
 		return VK_NULL_HANDLE;  // This would be bad.
@@ -384,7 +382,7 @@ class VKFramebuffer;
 class VKContext : public DrawContext {
 public:
 	VKContext(VulkanContext *vulkan);
-	virtual ~VKContext();
+	~VKContext();
 
 	void DebugAnnotate(const char *annotation) override;
 
@@ -526,7 +524,6 @@ private:
 	int curIBufferOffset_ = 0;
 
 	VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
-	VkDescriptorSetLayout frameDescSetLayout_ = VK_NULL_HANDLE;
 	VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 	VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
 	AutoRef<VKFramebuffer> curFramebuffer_;
@@ -673,8 +670,6 @@ VulkanTexture *VKContext::GetNullTexture() {
 		}
 		nullTexture_->UploadMip(cmdInit, 0, w, h, 0, bindBuf, bindOffset, w);
 		nullTexture_->EndCreate(cmdInit, false, VK_PIPELINE_STAGE_TRANSFER_BIT);
-	} else {
-		nullTexture_->Touch();
 	}
 	return nullTexture_;
 }
@@ -857,13 +852,24 @@ VKContext::VKContext(VulkanContext *vulkan)
 		break;
 	}
 
-	bool hasLazyMemory = false;
-	for (u32 i = 0; i < vulkan->GetMemoryProperties().memoryTypeCount; i++) {
-		if (vulkan->GetMemoryProperties().memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) {
-			hasLazyMemory = true;
-		}
+	switch (caps_.vendor) {
+	case GPUVendor::VENDOR_ARM:
+	case GPUVendor::VENDOR_IMGTEC:
+	case GPUVendor::VENDOR_QUALCOMM:
+		caps_.isTilingGPU = true;
+		break;
+	default:
+		caps_.isTilingGPU = false;
+		break;
 	}
-	caps_.isTilingGPU = hasLazyMemory && caps_.vendor != GPUVendor::VENDOR_APPLE;
+
+	// Hide D3D9 when we know it likely won't work well.
+#if PPSSPP_PLATFORM(WINDOWS)
+	caps_.supportsD3D9 = true;
+	if (!strcmp(deviceProps.deviceName, "Intel(R) Iris(R) Xe Graphics")) {
+		caps_.supportsD3D9 = false;
+	}
+#endif
 
 	// VkSampleCountFlagBits is arranged correctly for our purposes.
 	// Only support MSAA levels that have support for all three of color, depth, stencil.
@@ -988,23 +994,12 @@ VKContext::VKContext(VulkanContext *vulkan)
 	VkResult res = vkCreateDescriptorSetLayout(device_, &dsl, nullptr, &descriptorSetLayout_);
 	_assert_(VK_SUCCESS == res);
 
-	VkDescriptorSetLayoutBinding frameBindings[1]{};
-	frameBindings[0].descriptorCount = 1;
-	frameBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	frameBindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-	frameBindings[0].binding = 0;
-
-	dsl.bindingCount = ARRAY_SIZE(frameBindings);
-	dsl.pBindings = frameBindings;
-	res = vkCreateDescriptorSetLayout(device_, &dsl, nullptr, &frameDescSetLayout_);
-	_dbg_assert_(VK_SUCCESS == res);
-
 	vulkan_->SetDebugName(descriptorSetLayout_, VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, "thin3d_d_layout");
 
 	VkPipelineLayoutCreateInfo pl = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	pl.pPushConstantRanges = nullptr;
 	pl.pushConstantRangeCount = 0;
-	VkDescriptorSetLayout setLayouts[2] = { frameDescSetLayout_, descriptorSetLayout_ };
+	VkDescriptorSetLayout setLayouts[1] = { descriptorSetLayout_ };
 	pl.setLayoutCount = ARRAY_SIZE(setLayouts);
 	pl.pSetLayouts = setLayouts;
 	res = vkCreatePipelineLayout(device_, &pl, nullptr, &pipelineLayout_);
@@ -1026,7 +1021,6 @@ VKContext::~VKContext() {
 		delete frame_[i].pushBuffer;
 	}
 	vulkan_->Delete().QueueDeleteDescriptorSetLayout(descriptorSetLayout_);
-	vulkan_->Delete().QueueDeleteDescriptorSetLayout(frameDescSetLayout_);
 	vulkan_->Delete().QueueDeletePipelineLayout(pipelineLayout_);
 	vulkan_->Delete().QueueDeletePipelineCache(pipelineCache_);
 }
@@ -1188,16 +1182,12 @@ Pipeline *VKContext::CreateGraphicsPipeline(const PipelineDesc &desc, const char
 		}
 	}
 
-	if (input) {
-		for (int i = 0; i < (int)input->bindings.size(); i++) {
-			pipeline->stride[i] = input->bindings[i].stride;
-		}
-	} else {
-		pipeline->stride[0] = 0;
-	}
-	_dbg_assert_(input->bindings.size() == 1);
+	_dbg_assert_(input && input->bindings.size() == 1);
 	_dbg_assert_((int)input->attributes.size() == (int)input->visc.vertexAttributeDescriptionCount);
 
+	for (int i = 0; i < (int)input->bindings.size(); i++) {
+		pipeline->stride[i] = input->bindings[i].stride;
+	}
 	gDesc.ibd = input->bindings[0];
 	for (size_t i = 0; i < input->attributes.size(); i++) {
 		gDesc.attrs[i] = input->attributes[i];
@@ -1216,7 +1206,7 @@ Pipeline *VKContext::CreateGraphicsPipeline(const PipelineDesc &desc, const char
 	raster->ToVulkan(&gDesc.rs);
 
 	// Copy bindings from input layout.
-	gDesc.inputAssembly.topology = primToVK[(int)desc.prim];
+	gDesc.topology = primToVK[(int)desc.prim];
 
 	// We treat the three stencil states as a unit in other places, so let's do that here too.
 	const VkDynamicState dynamics[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK };
@@ -1366,7 +1356,7 @@ public:
 	VKBuffer(size_t size, uint32_t flags) : dataSize_(size) {
 		data_ = new uint8_t[size];
 	}
-	~VKBuffer() override {
+	~VKBuffer() {
 		delete[] data_;
 	}
 
@@ -1769,8 +1759,6 @@ uint64_t VKContext::GetNativeObject(NativeObject obj, void *srcObject) {
 		return (uint64_t)curFramebuffer_->GetFB()->color.texAllLayersView;
 	case NativeObject::BOUND_FRAMEBUFFER_COLOR_IMAGEVIEW_RT:
 		return (uint64_t)curFramebuffer_->GetFB()->GetRTView();
-	case NativeObject::FRAME_DATA_DESC_SET_LAYOUT:
-		return (uint64_t)frameDescSetLayout_;
 	case NativeObject::THIN3D_PIPELINE_LAYOUT:
 		return (uint64_t)pipelineLayout_;
 

@@ -50,7 +50,7 @@
 #include "GPU/GPUInterface.h"
 #include "GPU/GPUState.h"
 
-static size_t FormatFramebufferName(VirtualFramebuffer *vfb, char *tag, size_t len) {
+static size_t FormatFramebufferName(const VirtualFramebuffer *vfb, char *tag, size_t len) {
 	return snprintf(tag, len, "FB_%08x_%08x_%dx%d_%s", vfb->fb_address, vfb->z_address, vfb->bufferWidth, vfb->bufferHeight, GeBufferFormatToString(vfb->fb_format));
 }
 
@@ -82,14 +82,14 @@ FramebufferManagerCommon::~FramebufferManagerCommon() {
 	delete presentation_;
 }
 
-void FramebufferManagerCommon::Init() {
+void FramebufferManagerCommon::Init(int msaaLevel) {
 	// We may need to override the render size if the shader is upscaling or SSAA.
 	NotifyDisplayResized();
-	NotifyRenderResized();
+	NotifyRenderResized(msaaLevel);
 }
 
-bool FramebufferManagerCommon::UpdateRenderSize() {
-	const bool newRender = renderWidth_ != (float)PSP_CoreParameter().renderWidth || renderHeight_ != (float)PSP_CoreParameter().renderHeight || msaaLevel_ != g_Config.iMultiSampleLevel;
+bool FramebufferManagerCommon::UpdateRenderSize(int msaaLevel) {
+	const bool newRender = renderWidth_ != (float)PSP_CoreParameter().renderWidth || renderHeight_ != (float)PSP_CoreParameter().renderHeight || msaaLevel_ != msaaLevel;
 
 	int effectiveBloomHack = g_Config.iBloomHack;
 	if (PSP_CoreParameter().compat.flags().ForceLowerResolutionForEffectsOn) {
@@ -104,7 +104,7 @@ bool FramebufferManagerCommon::UpdateRenderSize() {
 	renderWidth_ = (float)PSP_CoreParameter().renderWidth;
 	renderHeight_ = (float)PSP_CoreParameter().renderHeight;
 	renderScaleFactor_ = (float)PSP_CoreParameter().renderScaleFactor;
-	msaaLevel_ = g_Config.iMultiSampleLevel;
+	msaaLevel_ = msaaLevel;
 
 	bloomHack_ = effectiveBloomHack;
 	useBufferedRendering_ = newBuffered;
@@ -1149,7 +1149,10 @@ void FramebufferManagerCommon::DrawPixels(VirtualFramebuffer *vfb, int dstX, int
 		draw_->BindTextures(0, 1, &pixelsTex, Draw::TextureBindFlags::VULKAN_BIND_ARRAY);
 
 		// TODO: Replace with draw2D_.Blit() directly.
-		DrawActiveTexture(dstX, dstY, width, height, vfb->bufferWidth, vfb->bufferHeight, u0, v0, u1, v1, ROTATION_LOCKED_HORIZONTAL, flags);
+		DrawActiveTexture(dstX, dstY, width, height,
+			vfb ? vfb->bufferWidth : pixel_xres,
+			vfb ? vfb->bufferHeight : pixel_yres,
+			u0, v0, u1, v1, ROTATION_LOCKED_HORIZONTAL, flags);
 
 		gpuStats.numUploads++;
 		pixelsTex->Release();
@@ -1669,9 +1672,7 @@ void FramebufferManagerCommon::ResizeFramebufFBO(VirtualFramebuffer *vfb, int w,
 	char tag[128];
 	size_t len = FormatFramebufferName(vfb, tag, sizeof(tag));
 
-	int msaaLevel = g_Config.iMultiSampleLevel;
-
-	vfb->fbo = draw_->CreateFramebuffer({ vfb->renderWidth, vfb->renderHeight, 1, GetFramebufferLayers(), msaaLevel, true, tag });
+	vfb->fbo = draw_->CreateFramebuffer({ vfb->renderWidth, vfb->renderHeight, 1, GetFramebufferLayers(), msaaLevel_, true, tag });
 	if (Memory::IsVRAMAddress(vfb->fb_address) && vfb->fb_stride != 0) {
 		NotifyMemInfo(MemBlockFlags::ALLOC, vfb->fb_address, ColorBufferByteSize(vfb), tag, len);
 	}
@@ -1998,7 +1999,7 @@ bool FramebufferManagerCommon::FindTransferFramebuffer(u32 basePtr, int stride_p
 		}
 	}
 
-	if (!candidates.empty()) {
+	if (best) {
 		*rect = *best;
 		return true;
 	} else {
@@ -2405,7 +2406,7 @@ void FramebufferManagerCommon::NotifyDisplayResized() {
 	updatePostShaders_ = true;
 }
 
-void FramebufferManagerCommon::NotifyRenderResized() {
+void FramebufferManagerCommon::NotifyRenderResized(int msaaLevel) {
 	gstate_c.skipDrawReason &= ~SKIPDRAW_NON_DISPLAYED_FB;
 
 	int w, h, scaleFactor;
@@ -2414,7 +2415,7 @@ void FramebufferManagerCommon::NotifyRenderResized() {
 	PSP_CoreParameter().renderHeight = h;
 	PSP_CoreParameter().renderScaleFactor = scaleFactor;
 
-	if (UpdateRenderSize()) {
+	if (UpdateRenderSize(msaaLevel)) {
 		DestroyAllFBOs();
 	}
 
@@ -2861,6 +2862,8 @@ void FramebufferManagerCommon::DownloadFramebufferForClut(u32 fb_address, u32 lo
 void FramebufferManagerCommon::RebindFramebuffer(const char *tag) {
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 	shaderManager_->DirtyLastShader();
+	// Needed for D3D11 to run validation clean. I don't think it's actually an issue.
+	// textureCache_->ForgetLastTexture();
 	if (currentRenderVfb_ && currentRenderVfb_->fbo) {
 		draw_->BindFramebufferAsRenderTarget(currentRenderVfb_->fbo, { Draw::RPAction::KEEP, Draw::RPAction::KEEP, Draw::RPAction::KEEP }, tag);
 	} else {

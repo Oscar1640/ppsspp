@@ -55,7 +55,7 @@
 GPU_GLES::GPU_GLES(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	: GPUCommon(gfxCtx, draw), drawEngine_(draw), fragmentTestCache_(draw) {
 	UpdateVsyncInterval(true);
-	gstate_c.useFlags = CheckGPUFeatures();
+	gstate_c.SetUseFlags(CheckGPUFeatures());
 
 	shaderManagerGL_ = new ShaderManagerGLES(draw);
 	framebufferManagerGL_ = new FramebufferManagerGLES(draw);
@@ -74,7 +74,7 @@ GPU_GLES::GPU_GLES(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	framebufferManagerGL_->SetTextureCache(textureCacheGL_);
 	framebufferManagerGL_->SetShaderManager(shaderManagerGL_);
 	framebufferManagerGL_->SetDrawEngine(&drawEngine_);
-	framebufferManagerGL_->Init();
+	framebufferManagerGL_->Init(msaaLevel_);
 	textureCacheGL_->SetFramebufferManager(framebufferManagerGL_);
 	textureCacheGL_->SetShaderManager(shaderManagerGL_);
 	textureCacheGL_->SetDrawEngine(&drawEngine_);
@@ -146,7 +146,7 @@ GPU_GLES::~GPU_GLES() {
 	delete textureCacheGL_;
 
 	// Clear features so they're not visible in system info.
-	gstate_c.useFlags = 0;
+	gstate_c.SetUseFlags(0);
 }
 
 // Take the raw GL extension and versioning data and turn into feature flags.

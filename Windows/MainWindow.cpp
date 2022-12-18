@@ -195,7 +195,7 @@ namespace MainWindow
 		if (g_Config.UseFullScreen() || inFullscreenResize)
 			return;
 
-		WINDOWPLACEMENT placement;
+		WINDOWPLACEMENT placement{};
 		GetWindowPlacement(hwndMain, &placement);
 		if (placement.showCmd == SW_SHOWNORMAL) {
 			RECT rc;
@@ -1008,6 +1008,7 @@ namespace MainWindow
 			break;
 
 		case WM_CLOSE:
+			MainThread_Stop();
 			InputDevice::StopPolling();
 			WindowsRawInput::Shutdown();
 			return DefWindowProc(hWnd,message,wParam,lParam);
@@ -1016,8 +1017,9 @@ namespace MainWindow
 			KillTimer(hWnd, TIMER_CURSORUPDATE);
 			KillTimer(hWnd, TIMER_CURSORMOVEUPDATE);
 			KillTimer(hWnd, TIMER_WHEELRELEASE);
+			// Main window is gone, this tells the message loop to exit.
 			PostQuitMessage(0);
-			break;
+			return 0;
 
 		case WM_USER + 1:
 			NotifyDebuggerMapLoaded();

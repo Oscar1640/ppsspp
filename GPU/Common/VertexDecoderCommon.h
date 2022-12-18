@@ -301,7 +301,7 @@ private:
 	int vtype_;
 };
 // Debugging utilities
-void PrintDecodedVertex(VertexReader &vtx);
+void PrintDecodedVertex(const VertexReader &vtx);
 
 
 class VertexDecoder;
@@ -583,7 +583,7 @@ private:
 	void Jit_AnyS16Morph(int srcoff, int dstoff);
 	void Jit_AnyFloatMorph(int srcoff, int dstoff);
 
-	const VertexDecoder *dec_;
+	const VertexDecoder *dec_ = nullptr;
 #if PPSSPP_ARCH(ARM64)
 	Arm64Gen::ARM64FloatEmitter fp;
 #endif

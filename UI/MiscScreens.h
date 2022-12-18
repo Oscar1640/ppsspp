@@ -52,7 +52,8 @@ public:
 protected:
 	Path gamePath_;
 
-	bool darkenGameBackground_ = false;
+	bool forceTransparent_ = false;
+	bool darkenGameBackground_ = true;
 };
 
 class UIDialogScreenWithBackground : public UIDialogScreen {
@@ -73,6 +74,8 @@ public:
 	void sendMessage(const char *message, const char *value) override;
 protected:
 	Path gamePath_;
+
+	bool forceTransparent_ = false;
 	bool darkenGameBackground_ = true;
 };
 
@@ -161,8 +164,6 @@ public:
 	const char *tag() const override { return "Credits"; }
 
 private:
-	UI::EventReturn OnOK(UI::EventParams &e);
-
 	UI::EventReturn OnSupport(UI::EventParams &e);
 	UI::EventReturn OnPPSSPPOrg(UI::EventParams &e);
 	UI::EventReturn OnPrivacy(UI::EventParams &e);
@@ -180,9 +181,9 @@ public:
 	void SetBottomCutoff(float y) {
 		cutOffY_ = y;
 	}
-	void Show(const std::string &text, UI::View *refView = nullptr);
+	void Show(const std::string &text, const UI::View *refView = nullptr);
 
-	void Draw(UIContext &dc);
+	void Draw(UIContext &dc) override;
 	std::string GetText() const;
 
 private:
@@ -192,4 +193,4 @@ private:
 	bool showing_ = false;
 };
 
-uint32_t GetBackgroundColorWithAlpha(UIContext &dc);
+uint32_t GetBackgroundColorWithAlpha(const UIContext &dc);

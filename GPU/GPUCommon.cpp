@@ -428,6 +428,8 @@ GPUCommon::GPUCommon(GraphicsContext *gfxCtx, Draw::DrawContext *draw) :
 	ResetMatrices();
 
 	PPGeSetDrawContext(draw);
+
+	UpdateMSAALevel(draw);
 }
 
 GPUCommon::~GPUCommon() {
@@ -484,6 +486,8 @@ void GPUCommon::BeginHostFrame() {
 	gstate_c.Dirty(DIRTY_ALL);
 
 	UpdateCmdInfo();
+
+	UpdateMSAALevel(draw_);
 	CheckConfigChanged();
 	CheckDisplayResized();
 	CheckRenderResized();
@@ -636,7 +640,7 @@ void GPUCommon::ClearCacheNextFrame() {
 void GPUCommon::CheckConfigChanged() {
 	if (configChanged_) {
 		ClearCacheNextFrame();
-		gstate_c.useFlags = CheckGPUFeatures();
+		gstate_c.SetUseFlags(CheckGPUFeatures());
 		drawEngineCommon_->NotifyConfigChanged();
 		textureCache_->NotifyConfigChanged();
 		framebufferManager_->NotifyConfigChanged();
@@ -659,7 +663,7 @@ void GPUCommon::CheckDisplayResized() {
 
 void GPUCommon::CheckRenderResized() {
 	if (renderResized_) {
-		framebufferManager_->NotifyRenderResized();
+		framebufferManager_->NotifyRenderResized(msaaLevel_);
 		renderResized_ = false;
 	}
 }
@@ -1250,7 +1254,7 @@ void GPUCommon::BeginFrame() {
 
 	if (drawEngineCommon_->EverUsedExactEqualDepth() && !sawExactEqualDepth_) {
 		sawExactEqualDepth_ = true;
-		gstate_c.useFlags = CheckGPUFeatures();
+		gstate_c.SetUseFlags(CheckGPUFeatures());
 	}
 }
 
@@ -3584,4 +3588,14 @@ u32 GPUCommon::CheckGPUFeaturesLate(u32 features) const {
 	}
 
 	return features;
+}
+
+void GPUCommon::UpdateMSAALevel(Draw::DrawContext *draw) {
+	int level = g_Config.iMultiSampleLevel;
+	if (draw && draw->GetDeviceCaps().multiSampleLevelsMask & (1 << level)) {
+		msaaLevel_ = level;
+	} else {
+		// Didn't support the configured level, so revert to 0.
+		msaaLevel_ = 0;
+	}
 }

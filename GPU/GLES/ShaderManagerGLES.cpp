@@ -195,7 +195,7 @@ LinkedShader::LinkedShader(GLRenderManager *render, VShaderID VSID, Shader *vs, 
 	initialize.push_back({ &u_tess_weights_v, 0, TEX_SLOT_SPLINE_WEIGHTS_V });
 
 	GLRProgramFlags flags{};
-	flags.supportDualSource = (gstate_c.useFlags & GPU_USE_DUALSOURCE_BLEND) != 0;
+	flags.supportDualSource = gstate_c.Use(GPU_USE_DUALSOURCE_BLEND);
 	if (!VSID.Bit(VS_BIT_IS_THROUGH) && gstate_c.Use(GPU_USE_DEPTH_CLAMP)) {
 		flags.useClipDistance0 = true;
 		if (VSID.Bit(VS_BIT_VERTEX_RANGE_CULLING) && gstate_c.Use(GPU_USE_CLIP_DISTANCE))
@@ -204,7 +204,7 @@ LinkedShader::LinkedShader(GLRenderManager *render, VShaderID VSID, Shader *vs, 
 		flags.useClipDistance0 = true;
 	}
 
-	program = render->CreateProgram(shaders, semantics, queries, initialize, flags);
+	program = render->CreateProgram(shaders, semantics, queries, initialize, nullptr, flags);
 
 	// The rest, use the "dirty" mechanism.
 	dirtyUniforms = DIRTY_ALL_UNIFORMS;
@@ -341,7 +341,9 @@ static inline bool GuessVRDrawingHUD(bool is2D, bool flatScreen) {
 	//HUD must have full vertex alpha
 	else if (!gstate_c.vertexFullAlpha && gstate.getDepthTestFunction() == GE_COMP_NEVER) hud = false;
 	//HUD cannot render FB screenshot
-	else if (gstate_c.curTextureHeight % 136 <= 1) hud = false;
+	else if (gstate_c.curTextureHeight % 68 <= 1) hud = false;
+	//HUD cannot be rendered with add function
+	else if (gstate.getTextureFunction() == GETexFunc::GE_TEXFUNC_ADD) hud = false;
 	//HUD cannot be rendered with replace function
 	else if (gstate.getTextureFunction() == GETexFunc::GE_TEXFUNC_REPLACE) hud = false;
 	//HUD cannot be rendered with full clear color mask
@@ -931,7 +933,7 @@ std::string ShaderManagerGLES::DebugGetShaderString(std::string id, DebugShaderT
 // as sometimes these features might have an effect on the ID bits.
 
 #define CACHE_HEADER_MAGIC 0x83277592
-#define CACHE_VERSION 16
+#define CACHE_VERSION 17
 struct CacheHeader {
 	uint32_t magic;
 	uint32_t version;
@@ -952,7 +954,7 @@ void ShaderManagerGLES::Load(const Path &filename) {
 	if (!f.ReadArray(&header, 1)) {
 		return;
 	}
-	if (header.magic != CACHE_HEADER_MAGIC || header.version != CACHE_VERSION || header.useFlags != gstate_c.useFlags) {
+	if (header.magic != CACHE_HEADER_MAGIC || header.version != CACHE_VERSION || header.useFlags != gstate_c.GetUseFlags()) {
 		return;
 	}
 	diskCachePending_.start = time_now_d();
@@ -1108,7 +1110,7 @@ void ShaderManagerGLES::Save(const Path &filename) {
 	header.magic = CACHE_HEADER_MAGIC;
 	header.version = CACHE_VERSION;
 	header.reserved = 0;
-	header.useFlags = gstate_c.useFlags;
+	header.useFlags = gstate_c.GetUseFlags();
 	header.numVertexShaders = GetNumVertexShaders();
 	header.numFragmentShaders = GetNumFragmentShaders();
 	header.numLinkedPrograms = GetNumPrograms();

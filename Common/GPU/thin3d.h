@@ -251,7 +251,6 @@ enum class NativeObject {
 	TEXTURE_VIEW,
 	NULL_IMAGEVIEW,
 	NULL_IMAGEVIEW_ARRAY,
-	FRAME_DATA_DESC_SET_LAYOUT,
 	THIN3D_PIPELINE_LAYOUT,
 };
 
@@ -483,10 +482,7 @@ public:
 	virtual ShaderStage GetStage() const = 0;
 };
 
-class Pipeline : public RefCountedObject {
-public:
-	virtual ~Pipeline() {}
-};
+class Pipeline : public RefCountedObject { };
 
 class RasterState : public RefCountedObject {};
 
@@ -580,6 +576,9 @@ struct DeviceCaps {
 	bool multiViewSupported;
 	bool isTilingGPU;  // This means that it benefits from correct store-ops, msaa without backing memory, etc.
 	bool sampleRateShadingSupported;
+
+	// From the other backends, we can detect if D3D9 support is known bad (like on Xe) and disable it.
+	bool supportsD3D9;
 
 	u32 multiSampleLevelsMask;  // Bit n is set if (1 << n) is a valid multisample level. Bit 0 is always set.
 	std::string deviceName;  // The device name to use when creating the thin3d context, to get the same one.

@@ -474,7 +474,6 @@ void DrawEngineGLES::DoFlush() {
 	vertexCountInDrawCalls_ = 0;
 	decodeCounter_ = 0;
 	dcid_ = 0;
-	prevPrim_ = GE_PRIM_INVALID;
 	gstate_c.vertexFullAlpha = true;
 	framebufferManager_->SetColorUpdated(gstate_c.skipDrawReason);
 
@@ -485,10 +484,6 @@ void DrawEngineGLES::DoFlush() {
 	gstate_c.vertBounds.maxV = 0;
 
 	GPUDebug::NotifyDraw();
-}
-
-bool DrawEngineGLES::IsCodePtrVertexDecoder(const u8 *ptr) const {
-	return decJitCache_->IsInSpace(ptr);
 }
 
 // TODO: Refactor this to a single USE flag.

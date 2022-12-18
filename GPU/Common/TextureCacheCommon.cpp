@@ -1036,7 +1036,7 @@ bool TextureCacheCommon::MatchFramebuffer(
 			}
 			return true;
 		} else if (IsClutFormat((GETextureFormat)(entry.format)) || IsDXTFormat((GETextureFormat)(entry.format))) {
-			WARN_LOG_ONCE(fourEightBit, G3D, "%s fb_format not matching framebuffer of format %s at %08x/%d", GeTextureFormatToString(entry.format), GeBufferFormatToString(fb_format), fb_address, fb_stride);
+			WARN_LOG_ONCE(fourEightBit, G3D, "%s texture format not matching framebuffer of format %s at %08x/%d", GeTextureFormatToString(entry.format), GeBufferFormatToString(fb_format), fb_address, fb_stride);
 			return false;
 		}
 
@@ -1556,15 +1556,16 @@ static CheckAlphaResult DecodeDXTBlocks(uint8_t *out, int outPitch, uint32_t tex
 		u32 blockIndex = (y / 4) * (bufw / 4);
 		int blockHeight = std::min(h - y, 4);
 		for (int x = 0; x < minw; x += 4) {
+			int blockWidth = std::min(minw - x, 4);
 			switch (n) {
 			case 1:
-				DecodeDXT1Block(dst + outPitch32 * y + x, (const DXT1Block *)src + blockIndex, outPitch32, blockHeight, &alphaSum);
+				DecodeDXT1Block(dst + outPitch32 * y + x, (const DXT1Block *)src + blockIndex, outPitch32, blockWidth, blockHeight, &alphaSum);
 				break;
 			case 3:
-				DecodeDXT3Block(dst + outPitch32 * y + x, (const DXT3Block *)src + blockIndex, outPitch32, blockHeight);
+				DecodeDXT3Block(dst + outPitch32 * y + x, (const DXT3Block *)src + blockIndex, outPitch32, blockWidth, blockHeight);
 				break;
 			case 5:
-				DecodeDXT5Block(dst + outPitch32 * y + x, (const DXT5Block *)src + blockIndex, outPitch32, blockHeight);
+				DecodeDXT5Block(dst + outPitch32 * y + x, (const DXT5Block *)src + blockIndex, outPitch32, blockWidth, blockHeight);
 				break;
 			}
 			blockIndex++;
@@ -1673,7 +1674,9 @@ CheckAlphaResult TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, G
 		case GE_CMODE_16BIT_ABGR5551:
 		case GE_CMODE_16BIT_ABGR4444:
 		{
-			if (clutAlphaLinear_ && mipmapShareClut && !expandTo32bit) {
+			// The w > 1 check is to not need a case that handles a single pixel
+			// in DeIndexTexture4Optimal<u16>.
+			if (clutAlphaLinear_ && mipmapShareClut && !expandTo32bit && w >= 4) {
 				// We don't bother with fullalpha here (clutAlphaLinear_)
 				// Here, reverseColors means the CLUT is already reversed.
 				if (reverseColors) {
@@ -2643,15 +2646,22 @@ bool TextureCacheCommon::PrepareBuildTexture(BuildTexturePlan &plan, TexCacheEnt
 		plan.scaleFactor = plan.scaleFactor > 4 ? 4 : (plan.scaleFactor > 2 ? 2 : 1);
 	}
 
+	bool isFakeMipmapChange = IsFakeMipmapChange();
+
 	if (plan.badMipSizes) {
 		// Check for pure 3D texture.
 		int tw = gstate.getTextureWidth(0);
 		int th = gstate.getTextureHeight(0);
 		bool pure3D = true;
-		for (int i = 0; i < plan.levelsToLoad; i++) {
-			if (gstate.getTextureWidth(i) != gstate.getTextureWidth(0) || gstate.getTextureHeight(i) != gstate.getTextureHeight(0)) {
-				pure3D = false;
+		if (!isFakeMipmapChange) {
+			for (int i = 0; i < plan.levelsToLoad; i++) {
+				if (gstate.getTextureWidth(i) != gstate.getTextureWidth(0) || gstate.getTextureHeight(i) != gstate.getTextureHeight(0)) {
+					pure3D = false;
+					break;
+				}
 			}
+		} else {
+			pure3D = false;
 		}
 
 		if (pure3D && draw_->GetDeviceCaps().texture3DSupported) {
@@ -2774,11 +2784,13 @@ bool TextureCacheCommon::PrepareBuildTexture(BuildTexturePlan &plan, TexCacheEnt
 
 	// Always load base level texture here 
 	plan.baseLevelSrc = 0;
-	if (IsFakeMipmapChange()) {
+	if (isFakeMipmapChange) {
 		// NOTE: Since the level is not part of the cache key, we assume it never changes.
 		plan.baseLevelSrc = std::max(0, gstate.getTexLevelOffset16() / 16);
 		plan.levelsToCreate = 1;
 		plan.levelsToLoad = 1;
+		// Make sure we already decided not to do a 3D texture above.
+		_dbg_assert_(plan.depth == 1);
 	}
 
 	if (plan.isVideo || plan.depth != 1 || plan.decodeToClut8) {

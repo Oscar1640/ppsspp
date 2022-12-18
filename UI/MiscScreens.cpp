@@ -157,7 +157,6 @@ public:
 
 class FloatingSymbolsAnimation : public Animation {
 public:
-	~FloatingSymbolsAnimation() override {}
 	void Draw(UIContext &dc, double t, float alpha, float x, float y, float z) override {
 		float xres = dc.GetBounds().w;
 		float yres = dc.GetBounds().h;
@@ -196,7 +195,6 @@ private:
 
 class RecentGamesAnimation : public Animation {
 public:
-	~RecentGamesAnimation() override {}
 	void Draw(UIContext &dc, double t, float alpha, float x, float y, float z) override {
 		if (lastIndex_ == nextIndex_) {
 			CheckNext(dc, t);
@@ -356,15 +354,15 @@ void DrawBackground(UIContext &dc, float alpha, float x, float y, float z) {
 	}
 }
 
-uint32_t GetBackgroundColorWithAlpha(UIContext &dc) {
+uint32_t GetBackgroundColorWithAlpha(const UIContext &dc) {
 	return colorAlpha(colorBlend(dc.GetTheme().backgroundColor, 0, 0.5f), 0.65f);  // 0.65 = 166 = A6
 }
 
-void DrawGameBackground(UIContext &dc, const Path &gamePath, float x, float y, float z, bool darkenBackground) {
+void DrawGameBackground(UIContext &dc, const Path &gamePath, float x, float y, float z, bool transparent, bool darkenBackground) {
 	using namespace Draw;
 	using namespace UI;
 
-	if (PSP_IsInited() && !g_Config.bSkipBufferEffects) {
+	if (transparent && PSP_IsInited() && !g_Config.bSkipBufferEffects) {
 		gpu->CheckDisplayResized();
 		gpu->CheckConfigChanged();
 		gpu->CopyDisplayToOutput(true);
@@ -409,7 +407,7 @@ void DrawGameBackground(UIContext &dc, const Path &gamePath, float x, float y, f
 	}
 }
 
-void HandleCommonMessages(const char *message, const char *value, ScreenManager *manager, Screen *activeScreen) {
+void HandleCommonMessages(const char *message, const char *value, ScreenManager *manager, const Screen *activeScreen) {
 	bool isActiveScreen = manager->topScreen() == activeScreen;
 
 	if (!strcmp(message, "clear jit") && PSP_IsInited()) {
@@ -459,7 +457,7 @@ void UIScreenWithGameBackground::DrawBackground(UIContext &dc) {
 	float x, y, z;
 	screenManager()->getFocusPosition(x, y, z);
 	if (!gamePath_.empty()) {
-		DrawGameBackground(dc, gamePath_, x, y, z, darkenGameBackground_);
+		DrawGameBackground(dc, gamePath_, x, y, z, (g_Config.bTransparentBackground || forceTransparent_), darkenGameBackground_);
 	} else {
 		::DrawBackground(dc, 1.0f, x, y, z);
 		dc.Flush();
@@ -479,7 +477,12 @@ void UIDialogScreenWithGameBackground::DrawBackground(UIContext &dc) {
 	using namespace Draw;
 	float x, y, z;
 	screenManager()->getFocusPosition(x, y, z);
-	DrawGameBackground(dc, gamePath_, x, y, z, darkenGameBackground_);
+	if (!gamePath_.empty()) {
+		DrawGameBackground(dc, gamePath_, x, y, z, (g_Config.bTransparentBackground || forceTransparent_), darkenGameBackground_);
+	} else {
+		::DrawBackground(dc, 1.0f, x, y, z);
+		dc.Flush();
+	}
 }
 
 void UIDialogScreenWithGameBackground::sendMessage(const char *message, const char *value) {
@@ -808,7 +811,7 @@ void CreditsScreen::CreateViews() {
 
 	root_ = new AnchorLayout(new LayoutParams(FILL_PARENT, FILL_PARENT));
 	Button *back = root_->Add(new Button(di->T("Back"), new AnchorLayoutParams(260, 64, NONE, NONE, 10, 10, false)));
-	back->OnClick.Handle(this, &CreditsScreen::OnOK);
+	back->OnClick.Handle<UIScreen>(this, &UIScreen::OnOK);
 	root_->SetDefaultFocusView(back);
 
 	root_->Add(new Button(cr->T("PPSSPP Forums"), new AnchorLayoutParams(260, 64, 10, NONE, NONE, 84, false)))->OnClick.Handle(this, &CreditsScreen::OnForums);
@@ -857,11 +860,6 @@ UI::EventReturn CreditsScreen::OnForums(UI::EventParams &e) {
 UI::EventReturn CreditsScreen::OnShare(UI::EventParams &e) {
 	auto cr = GetI18NCategory("PSPCredits");
 	System_SendMessage("sharetext", cr->T("CheckOutPPSSPP", "Check out PPSSPP, the awesome PSP emulator: https://www.ppsspp.org/"));
-	return UI::EVENT_DONE;
-}
-
-UI::EventReturn CreditsScreen::OnOK(UI::EventParams &e) {
-	TriggerFinish(DR_OK);
 	return UI::EVENT_DONE;
 }
 
@@ -1057,7 +1055,7 @@ SettingInfoMessage::SettingInfoMessage(int align, UI::AnchorLayoutParams *lp)
 	Add(new UI::Spacer(10.0f));
 }
 
-void SettingInfoMessage::Show(const std::string &text, UI::View *refView) {
+void SettingInfoMessage::Show(const std::string &text, const UI::View *refView) {
 	if (refView) {
 		Bounds b = refView->GetBounds();
 		const UI::AnchorLayoutParams *lp = GetLayoutParams()->As<UI::AnchorLayoutParams>();

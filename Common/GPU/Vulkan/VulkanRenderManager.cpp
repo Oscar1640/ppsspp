@@ -48,6 +48,12 @@ bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleR
 		return false;
 	}
 
+	if (!compatibleRenderPass) {
+		ERROR_LOG(G3D, "Failed creating graphics pipeline - compatible render pass was null");
+		// We're kinda screwed here?
+		return false;
+	}
+
 	uint32_t stageCount = 2;
 	VkPipelineShaderStageCreateInfo ss[3]{};
 	ss[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -86,12 +92,15 @@ bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleR
 		ms.minSampleShading = 1.0f;
 	}
 
+	VkPipelineInputAssemblyStateCreateInfo inputAssembly{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+	inputAssembly.topology = desc->topology;
+
 	// We will use dynamic viewport state.
 	pipe.pVertexInputState = &desc->vis;
 	pipe.pViewportState = &desc->views;
 	pipe.pTessellationState = nullptr;
 	pipe.pDynamicState = &desc->ds;
-	pipe.pInputAssemblyState = &desc->inputAssembly;
+	pipe.pInputAssemblyState = &inputAssembly;
 	pipe.pMultisampleState = &ms;
 	pipe.layout = desc->pipelineLayout;
 	pipe.basePipelineHandle = VK_NULL_HANDLE;
@@ -103,10 +112,11 @@ bool VKRGraphicsPipeline::Create(VulkanContext *vulkan, VkRenderPass compatibleR
 	VkResult result = vkCreateGraphicsPipelines(vulkan->GetDevice(), desc->pipelineCache, 1, &pipe, nullptr, &vkpipeline);
 	double taken_ms = (time_now_d() - start) * 1000.0;
 
-	if (taken_ms < 0.1)
-		DEBUG_LOG(G3D, "Pipeline creation time: %0.2f ms (fast)", taken_ms);
-	else
-		INFO_LOG(G3D, "Pipeline creation time: %0.2f ms", taken_ms);
+	if (taken_ms < 0.1) {
+		DEBUG_LOG(G3D, "Pipeline creation time: %0.2f ms (fast) rpType: %08x sampleBits: %d\n(%s)", taken_ms, (u32)rpType, (u32)sampleCount, tag_.c_str());
+	} else {
+		INFO_LOG(G3D, "Pipeline creation time: %0.2f ms  rpType: %08x sampleBits: %d\n(%s)", taken_ms, (u32)rpType, (u32)sampleCount, tag_.c_str());
+	}
 
 	bool success = true;
 	if (result == VK_INCOMPLETE) {
@@ -352,10 +362,7 @@ void VulkanRenderManager::CompileThreadFunc() {
 			break;
 		}
 
-		if (!toCompile.empty()) {
-			INFO_LOG(G3D, "Compilation thread has %d pipelines to create", (int)toCompile.size());
-		}
-
+		double time = time_now_d();
 		// TODO: Here we can sort the pending pipelines by vertex and fragment shaders,
 		// and split up further.
 		// Those with the same pairs of shaders should be on the same thread.
@@ -369,6 +376,12 @@ void VulkanRenderManager::CompileThreadFunc() {
 				break;
 			}
 		}
+
+		double delta = time_now_d() - time;
+		if (delta > 0.005f) {
+			INFO_LOG(G3D, "CompileThreadFunc: Creating %d pipelines took %0.3f ms", (int)toCompile.size(), delta * 1000.0f);
+		}
+
 		queueRunner_.NotifyCompileDone();
 	}
 }
@@ -539,17 +552,18 @@ VKRGraphicsPipeline *VulkanRenderManager::CreateGraphicsPipeline(VKRGraphicsPipe
 			RenderPassType rpType = (RenderPassType)i;
 
 			// Sanity check - don't compile incompatible types (could be caused by corrupt caches, changes in data structures, etc).
-			if (pipelineFlags & PipelineFlags::USES_DEPTH_STENCIL) {
-				if (!RenderPassTypeHasDepth(rpType)) {
-					WARN_LOG(G3D, "Not compiling pipeline that requires depth, for non depth renderpass type");
-					continue;
-				}
+			if ((pipelineFlags & PipelineFlags::USES_DEPTH_STENCIL) && !RenderPassTypeHasDepth(rpType)) {
+				WARN_LOG(G3D, "Not compiling pipeline that requires depth, for non depth renderpass type");
+				continue;
 			}
-			if (pipelineFlags & PipelineFlags::USES_INPUT_ATTACHMENT) {
-				if (!RenderPassTypeHasInput(rpType)) {
-					WARN_LOG(G3D, "Not compiling pipeline that requires input attachment, for non input renderpass type");
-					continue;
-				}
+			if ((pipelineFlags & PipelineFlags::USES_INPUT_ATTACHMENT) && !RenderPassTypeHasInput(rpType)) {
+				WARN_LOG(G3D, "Not compiling pipeline that requires input attachment, for non input renderpass type");
+				continue;
+			}
+			// Shouldn't hit this, these should have been filtered elsewhere. However, still a good check to do.
+			if (sampleCount == VK_SAMPLE_COUNT_1_BIT && RenderPassTypeHasMultisample(rpType)) {
+				WARN_LOG(G3D, "Not compiling single sample pipeline for a multisampled render pass type");
+				continue;
 			}
 
 			pipeline->pipeline[i] = Promise<VkPipeline>::CreateEmpty();

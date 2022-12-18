@@ -284,6 +284,7 @@ public:
 	float fGameGridScale;
 	bool bShowOnScreenMessages;
 	int iBackgroundAnimation;  // enum BackgroundAnimation
+	bool bTransparentBackground;
 
 	std::string sThemeName;
 

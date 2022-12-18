@@ -261,10 +261,15 @@ void GameSettingsScreen::CreateViews() {
 	LinearLayout *graphicsSettings = AddTab("GameSettingsGraphics", ms->T("Graphics"));
 
 	graphicsSettings->Add(new ItemHeader(gr->T("Rendering Mode")));
-	if (!g_Config.bSimpleUI) {
+	Draw::DrawContext *draw = screenManager()->getDrawContext();
+
 #if !PPSSPP_PLATFORM(UWP)
+	if (!g_Config.bSimpleUI) {
 	static const char* renderingBackend[] = { "OpenGL", "Direct3D 9", "Direct3D 11", "Vulkan" };
 	PopupMultiChoice* renderingBackendChoice = graphicsSettings->Add(new PopupMultiChoice(&g_Config.iGPUBackend, gr->T("Backend"), renderingBackend, (int)GPUBackend::OPENGL, ARRAY_SIZE(renderingBackend), gr->GetName(), screenManager()));
+	if (g_Config.iGPUBackend != (int)GPUBackend::DIRECT3D9 && !draw->GetDeviceCaps().supportsD3D9) {
+		renderingBackendChoice->HideChoice(1);
+	}
 	renderingBackendChoice->OnChoice.Handle(this, &GameSettingsScreen::OnRenderingBackend);
 
 	if (!g_Config.IsBackendEnabled(GPUBackend::OPENGL))
@@ -282,8 +287,6 @@ void GameSettingsScreen::CreateViews() {
 	}
 	}
 #endif
-	Draw::DrawContext *draw = screenManager()->getDrawContext();
-
 	// Backends that don't allow a device choice will only expose one device.
 	if (draw->GetDeviceList().size() > 1) {
 		std::string *deviceNameSetting = GPUDeviceNameSetting();
@@ -355,15 +358,6 @@ void GameSettingsScreen::CreateViews() {
 #endif
 
 #if PPSSPP_PLATFORM(ANDROID)
-		// Hide insets option if no insets, or OS too old.
-		if (System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 28 &&
-			(System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_LEFT) != 0.0f ||
-				System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_TOP) != 0.0f ||
-				System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_RIGHT) != 0.0f ||
-				System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_BOTTOM) != 0.0f)) {
-			graphicsSettings->Add(new CheckBox(&g_Config.bIgnoreScreenInsets, gr->T("Ignore camera notch when centering")));
-		}
-
 		// Hide Immersive Mode on pre-kitkat Android
 		if (System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 19) {
 			// Let's reuse the Fullscreen translation string from desktop.
@@ -907,6 +901,8 @@ void GameSettingsScreen::CreateViews() {
 		backgroundChoice_->OnClick.Handle(this, &GameSettingsScreen::OnChangeBackground);
 	}
 
+	systemSettings->Add(new CheckBox(&g_Config.bTransparentBackground, sy->T("Transparent UI background")));
+
 	PopupMultiChoiceDynamic *theme = systemSettings->Add(new PopupMultiChoiceDynamic(&g_Config.sThemeName, sy->T("Theme"), GetThemeInfoNames(), th->GetName(), screenManager()));
 	theme->OnChoice.Add([=](EventParams &e) {
 		UpdateTheme(screenManager()->getUIContext());
@@ -914,7 +910,6 @@ void GameSettingsScreen::CreateViews() {
 		return UI::EVENT_CONTINUE;
 	});
 
-	
 	if (!draw->GetBugs().Has(Draw::Bugs::RASPBERRY_SHADER_COMP_HANG)) {
 		// We use shaders without tint capability on hardware with this driver bug.
 		PopupSliderChoiceFloat *tint = new PopupSliderChoiceFloat(&g_Config.fUITint, 0.0, 1.0, sy->T("Color Tint"), 0.01f, screenManager());
@@ -1135,7 +1130,7 @@ void GameSettingsScreen::CreateViews() {
 		vrSettings->Add(new ItemHeader(vr->T("VR camera")));
 		vrSettings->Add(new PopupSliderChoiceFloat(&g_Config.fCanvasDistance, 1.0f, 15.0f, vr->T("Distance to 2D menus and scenes"), 1.0f, screenManager(), ""));
 		vrSettings->Add(new PopupSliderChoiceFloat(&g_Config.fFieldOfViewPercentage, 100.0f, 200.0f, vr->T("Field of view scale"), 10.0f, screenManager(), vr->T("% of native FoV")));
-		vrSettings->Add(new PopupSliderChoiceFloat(&g_Config.fHeadUpDisplayScale, 0.2f, 1.0f, vr->T("Heads-up display scale"), 0.1f, screenManager(), ""));
+		vrSettings->Add(new PopupSliderChoiceFloat(&g_Config.fHeadUpDisplayScale, 0.2f, 1.5f, vr->T("Heads-up display scale"), 0.1f, screenManager(), ""));
 
 		vrSettings->Add(new ItemHeader(vr->T("VR controllers")));
 		vrSettings->Add(new CheckBox(&g_Config.bEnableMotions, vr->T("Map controller movements to keys")));
@@ -1864,7 +1859,12 @@ void DeveloperToolsScreen::CreateViews() {
 			for (size_t i = 0; i < ARRAY_SIZE(shaderInfo->settings); ++i) {
 				auto &setting = shaderInfo->settings[i];
 				if (!setting.name.empty()) {
-					auto &value = g_Config.mPostShaderSetting[StringFromFormat("%sSettingValue%d", shaderInfo->section.c_str(), i + 1)];
+					std::string key = StringFromFormat("%sSettingCurrentValue%d", shaderInfo->section.c_str(), i + 1);
+					bool keyExisted = g_Config.mPostShaderSetting.find(key) != g_Config.mPostShaderSetting.end();
+					auto &value = g_Config.mPostShaderSetting[key];
+					if (!keyExisted)
+						value = setting.value;
+
 					PopupSliderChoiceFloat *settingValue = list->Add(new PopupSliderChoiceFloat(&value, setting.minValue, setting.maxValue, ps->T(setting.name), setting.step, screenManager()));
 					settingValue->SetEnabledFunc([=] {
 						return !g_Config.bSkipBufferEffects && enableStereo();

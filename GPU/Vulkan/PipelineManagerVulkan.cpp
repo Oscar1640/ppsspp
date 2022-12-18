@@ -266,12 +266,9 @@ static VulkanPipeline *CreateVulkanPipeline(VulkanRenderManager *renderManager, 
 		desc->geometryShaderSource = gs->GetShaderString(SHADER_STRING_SOURCE_CODE);
 	}
 
-	VkPipelineInputAssemblyStateCreateInfo &inputAssembly = desc->inputAssembly;
-	inputAssembly.flags = 0;
-	inputAssembly.topology = (VkPrimitiveTopology)key.topology;
-	inputAssembly.primitiveRestartEnable = false;
-	int vertexStride = 0;
+	desc->topology = (VkPrimitiveTopology)key.topology;
 
+	int vertexStride = 0;
 	VkVertexInputAttributeDescription *attrs = &desc->attrs[0];
 
 	int attributeCount;
@@ -327,7 +324,7 @@ static VulkanPipeline *CreateVulkanPipeline(VulkanRenderManager *renderManager, 
 	return vulkanPipeline;
 }
 
-VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *renderManager, VkPipelineLayout layout, const VulkanPipelineRasterStateKey &rasterKey, const DecVtxFormat *decFmt, VulkanVertexShader *vs, VulkanFragmentShader *fs, VulkanGeometryShader *gs, bool useHwTransform, u32 variantBitmask) {
+VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *renderManager, VkPipelineLayout layout, const VulkanPipelineRasterStateKey &rasterKey, const DecVtxFormat *decFmt, VulkanVertexShader *vs, VulkanFragmentShader *fs, VulkanGeometryShader *gs, bool useHwTransform, u32 variantBitmask, int multiSampleLevel) {
 	if (!pipelineCache_) {
 		VkPipelineCacheCreateInfo pc{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
 		VkResult res = vkCreatePipelineCache(vulkan_->GetDevice(), &pc, nullptr, &pipelineCache_);
@@ -358,7 +355,7 @@ VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *
 		pipelineFlags |= PipelineFlags::USES_MULTIVIEW;
 	}
 
-	VkSampleCountFlagBits sampleCount = MultiSampleLevelToFlagBits(g_Config.iMultiSampleLevel);
+	VkSampleCountFlagBits sampleCount = MultiSampleLevelToFlagBits(multiSampleLevel);
 
 	VulkanPipeline *pipeline = CreateVulkanPipeline(
 		renderManager, pipelineCache_, layout, pipelineFlags, sampleCount,
@@ -373,7 +370,7 @@ VulkanPipeline *PipelineManagerVulkan::GetOrCreatePipeline(VulkanRenderManager *
 	}
 }
 
-std::vector<std::string> PipelineManagerVulkan::DebugGetObjectIDs(DebugShaderType type) {
+std::vector<std::string> PipelineManagerVulkan::DebugGetObjectIDs(DebugShaderType type) const {
 	std::vector<std::string> ids;
 	switch (type) {
 	case SHADER_TYPE_PIPELINE:
@@ -478,13 +475,14 @@ std::string PipelineManagerVulkan::DebugGetObjectString(std::string id, DebugSha
 	VulkanPipelineKey pipelineKey;
 	pipelineKey.FromString(id);
 
-	VulkanPipeline *iter = pipelines_.Get(pipelineKey);
-	if (!iter) {
-		return "";
+	VulkanPipeline *pipeline = pipelines_.Get(pipelineKey);
+	if (!pipeline) {
+		return "N/A (missing)";
 	}
+	u32 variants = pipeline->GetVariantsBitmask();
 
-	std::string str = pipelineKey.GetDescription(stringType);
-	return StringFromFormat("%p: %s", iter, str.c_str());
+	std::string keyDescription = pipelineKey.GetDescription(stringType);
+	return StringFromFormat("%s. v: %08x", keyDescription.c_str(), variants);
 }
 
 std::string VulkanPipelineKey::GetDescription(DebugShaderStringType stringType) const {
@@ -580,7 +578,7 @@ struct StoredVulkanPipelineKey {
 
 // If you're looking for how to invalidate the cache, it's done in ShaderManagerVulkan, look for CACHE_VERSION and increment it.
 // (Header of the same file this is stored in).
-void PipelineManagerVulkan::SaveCache(FILE *file, bool saveRawPipelineCache, ShaderManagerVulkan *shaderManager, Draw::DrawContext *drawContext) {
+void PipelineManagerVulkan::SavePipelineCache(FILE *file, bool saveRawPipelineCache, ShaderManagerVulkan *shaderManager, Draw::DrawContext *drawContext) {
 	VulkanRenderManager *rm = (VulkanRenderManager *)drawContext->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
 	VulkanQueueRunner *queueRunner = rm->GetQueueRunner();
 
@@ -669,12 +667,15 @@ void PipelineManagerVulkan::SaveCache(FILE *file, bool saveRawPipelineCache, Sha
 	}
 }
 
-bool PipelineManagerVulkan::LoadCache(FILE *file, bool loadRawPipelineCache, ShaderManagerVulkan *shaderManager, Draw::DrawContext *drawContext, VkPipelineLayout layout) {
+bool PipelineManagerVulkan::LoadPipelineCache(FILE *file, bool loadRawPipelineCache, ShaderManagerVulkan *shaderManager, Draw::DrawContext *drawContext, VkPipelineLayout layout, int multiSampleLevel) {
 	VulkanRenderManager *rm = (VulkanRenderManager *)drawContext->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
 	VulkanQueueRunner *queueRunner = rm->GetQueueRunner();
 
+	cancelCache_ = false;
+
 	uint32_t size = 0;
 	if (loadRawPipelineCache) {
+		NOTICE_LOG(G3D, "WARNING: Using the badly tested raw pipeline cache path!!!!");
 		// WARNING: Do not use this path until after reading and implementing https://zeux.io/2019/07/17/serializing-pipeline-cache/ !
 		bool success = fread(&size, sizeof(size), 1, file) == 1;
 		if (!size || !success) {
@@ -710,12 +711,14 @@ bool PipelineManagerVulkan::LoadCache(FILE *file, bool loadRawPipelineCache, Sha
 		} else {
 			vkMergePipelineCaches(vulkan_->GetDevice(), pipelineCache_, 1, &cache);
 		}
-		NOTICE_LOG(G3D, "Loaded Vulkan pipeline cache (%d bytes).", (int)size);
+		NOTICE_LOG(G3D, "Loaded Vulkan binary pipeline cache (%d bytes).", (int)size);
+		// Note that after loading the cache, it's still a good idea to pre-create the various pipelines.
 	} else {
 		if (!pipelineCache_) {
 			VkPipelineCacheCreateInfo pc{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
 			VkResult res = vkCreatePipelineCache(vulkan_->GetDevice(), &pc, nullptr, &pipelineCache_);
 			if (res != VK_SUCCESS) {
+				WARN_LOG(G3D, "vkCreatePipelineCache failed (%08x), highly unexpected", (u32)res);
 				return false;
 			}
 		}
@@ -724,8 +727,9 @@ bool PipelineManagerVulkan::LoadCache(FILE *file, bool loadRawPipelineCache, Sha
 	// Read the number of pipelines.
 	bool failed = fread(&size, sizeof(size), 1, file) != 1;
 
-	NOTICE_LOG(G3D, "Creating %d pipelines...", size);
+	NOTICE_LOG(G3D, "Creating %d pipelines from cache (%dx MSAA)...", size, (1 << multiSampleLevel));
 	int pipelineCreateFailCount = 0;
+	int shaderFailCount = 0;
 	for (uint32_t i = 0; i < size; i++) {
 		if (failed || cancelCache_) {
 			break;
@@ -733,21 +737,33 @@ bool PipelineManagerVulkan::LoadCache(FILE *file, bool loadRawPipelineCache, Sha
 		StoredVulkanPipelineKey key;
 		failed = failed || fread(&key, sizeof(key), 1, file) != 1;
 		if (failed) {
-			ERROR_LOG(G3D, "Truncated Vulkan pipeline cache file");
-			continue;
+			ERROR_LOG(G3D, "Truncated Vulkan pipeline cache file, stopping.");
+			break;
 		}
 		VulkanVertexShader *vs = shaderManager->GetVertexShaderFromID(key.vShaderID);
 		VulkanFragmentShader *fs = shaderManager->GetFragmentShaderFromID(key.fShaderID);
 		VulkanGeometryShader *gs = shaderManager->GetGeometryShaderFromID(key.gShaderID);
 		if (!vs || !fs || (!gs && key.gShaderID.Bit(GS_BIT_ENABLED))) {
-			failed = true;
-			ERROR_LOG(G3D, "Failed to find vs or fs in of pipeline %d in cache", (int)i);
+			// We just ignore this one, it'll get created later if needed.
+			// Probably some useFlags mismatch.
+			WARN_LOG(G3D, "Failed to find vs or fs in pipeline %d in cache, skipping pipeline", (int)i);
 			continue;
+		}
+
+		// Avoid creating multisampled shaders if it's not enabled, as that results in an invalid combination.
+		u32 variantsToBuild = key.variants;
+		if (multiSampleLevel == 0) {
+			for (u32 i = 0; i < (int)RenderPassType::TYPE_COUNT; i++) {
+				if (RenderPassTypeHasMultisample((RenderPassType)i)) {
+					variantsToBuild &= ~(1 << i);
+				}
+			}
 		}
 
 		DecVtxFormat fmt;
 		fmt.InitializeFromID(key.vtxFmtId);
-		VulkanPipeline *pipeline = GetOrCreatePipeline(rm, layout, key.raster, key.useHWTransform ? &fmt : 0, vs, fs, gs, key.useHWTransform, key.variants);
+		VulkanPipeline *pipeline = GetOrCreatePipeline(
+			rm, layout, key.raster, key.useHWTransform ? &fmt : 0, vs, fs, gs, key.useHWTransform, variantsToBuild, multiSampleLevel);
 		if (!pipeline) {
 			pipelineCreateFailCount += 1;
 		}
@@ -756,6 +772,7 @@ bool PipelineManagerVulkan::LoadCache(FILE *file, bool loadRawPipelineCache, Sha
 	rm->NudgeCompilerThread();
 
 	NOTICE_LOG(G3D, "Recreated Vulkan pipeline cache (%d pipelines, %d failed).", (int)size, pipelineCreateFailCount);
+	// We just ignore any failures.
 	return true;
 }
 

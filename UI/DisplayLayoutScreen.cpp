@@ -61,7 +61,7 @@ class DisplayLayoutBackground : public UI::View {
 public:
 	DisplayLayoutBackground(UI::ChoiceStrip *mode, UI::LayoutParams *layoutParams) : UI::View(layoutParams), mode_(mode) {}
 
-	bool Touch(const TouchInput &touch) {
+	bool Touch(const TouchInput &touch) override {
 		int mode = mode_ ? mode_->GetSelection() : 0;
 
 		if ((touch.flags & TOUCH_MOVE) != 0 && dragging_) {
@@ -120,6 +120,7 @@ private:
 DisplayLayoutScreen::DisplayLayoutScreen(const Path &filename) : UIDialogScreenWithGameBackground(filename) {
 	// Show background at full brightness
 	darkenGameBackground_ = false;
+	forceTransparent_ = true;
 }
 
 void DisplayLayoutScreen::DrawBackground(UIContext &dc) {
@@ -152,6 +153,7 @@ void DisplayLayoutScreen::dialogFinished(const Screen *dialog, DialogResult resu
 UI::EventReturn DisplayLayoutScreen::OnPostProcShaderChange(UI::EventParams &e) {
 	// Remove the virtual "Off" entry. TODO: Get rid of it generally.
 	g_Config.vPostShaderNames.erase(std::remove(g_Config.vPostShaderNames.begin(), g_Config.vPostShaderNames.end(), "Off"), g_Config.vPostShaderNames.end());
+	FixPostShaderOrder(&g_Config.vPostShaderNames);
 
 	NativeMessageReceived("gpu_configChanged", "");
 	NativeMessageReceived("gpu_renderResized", "");  // To deal with shaders that can change render resolution like upscaling.
@@ -246,6 +248,17 @@ void DisplayLayoutScreen::CreateViews() {
 		aspectRatio->SetDisabledPtr(&g_Config.bDisplayStretch);
 		aspectRatio->SetHasDropShadow(false);
 		aspectRatio->SetLiveUpdate(true);
+
+#if PPSSPP_PLATFORM(ANDROID)
+		// Hide insets option if no insets, or OS too old.
+		if (System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 28 &&
+			(System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_LEFT) != 0.0f ||
+				System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_TOP) != 0.0f ||
+				System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_RIGHT) != 0.0f ||
+				System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_BOTTOM) != 0.0f)) {
+			rightColumn->Add(new CheckBox(&g_Config.bIgnoreScreenInsets, gr->T("Ignore camera notch when centering")));
+		}
+#endif
 
 		mode_ = new ChoiceStrip(ORIENT_HORIZONTAL, new LinearLayoutParams(WRAP_CONTENT, WRAP_CONTENT));
 		mode_->AddChoice(di->T("Inactive"));
@@ -370,7 +383,9 @@ void DisplayLayoutScreen::CreateViews() {
 			moreButton->OnClick.Add([=](EventParams &e) -> UI::EventReturn {
 				PopupContextMenuScreen *contextMenu = new UI::PopupContextMenuScreen(postShaderContextMenu, ARRAY_SIZE(postShaderContextMenu), di.get(), moreButton);
 				screenManager()->push(contextMenu);
-				contextMenu->SetEnabled(0, i > 0);
+				const ShaderInfo *info = GetPostShaderInfo(g_Config.vPostShaderNames[i]);
+				bool usesLastFrame = info ? info->usePreviousFrame : false;
+				contextMenu->SetEnabled(0, i > 0 && !usesLastFrame);
 				contextMenu->SetEnabled(1, i < g_Config.vPostShaderNames.size() - 1);
 				contextMenu->OnChoice.Add([=](EventParams &e) -> UI::EventReturn {
 					switch (e.a) {
@@ -386,6 +401,7 @@ void DisplayLayoutScreen::CreateViews() {
 					default:
 						return UI::EVENT_DONE;
 					}
+					FixPostShaderOrder(&g_Config.vPostShaderNames);
 					NativeMessageReceived("gpu_configChanged", "");
 					RecreateViews();
 					return UI::EVENT_DONE;
@@ -414,7 +430,12 @@ void DisplayLayoutScreen::CreateViews() {
 				auto &setting = shaderInfo->settings[i];
 				if (!setting.name.empty()) {
 					// This map lookup will create the setting in the mPostShaderSetting map if it doesn't exist, with a default value of 0.0.
-					auto &value = g_Config.mPostShaderSetting[StringFromFormat("%sSettingValue%d", shaderInfo->section.c_str(), i + 1)];
+					std::string key = StringFromFormat("%sSettingCurrentValue%d", shaderInfo->section.c_str(), i + 1);
+					bool keyExisted = g_Config.mPostShaderSetting.find(key) != g_Config.mPostShaderSetting.end();
+					auto &value = g_Config.mPostShaderSetting[key];
+					if (!keyExisted)
+						value = setting.value;
+
 					if (duplicated) {
 						auto sliderName = StringFromFormat("%s %s", ps->T(setting.name), ps->T("(duplicated setting, previous slider will be used)"));
 						PopupSliderChoiceFloat *settingValue = settingContainer->Add(new PopupSliderChoiceFloat(&value, setting.minValue, setting.maxValue, sliderName, setting.step, screenManager()));

@@ -125,6 +125,7 @@ void DrawEngineVulkan::InitDeviceObjects() {
 	bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	bindings[8].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 	bindings[8].binding = DRAW_BINDING_TESS_STORAGE_BUF_WV;
+	// Note: This binding is not included if !gstate_c.Use(GPU_USE_FRAMEBUFFER_FETCH), using bindingCount below.
 	bindings[9].descriptorCount = 1;
 	bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
 	bindings[9].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -134,7 +135,7 @@ void DrawEngineVulkan::InitDeviceObjects() {
 	VkDevice device = vulkan->GetDevice();
 
 	VkDescriptorSetLayoutCreateInfo dsl{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-	dsl.bindingCount = ARRAY_SIZE(bindings);
+	dsl.bindingCount = gstate_c.Use(GPU_USE_FRAMEBUFFER_FETCH) ? ARRAY_SIZE(bindings) : ARRAY_SIZE(bindings) - 1;
 	dsl.pBindings = bindings;
 	VkResult res = vkCreateDescriptorSetLayout(device, &dsl, nullptr, &descriptorSetLayout_);
 	_dbg_assert_(VK_SUCCESS == res);
@@ -175,8 +176,7 @@ void DrawEngineVulkan::InitDeviceObjects() {
 	VkPipelineLayoutCreateInfo pl{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	pl.pPushConstantRanges = nullptr;
 	pl.pushConstantRangeCount = 0;
-	VkDescriptorSetLayout frameDescSetLayout = (VkDescriptorSetLayout)draw_->GetNativeObject(Draw::NativeObject::FRAME_DATA_DESC_SET_LAYOUT);
-	VkDescriptorSetLayout layouts[2] = { frameDescSetLayout, descriptorSetLayout_};
+	VkDescriptorSetLayout layouts[1] = { descriptorSetLayout_};
 	pl.setLayoutCount = ARRAY_SIZE(layouts);
 	pl.pSetLayouts = layouts;
 	pl.flags = 0;
@@ -308,8 +308,6 @@ void DrawEngineVulkan::BeginFrame() {
 	frame->pushUBO->Begin(vulkan);
 	frame->pushVertex->Begin(vulkan);
 	frame->pushIndex->Begin(vulkan);
-
-	frame->frameDescSetUpdated = false;
 
 	tessDataTransferVulkan->SetPushBuffer(frame->pushUBO);
 
@@ -546,7 +544,8 @@ void MarkUnreliable(VertexArrayInfoVulkan *vai) {
 
 void DrawEngineVulkan::Invalidate(InvalidationCallbackFlags flags) {
 	if (flags & InvalidationCallbackFlags::COMMAND_BUFFER_STATE) {
-		GetCurFrame().frameDescSetUpdated = false;
+		// Nothing here anymore (removed the "frame descriptor set"
+		// If we add back "seldomly-changing" descriptors, we might use this again.
 	}
 	if (flags & InvalidationCallbackFlags::RENDER_PASS_STATE) {
 		// If have a new render pass, dirty our dynamic state so it gets re-set.
@@ -787,7 +786,7 @@ void DrawEngineVulkan::DoFlush() {
 			}
 			_dbg_assert_msg_(vshader->UseHWTransform(), "Bad vshader");
 
-			VulkanPipeline *pipeline = pipelineManager_->GetOrCreatePipeline(renderManager, pipelineLayout_, pipelineKey_, &dec_->decFmt, vshader, fshader, gshader, true, 0);
+			VulkanPipeline *pipeline = pipelineManager_->GetOrCreatePipeline(renderManager, pipelineLayout_, pipelineKey_, &dec_->decFmt, vshader, fshader, gshader, true, 0, framebufferManager_->GetMSAALevel());
 			if (!pipeline || !pipeline->pipeline) {
 				// Already logged, let's bail out.
 				return;
@@ -916,7 +915,7 @@ void DrawEngineVulkan::DoFlush() {
 
 				shaderManager_->GetShaders(prim, lastVType_, &vshader, &fshader, &gshader, pipelineState_, false, false, decOptions_.expandAllWeightsToFloat, true);
 				_dbg_assert_msg_(!vshader->UseHWTransform(), "Bad vshader");
-				VulkanPipeline *pipeline = pipelineManager_->GetOrCreatePipeline(renderManager, pipelineLayout_, pipelineKey_, &dec_->decFmt, vshader, fshader, gshader, false, 0);
+				VulkanPipeline *pipeline = pipelineManager_->GetOrCreatePipeline(renderManager, pipelineLayout_, pipelineKey_, &dec_->decFmt, vshader, fshader, gshader, false, 0, framebufferManager_->GetMSAALevel());
 				if (!pipeline || !pipeline->pipeline) {
 					// Already logged, let's bail out.
 					decodedVerts_ = 0;
@@ -992,7 +991,6 @@ void DrawEngineVulkan::DoFlush() {
 	vertexCountInDrawCalls_ = 0;
 	decodeCounter_ = 0;
 	dcid_ = 0;
-	prevPrim_ = GE_PRIM_INVALID;
 	gstate_c.vertexFullAlpha = true;
 	framebufferManager_->SetColorUpdated(gstate_c.skipDrawReason);
 
@@ -1006,32 +1004,6 @@ void DrawEngineVulkan::DoFlush() {
 }
 
 void DrawEngineVulkan::UpdateUBOs(FrameData *frame) {
-	if (!frame->frameDescSetUpdated) {
-		// Push frame global constants.
-		UB_Frame frameConstants{};
-		FrameUpdateUniforms(&frameConstants, framebufferManager_->UseBufferedRendering());
-
-		VkDescriptorBufferInfo frameConstantsBufInfo;
-		frame->pushUBO->PushUBOData(frameConstants, &frameConstantsBufInfo);
-
-		VulkanContext *vulkan = (VulkanContext *)draw_->GetNativeObject(Draw::NativeObject::CONTEXT);
-		VulkanRenderManager *renderManager = (VulkanRenderManager *)draw_->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
-		VkDescriptorSetLayout frameDescSetLayout = (VkDescriptorSetLayout)draw_->GetNativeObject(Draw::NativeObject::FRAME_DATA_DESC_SET_LAYOUT);
-
-		VkDescriptorSet frameDescSet = frame->descPool.Allocate(1, &frameDescSetLayout, "frame_desc_set");
-
-		VkWriteDescriptorSet descWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-		descWrite.descriptorCount = 1;
-		descWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		descWrite.dstBinding = 0;
-		descWrite.dstSet = frameDescSet;
-		descWrite.pBufferInfo = &frameConstantsBufInfo;
-		vkUpdateDescriptorSets(vulkan->GetDevice(), 1, &descWrite, 0, nullptr);
-		renderManager->BindDescriptorSet(0, frameDescSet, pipelineLayout_);
-
-		frame->frameDescSetUpdated = true;
-	}
-
 	if ((dirtyUniforms_ & DIRTY_BASE_UNIFORMS) || baseBuf == VK_NULL_HANDLE) {
 		baseUBOOffset = shaderManager_->PushBaseBuffer(frame->pushUBO, &baseBuf);
 		dirtyUniforms_ &= ~DIRTY_BASE_UNIFORMS;

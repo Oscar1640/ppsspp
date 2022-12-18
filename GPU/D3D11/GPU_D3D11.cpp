@@ -70,7 +70,7 @@ GPU_D3D11::GPU_D3D11(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	framebufferManagerD3D11_->SetTextureCache(textureCacheD3D11_);
 	framebufferManagerD3D11_->SetShaderManager(shaderManagerD3D11_);
 	framebufferManagerD3D11_->SetDrawEngine(&drawEngine_);
-	framebufferManagerD3D11_->Init();
+	framebufferManagerD3D11_->Init(msaaLevel_);
 	textureCacheD3D11_->SetFramebufferManager(framebufferManagerD3D11_);
 	textureCacheD3D11_->SetShaderManager(shaderManagerD3D11_);
 
@@ -82,7 +82,7 @@ GPU_D3D11::GPU_D3D11(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	// No need to flush before the tex scale/offset commands if we are baking
 	// the tex scale/offset into the vertices anyway.
 	UpdateCmdInfo();
-	gstate_c.useFlags = CheckGPUFeatures();
+	gstate_c.SetUseFlags(CheckGPUFeatures());
 
 	BuildReportingInfo();
 

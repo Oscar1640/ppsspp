@@ -199,6 +199,15 @@ AndroidGraphicsContext *graphicsContext;
 
 #define MessageBox(a, b, c, d) __android_log_print(ANDROID_LOG_INFO, APP_NAME, "%s %s", (b), (c));
 
+#if PPSSPP_ARCH(ARMV7)
+// Old Android workaround
+extern "C" {
+int utimensat(int fd, const char *path, const struct timespec times[2]) {
+	return -1;
+}
+}
+#endif
+
 void AndroidLogger::Log(const LogMessage &message) {
 	int mode;
 	switch (message.level) {
@@ -770,6 +779,7 @@ retry:
 	if (IsVREnabled()) {
 		Version gitVer(PPSSPP_GIT_VERSION);
 		InitVROnAndroid(gJvm, nativeActivity, systemName.c_str(), gitVer.ToInteger(), "PPSSPP");
+		SetVRCallbacks(NativeAxis, NativeKey, NativeTouch);
 	}
 }
 
@@ -1079,7 +1089,7 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeRenderer_displayRender(JNIEnv *env,
 	}
 
 	if (IsVREnabled()) {
-		UpdateVRInput(NativeAxis, NativeKey, NativeTouch, g_Config.bHapticFeedback, dp_xscale, dp_yscale);
+		UpdateVRInput(g_Config.bHapticFeedback, dp_xscale, dp_yscale);
 		FinishVRRender();
 	}
 }

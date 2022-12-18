@@ -569,13 +569,13 @@ void SystemInfoScreen::CreateViews() {
 	deviceSpecs->Add(new InfoItem(si->T("PPSSPP build"), build));
 
 	deviceSpecs->Add(new ItemHeader(si->T("Audio Information")));
-	deviceSpecs->Add(new InfoItem(si->T("Sample rate"), StringFromFormat("%d Hz", System_GetPropertyInt(SYSPROP_AUDIO_SAMPLE_RATE))));
+	deviceSpecs->Add(new InfoItem(si->T("Sample rate"), StringFromFormat(si->T("%d Hz"), System_GetPropertyInt(SYSPROP_AUDIO_SAMPLE_RATE))));
 	int framesPerBuffer = System_GetPropertyInt(SYSPROP_AUDIO_FRAMES_PER_BUFFER);
 	if (framesPerBuffer > 0) {
 		deviceSpecs->Add(new InfoItem(si->T("Frames per buffer"), StringFromFormat("%d", framesPerBuffer)));
 	}
 #if PPSSPP_PLATFORM(ANDROID)
-	deviceSpecs->Add(new InfoItem(si->T("Optimal sample rate"), StringFromFormat("%d Hz", System_GetPropertyInt(SYSPROP_AUDIO_OPTIMAL_SAMPLE_RATE))));
+	deviceSpecs->Add(new InfoItem(si->T("Optimal sample rate"), StringFromFormat(si->T("%d Hz"), System_GetPropertyInt(SYSPROP_AUDIO_OPTIMAL_SAMPLE_RATE))));
 	deviceSpecs->Add(new InfoItem(si->T("Optimal frames per buffer"), StringFromFormat("%d", System_GetPropertyInt(SYSPROP_AUDIO_OPTIMAL_FRAMES_PER_BUFFER))));
 #endif
 
@@ -584,15 +584,16 @@ void SystemInfoScreen::CreateViews() {
 	deviceSpecs->Add(new InfoItem(si->T("Native Resolution"), StringFromFormat("%dx%d",
 		System_GetPropertyInt(SYSPROP_DISPLAY_XRES),
 		System_GetPropertyInt(SYSPROP_DISPLAY_YRES))));
-	deviceSpecs->Add(new InfoItem(si->T("UI Resolution"), StringFromFormat("%dx%d (dpi: %0.2f)",
+	deviceSpecs->Add(new InfoItem(si->T("UI Resolution"), StringFromFormat("%dx%d (%s: %0.2f)",
 		dp_xres,
 		dp_yres,
+		si->T("DPI"),
 		g_dpi)));
 #endif
 
 #if !PPSSPP_PLATFORM(WINDOWS)
 	// Don't show on Windows, since it's always treated as 60 there.
-	deviceSpecs->Add(new InfoItem(si->T("Refresh rate"), StringFromFormat("%0.3f Hz", (float)System_GetPropertyFloat(SYSPROP_DISPLAY_REFRESH_RATE))));
+	deviceSpecs->Add(new InfoItem(si->T("Refresh rate"), StringFromFormat(si->T("%0.2f Hz"), (float)System_GetPropertyFloat(SYSPROP_DISPLAY_REFRESH_RATE))));
 #endif
 
 	deviceSpecs->Add(new ItemHeader(si->T("Version Information")));
@@ -619,7 +620,7 @@ void SystemInfoScreen::CreateViews() {
 	deviceSpecs->Add(new InfoItem("Moga", moga));
 #endif
 
-	if (gstate_c.useFlags != 0) {
+	if (gstate_c.GetUseFlags()) {
 		// We're in-game, and can determine these.
 		// TODO: Call a static version of GPUCommon::CheckGPUFeatures() and derive them here directly.
 
@@ -1215,7 +1216,7 @@ void ShaderViewScreen::CreateViews() {
 	LinearLayout *layout = new LinearLayout(ORIENT_VERTICAL);
 	root_ = layout;
 
-	layout->Add(new TextView(gpu->DebugGetShaderString(id_, type_, SHADER_STRING_SHORT_DESC)));
+	layout->Add(new TextView(gpu->DebugGetShaderString(id_, type_, SHADER_STRING_SHORT_DESC), FLAG_DYNAMIC_ASCII | FLAG_WRAP_TEXT, false));
 
 	ScrollView *scroll = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(1.0));
 	scroll->SetTag("DevShaderView");
@@ -1229,7 +1230,7 @@ void ShaderViewScreen::CreateViews() {
 	SplitString(gpu->DebugGetShaderString(id_, type_, SHADER_STRING_SOURCE_CODE), '\n', lines);
 
 	for (auto line : lines) {
-		lineLayout->Add(new TextView(line, FLAG_DYNAMIC_ASCII, true));
+		lineLayout->Add(new TextView(line, FLAG_DYNAMIC_ASCII | FLAG_WRAP_TEXT, true));
 	}
 
 	layout->Add(new Button(di->T("Back")))->OnClick.Handle<UIScreen>(this, &UIScreen::OnBack);
