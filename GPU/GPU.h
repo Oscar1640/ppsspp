@@ -74,6 +74,8 @@ struct GPUStatistics {
 
 	void ResetFrame() {
 		numDrawCalls = 0;
+		numDrawSyncs = 0;
+		numListSyncs = 0;
 		numCachedDrawCalls = 0;
 		numVertsSubmitted = 0;
 		numCachedVertsDrawn = 0;
@@ -88,6 +90,7 @@ struct GPUStatistics {
 		numFlushes = 0;
 		numTexturesDecoded = 0;
 		numFramebufferEvaluations = 0;
+		numBlockingReadbacks = 0;
 		numReadbacks = 0;
 		numUploads = 0;
 		numDepal = 0;
@@ -97,14 +100,18 @@ struct GPUStatistics {
 		numColorCopies = 0;
 		numCopiesForShaderBlend = 0;
 		numCopiesForSelfTex = 0;
+		numDrawPixels = 0;
+		numReplacerTrackedTex = 0;
+		numCachedReplacedTextures = 0;
 		msProcessingDisplayLists = 0;
 		vertexGPUCycles = 0;
 		otherGPUCycles = 0;
-		memset(gpuCommandsAtCallLevel, 0, sizeof(gpuCommandsAtCallLevel));
 	}
 
 	// Per frame statistics
 	int numDrawCalls;
+	int numDrawSyncs;
+	int numListSyncs;
 	int numCachedDrawCalls;
 	int numFlushes;
 	int numVertsSubmitted;
@@ -119,6 +126,7 @@ struct GPUStatistics {
 	int numShaderSwitches;
 	int numTexturesDecoded;
 	int numFramebufferEvaluations;
+	int numBlockingReadbacks;
 	int numReadbacks;
 	int numUploads;
 	int numDepal;
@@ -128,10 +136,12 @@ struct GPUStatistics {
 	int numColorCopies;
 	int numCopiesForShaderBlend;
 	int numCopiesForSelfTex;
+	int numDrawPixels;
+	int numReplacerTrackedTex;
+	int numCachedReplacedTextures;
 	double msProcessingDisplayLists;
 	int vertexGPUCycles;
 	int otherGPUCycles;
-	int gpuCommandsAtCallLevel[4];
 
 	// Flip count. Doesn't really belong here.
 	int numFlips;
@@ -147,4 +157,7 @@ namespace Draw {
 
 bool GPU_Init(GraphicsContext *ctx, Draw::DrawContext *draw);
 bool GPU_IsReady();
+bool GPU_IsStarted();
 void GPU_Shutdown();
+
+const char *RasterChannelToString(RasterChannel channel);

@@ -4,6 +4,13 @@
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
 
+void CachedReadback::Destroy(VulkanContext *vulkan) {
+	if (buffer) {
+		vulkan->Delete().QueueDeleteBufferAllocation(buffer, allocation);
+	}
+	bufferSize = 0;
+}
+
 void FrameData::Init(VulkanContext *vulkan, int index) {
 	this->index = index;
 	VkDevice device = vulkan->GetDevice();
@@ -36,11 +43,6 @@ void FrameData::Init(VulkanContext *vulkan, int index) {
 	vulkan->SetDebugName(fence, VK_OBJECT_TYPE_FENCE, StringFromFormat("fence%d", index).c_str());
 	readyForFence = true;
 
-	// This fence is used for synchronizing readbacks. Does not need preinitialization.
-	// TODO: Put this in frameDataShared, only one is needed.
-	readbackFence = vulkan->CreateFence(false);
-	vulkan->SetDebugName(fence, VK_OBJECT_TYPE_FENCE, "readbackFence");
-
 	VkQueryPoolCreateInfo query_ci{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
 	query_ci.queryCount = MAX_TIMESTAMP_QUERIES;
 	query_ci.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -52,8 +54,13 @@ void FrameData::Destroy(VulkanContext *vulkan) {
 	vkDestroyCommandPool(device, cmdPoolInit, nullptr);
 	vkDestroyCommandPool(device, cmdPoolMain, nullptr);
 	vkDestroyFence(device, fence, nullptr);
-	vkDestroyFence(device, readbackFence, nullptr);
 	vkDestroyQueryPool(device, profile.queryPool, nullptr);
+
+	readbacks_.IterateMut([=](const ReadbackKey &key, CachedReadback *value) {
+		value->Destroy(vulkan);
+		delete value;
+	});
+	readbacks_.Clear();
 }
 
 void FrameData::AcquireNextImage(VulkanContext *vulkan, FrameDataShared &shared) {
@@ -71,8 +78,10 @@ void FrameData::AcquireNextImage(VulkanContext *vulkan, FrameDataShared &shared)
 		WARN_LOG(G3D, "VK_SUBOPTIMAL_KHR returned - ignoring");
 		break;
 	case VK_ERROR_OUT_OF_DATE_KHR:
+	case VK_TIMEOUT:
+	case VK_NOT_READY:
 		// We do not set hasAcquired here!
-		WARN_LOG(G3D, "VK_ERROR_OUT_OF_DATE_KHR returned from AcquireNextImage - processing the frame, but not presenting");
+		WARN_LOG(G3D, "%s returned from AcquireNextImage - processing the frame, but not presenting", VulkanResultToString(res));
 		skipSwap = true;
 		break;
 	default:
@@ -112,8 +121,10 @@ VkCommandBuffer FrameData::GetInitCmd(VulkanContext *vulkan) {
 		}
 
 		// Good spot to reset the query pool.
-		vkCmdResetQueryPool(initCmd, profile.queryPool, 0, MAX_TIMESTAMP_QUERIES);
-		vkCmdWriteTimestamp(initCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, profile.queryPool, 0);
+		if (profile.enabled) {
+			vkCmdResetQueryPool(initCmd, profile.queryPool, 0, MAX_TIMESTAMP_QUERIES);
+			vkCmdWriteTimestamp(initCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, profile.queryPool, 0);
+		}
 
 		hasInitCommands = true;
 	}
@@ -127,7 +138,7 @@ void FrameData::SubmitPending(VulkanContext *vulkan, FrameSubmitType type, Frame
 	VkFence fenceToTrigger = VK_NULL_HANDLE;
 
 	if (hasInitCommands) {
-		if (profilingEnabled_) {
+		if (profile.enabled) {
 			// Pre-allocated query ID 1 - end of init cmdbuf.
 			vkCmdWriteTimestamp(initCmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, profile.queryPool, 1);
 		}
@@ -140,7 +151,7 @@ void FrameData::SubmitPending(VulkanContext *vulkan, FrameSubmitType type, Frame
 	}
 
 	if ((hasMainCommands || hasPresentCommands) && type == FrameSubmitType::Sync) {
-		fenceToTrigger = readbackFence;
+		fenceToTrigger = sharedData.readbackFence;
 	}
 
 	if (hasMainCommands) {
@@ -202,8 +213,8 @@ void FrameData::SubmitPending(VulkanContext *vulkan, FrameSubmitType type, Frame
 
 	if (type == FrameSubmitType::Sync) {
 		// Hard stall of the GPU, not ideal, but necessary so the CPU has the contents of the readback.
-		vkWaitForFences(vulkan->GetDevice(), 1, &readbackFence, true, UINT64_MAX);
-		vkResetFences(vulkan->GetDevice(), 1, &readbackFence);
+		vkWaitForFences(vulkan->GetDevice(), 1, &sharedData.readbackFence, true, UINT64_MAX);
+		vkResetFences(vulkan->GetDevice(), 1, &sharedData.readbackFence);
 		syncDone = true;
 	}
 }
@@ -215,10 +226,15 @@ void FrameDataShared::Init(VulkanContext *vulkan) {
 	_dbg_assert_(res == VK_SUCCESS);
 	res = vkCreateSemaphore(vulkan->GetDevice(), &semaphoreCreateInfo, nullptr, &renderingCompleteSemaphore);
 	_dbg_assert_(res == VK_SUCCESS);
+
+	// This fence is used for synchronizing readbacks. Does not need preinitialization.
+	readbackFence = vulkan->CreateFence(false);
+	vulkan->SetDebugName(readbackFence, VK_OBJECT_TYPE_FENCE, "readbackFence");
 }
 
 void FrameDataShared::Destroy(VulkanContext *vulkan) {
 	VkDevice device = vulkan->GetDevice();
 	vkDestroySemaphore(device, acquireSemaphore, nullptr);
 	vkDestroySemaphore(device, renderingCompleteSemaphore, nullptr);
+	vkDestroyFence(device, readbackFence, nullptr);
 }

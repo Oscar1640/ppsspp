@@ -21,10 +21,17 @@ AndroidVulkanContext::~AndroidVulkanContext() {
 }
 
 static uint32_t FlagsFromConfig() {
+	uint32_t flags;
+
 	if (g_Config.bVSync) {
-		return VULKAN_FLAG_PRESENT_FIFO;
+		flags = VULKAN_FLAG_PRESENT_FIFO;
+	} else {
+		flags = VULKAN_FLAG_PRESENT_MAILBOX | VULKAN_FLAG_PRESENT_FIFO_RELAXED;
 	}
-	return VULKAN_FLAG_PRESENT_MAILBOX | VULKAN_FLAG_PRESENT_FIFO_RELAXED;
+#ifdef _DEBUG
+	flags |= VULKAN_FLAG_VALIDATE;
+#endif
+	return flags;
 }
 
 bool AndroidVulkanContext::InitAPI() {
@@ -40,6 +47,7 @@ bool AndroidVulkanContext::InitAPI() {
 
 	if (!VulkanLoad()) {
 		ERROR_LOG(G3D, "Failed to load Vulkan driver library");
+		state_ = GraphicsContextState::FAILED_INIT;
 		return false;
 	}
 
@@ -58,6 +66,7 @@ bool AndroidVulkanContext::InitAPI() {
 		VulkanSetAvailable(false);
 		delete g_Vulkan;
 		g_Vulkan = nullptr;
+		state_ = GraphicsContextState::FAILED_INIT;
 		return false;
 	}
 
@@ -67,6 +76,7 @@ bool AndroidVulkanContext::InitAPI() {
 		g_Vulkan->DestroyInstance();
 		delete g_Vulkan;
 		g_Vulkan = nullptr;
+		state_ = GraphicsContextState::FAILED_INIT;
 		return false;
 	}
 
@@ -75,14 +85,16 @@ bool AndroidVulkanContext::InitAPI() {
 	INFO_LOG(G3D, "Creating Vulkan device");
 	if (g_Vulkan->CreateDevice() != VK_SUCCESS) {
 		INFO_LOG(G3D, "Failed to create vulkan device: %s", g_Vulkan->InitError().c_str());
-		System_SendMessage("toast", "No Vulkan driver found. Using OpenGL instead.");
+		System_Toast("No Vulkan driver found. Using OpenGL instead.");
 		g_Vulkan->DestroyInstance();
 		delete g_Vulkan;
 		g_Vulkan = nullptr;
+		state_ = GraphicsContextState::FAILED_INIT;
 		return false;
 	}
 
 	INFO_LOG(G3D, "Vulkan device created!");
+	state_ = GraphicsContextState::INITIALIZED;
 	return true;
 }
 

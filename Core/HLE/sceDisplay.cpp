@@ -30,6 +30,7 @@
 #include "Common/Data/Text/I18n.h"
 #include "Common/Profiler/Profiler.h"
 #include "Common/System/System.h"
+#include "Common/System/OSD.h"
 #include "Common/Serialize/Serializer.h"
 #include "Common/Serialize/SerializeFuncs.h"
 #include "Common/Serialize/SerializeMap.h"
@@ -37,7 +38,6 @@
 #include "Core/Config.h"
 #include "Core/CoreTiming.h"
 #include "Core/CoreParameter.h"
-#include "Core/Host.h"
 #include "Core/Reporting.h"
 #include "Core/Core.h"
 #include "Core/System.h"
@@ -49,6 +49,7 @@
 #include "Core/HLE/sceKernelInterrupt.h"
 #include "Core/HW/Display.h"
 #include "Core/Util/PPGeDraw.h"
+#include "Core/RetroAchievements.h"
 
 #include "GPU/GPU.h"
 #include "GPU/GPUState.h"
@@ -285,10 +286,6 @@ void __DisplayDoState(PointerWrap &p) {
 
 	if (p.mode == p.MODE_READ) {
 		gpu->ReapplyGfxState();
-
-		if (hasSetMode) {
-			gpu->InitClear();
-		}
 		gpu->SetDisplayFramebuffer(framebuf.topaddr, framebuf.stride, framebuf.fmt);
 	}
 }
@@ -352,12 +349,25 @@ void __DisplaySetWasPaused() {
 }
 
 static int FrameTimingLimit() {
+	bool challenge = Achievements::ChallengeModeActive();
+
+	auto fixRate = [=](int limit) {
+		int minRate = challenge ? 60 : 1;
+		if (limit != 0) {
+			return std::max(limit, minRate);
+		} else {
+			return limit;
+		}
+	};
+
+	// Can't slow down in challenge mode.
 	if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM1)
-		return g_Config.iFpsLimit1;
+		return fixRate(g_Config.iFpsLimit1);
 	if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM2)
-		return g_Config.iFpsLimit2;
+		return fixRate(g_Config.iFpsLimit2);
 	if (PSP_CoreParameter().fpsLimit == FPSLimit::ANALOG)
-		return PSP_CoreParameter().analogFpsLimit;
+		return fixRate(PSP_CoreParameter().analogFpsLimit);
+	// Note: Fast-forward is OK in challenge mode.
 	if (PSP_CoreParameter().fastForward)
 		return 0;
 	return framerate;
@@ -496,6 +506,9 @@ static void DoFrameIdleTiming() {
 void hleEnterVblank(u64 userdata, int cyclesLate) {
 	int vbCount = userdata;
 
+	// This should be a good place to do it. Should happen once per vblank. Here or in leave? Not sure it matters much.
+	Achievements::FrameUpdate();
+
 	VERBOSE_LOG(SCEDISPLAY, "Enter VBlank %i", vbCount);
 
 	DisplayFireVblankStart();
@@ -551,8 +564,12 @@ void __DisplayFlip(int cyclesLate) {
 	bool duplicateFrames = g_Config.bRenderDuplicateFrames && g_Config.iFrameSkip == 0;
 
 	bool fastForwardSkipFlip = g_Config.iFastForwardMode != (int)FastForwardMode::CONTINUOUS;
-	if (g_Config.bVSync && GetGPUBackend() == GPUBackend::VULKAN) {
+
+	bool fifo = gpu && gpu->GetDrawContext() && gpu->GetDrawContext()->GetPresentationMode() == Draw::PresentationMode::FIFO;
+
+	if (fifo && GetGPUBackend() == GPUBackend::VULKAN) {
 		// Vulkan doesn't support the interval setting, so we force skipping the flip.
+		// TODO: We'll clean this up in a more backend-independent way later.
 		fastForwardSkipFlip = true;
 	}
 
@@ -575,11 +592,11 @@ void __DisplayFlip(int cyclesLate) {
 			PSP_CoreParameter().fpsLimit == FPSLimit::NORMAL &&
 			DisplayIsRunningSlow()) {
 #ifndef _DEBUG
-			auto err = GetI18NCategory("Error");
+			auto err = GetI18NCategory(I18NCat::ERRORS);
 			if (g_Config.bSoftwareRendering) {
-				host->NotifyUserMessage(err->T("Running slow: Try turning off Software Rendering"), 6.0f, 0xFF30D0D0);
+				g_OSD.Show(OSDType::MESSAGE_INFO, err->T("Running slow: Try turning off Software Rendering"));
 			} else {
-				host->NotifyUserMessage(err->T("Running slow: try frameskip, sound is choppy when slow"), 6.0f, 0xFF30D0D0);
+				g_OSD.Show(OSDType::MESSAGE_INFO, err->T("Running slow: try frameskip, sound is choppy when slow"));
 			}
 #endif
 			hasNotifiedSlow = true;
@@ -601,7 +618,7 @@ void __DisplayFlip(int cyclesLate) {
 			}
 		}
 
-		// Setting CORE_NEXTFRAME causes a swap.
+		// Setting CORE_NEXTFRAME (which Core_NextFrame does) causes a swap.
 		const bool fbReallyDirty = gpu->FramebufferReallyDirty();
 		if (fbReallyDirty || noRecentFlip || postEffectRequiresFlip) {
 			// Check first though, might've just quit / been paused.
@@ -749,10 +766,7 @@ static u32 sceDisplaySetMode(int displayMode, int displayWidth, int displayHeigh
 		return hleLogWarning(SCEDISPLAY, SCE_KERNEL_ERROR_INVALID_SIZE, "invalid size");
 	}
 
-	if (!hasSetMode) {
-		gpu->InitClear();
-		hasSetMode = true;
-	}
+	hasSetMode = true;
 	mode = displayMode;
 	width = displayWidth;
 	height = displayHeight;

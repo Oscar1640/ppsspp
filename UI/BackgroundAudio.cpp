@@ -7,11 +7,13 @@
 #include "Common/CommonTypes.h"
 #include "Common/Data/Format/RIFF.h"
 #include "Common/Log.h"
+#include "Common/System/System.h"
 #include "Common/Serialize/SerializeFuncs.h"
 #include "Common/TimeUtil.h"
 #include "Common/Data/Collections/FixedSizeQueue.h"
 #include "Core/HW/SimpleAudioDec.h"
 #include "Core/HLE/__sceAudio.h"
+#include "Core/System.h"
 #include "GameInfoCache.h"
 #include "Core/Config.h"
 #include "UI/BackgroundAudio.h"
@@ -255,49 +257,6 @@ BackgroundAudio::~BackgroundAudio() {
 	delete[] buffer;
 }
 
-BackgroundAudio::Sample *BackgroundAudio::LoadSample(const std::string &path) {
-	size_t bytes;
-	uint8_t *data = VFSReadFile(path.c_str(), &bytes);
-	if (!data) {
-		return nullptr;
-	}
-
-	RIFFReader reader(data, (int)bytes);
-
-	WavData wave;
-	wave.Read(reader);
-
-	delete [] data;
-
-	if (wave.num_channels != 2 || wave.sample_rate != 44100 || wave.raw_bytes_per_frame != 4) {
-		ERROR_LOG(AUDIO, "Wave format not supported for mixer playback. Must be 16-bit raw stereo. '%s'", path.c_str());
-		return nullptr;
-	}
-
-	int16_t *samples = new int16_t[2 * wave.numFrames];
-	memcpy(samples, wave.raw_data, wave.numFrames * wave.raw_bytes_per_frame);
-
-	return new BackgroundAudio::Sample(samples, wave.numFrames);
-}
-
-void BackgroundAudio::LoadSamples() {
-	samples_.resize((size_t)UI::UISound::COUNT);
-	samples_[(size_t)UI::UISound::BACK] = std::unique_ptr<Sample>(LoadSample("sfx_back.wav"));
-	samples_[(size_t)UI::UISound::SELECT] = std::unique_ptr<Sample>(LoadSample("sfx_select.wav"));
-	samples_[(size_t)UI::UISound::CONFIRM] = std::unique_ptr<Sample>(LoadSample("sfx_confirm.wav"));
-	samples_[(size_t)UI::UISound::TOGGLE_ON] = std::unique_ptr<Sample>(LoadSample("sfx_toggle_on.wav"));
-	samples_[(size_t)UI::UISound::TOGGLE_OFF] = std::unique_ptr<Sample>(LoadSample("sfx_toggle_off.wav"));
-
-	UI::SetSoundCallback([](UI::UISound sound) {
-		g_BackgroundAudio.PlaySFX(sound);
-	});
-}
-
-void BackgroundAudio::PlaySFX(UI::UISound sfx) {
-	std::lock_guard<std::mutex> lock(mutex_);
-	plays_.push_back(PlayInstance{ sfx, 0, 64, false });
-}
-
 void BackgroundAudio::Clear(bool hard) {
 	if (!hard) {
 		fadingOut_ = true;
@@ -333,14 +292,18 @@ void BackgroundAudio::SetGame(const Path &path) {
 	bgGamePath_ = path;
 }
 
-int BackgroundAudio::Play() {
+bool BackgroundAudio::Play() {
+	if (GetUIState() == UISTATE_INGAME) {
+		return false;
+	}
+
 	std::lock_guard<std::mutex> lock(mutex_);
 
 	// Immediately stop the sound if it is turned off while playing.
 	if (!g_Config.bEnableSound) {
 		Clear(true);
-		__PushExternalAudio(0, 0);
-		return 0;
+		System_AudioClear();
+		return true;
 	}
 
 	double now = time_now_d();
@@ -366,29 +329,7 @@ int BackgroundAudio::Play() {
 		}
 	}
 
-	// Mix in menu sound effects. Terribly slow mixer but meh.
-	if (!plays_.empty()) {
-		for (int i = 0; i < sz * 2; i += 2) {
-			std::vector<PlayInstance>::iterator iter = plays_.begin();
-			while (iter != plays_.end()) {
-				PlayInstance inst = *iter;
-				auto sample = samples_[(int)inst.sound].get();
-				if (!sample || iter->offset >= sample->length_) {
-					iter->done = true;
-					iter = plays_.erase(iter);
-				} else {
-					if (!iter->done) {
-						buffer[i] += sample->data_[inst.offset * 2] * inst.volume >> 8;
-						buffer[i + 1] += sample->data_[inst.offset * 2 + 1] * inst.volume >> 8;
-					}
-					iter->offset++;
-					iter++;
-				}
-			}
-		}
-	}
-
-	__PushExternalAudio(buffer, sz);
+	System_AudioPushSamples(buffer, sz);
 
 	if (at3Reader_ && fadingOut_ && volume_ <= 0.0f) {
 		Clear(true);
@@ -398,7 +339,7 @@ int BackgroundAudio::Play() {
 
 	lastPlaybackTime_ = now;
 
-	return 0;
+	return true;
 }
 
 void BackgroundAudio::Update() {
@@ -424,4 +365,110 @@ void BackgroundAudio::Update() {
 		}
 		sndLoadPending_ = false;
 	}
+}
+
+static inline int16_t Clamp16(int32_t sample) {
+	if (sample < -32767) return -32767;
+	if (sample > 32767) return 32767;
+	return sample;
+}
+
+void SoundEffectMixer::Mix(int16_t *buffer, int sz, int sampleRateHz) {
+	{
+		std::lock_guard<std::mutex> guard(mutex_);
+		if (!queue_.empty()) {
+			for (const auto &entry : queue_) {
+				plays_.push_back(entry);
+			}
+			queue_.clear();
+		}
+		if (plays_.empty()) {
+			return;
+		}
+	}
+
+	for (std::vector<PlayInstance>::iterator iter = plays_.begin(); iter != plays_.end(); ) {
+		auto sample = samples_[(int)iter->sound].get();
+		if (!sample) {
+			// Remove playback instance if sample invalid.
+			iter = plays_.erase(iter);
+			continue;
+		}
+
+		int64_t rateOfSample = sample->rateInHz_;
+		int64_t stride = (rateOfSample << 32) / sampleRateHz;
+
+		for (int i = 0; i < sz * 2; i += 2) {
+			if ((iter->offset >> 32) >= sample->length_ - 2) {
+				iter->done = true;
+				break;
+			}
+
+			int wholeOffset = iter->offset >> 32;
+			int frac = (iter->offset >> 20) & 0xFFF;  // Use a 12 bit fraction to get away with 32-bit multiplies
+
+			int interpolatedLeft = (sample->data_[wholeOffset * 2] * (0x1000 - frac) + sample->data_[(wholeOffset + 1) * 2] * frac) >> 12;
+			int interpolatedRight = (sample->data_[wholeOffset * 2 + 1] * (0x1000 - frac) + sample->data_[(wholeOffset + 1) * 2 + 1] * frac) >> 12;
+
+			// Clamping add on top per sample. Not great, we should be mixing at higher bitrate instead. Oh well.
+			int left = Clamp16(buffer[i] + (interpolatedLeft * iter->volume >> 8));
+			int right = Clamp16(buffer[i + 1] + (interpolatedRight * iter->volume >> 8));
+
+			buffer[i] = left;
+			buffer[i + 1] = right;
+
+			iter->offset += stride;
+		}
+
+		if (iter->done) {
+			iter = plays_.erase(iter);
+		} else {
+			iter++;
+		}
+	}
+}
+
+void SoundEffectMixer::Play(UI::UISound sfx, float volume) {
+	std::lock_guard<std::mutex> guard(mutex_);
+	queue_.push_back(PlayInstance{ sfx, 0, (int)(255.0f * volume), false });
+}
+
+Sample *SoundEffectMixer::LoadSample(const std::string &path) {
+	size_t bytes;
+	uint8_t *data = g_VFS.ReadFile(path.c_str(), &bytes);
+	if (!data) {
+		WARN_LOG(AUDIO, "Failed to load sample '%s'", path.c_str());
+		return nullptr;
+	}
+
+	RIFFReader reader(data, (int)bytes);
+
+	WavData wave;
+	wave.Read(reader);
+
+	delete[] data;
+
+	if (wave.num_channels != 2 || wave.raw_bytes_per_frame != 4) {
+		ERROR_LOG(AUDIO, "Wave format not supported for mixer playback. Must be 16-bit raw stereo. '%s'", path.c_str());
+		return nullptr;
+	}
+
+	int16_t *samples = new int16_t[2 * wave.numFrames];
+	memcpy(samples, wave.raw_data, wave.numFrames * wave.raw_bytes_per_frame);
+	return new Sample(samples, wave.numFrames, wave.sample_rate);
+}
+
+void SoundEffectMixer::LoadSamples() {
+	samples_.resize((size_t)UI::UISound::COUNT);
+	samples_[(size_t)UI::UISound::BACK] = std::unique_ptr<Sample>(LoadSample("sfx_back.wav"));
+	samples_[(size_t)UI::UISound::SELECT] = std::unique_ptr<Sample>(LoadSample("sfx_select.wav"));
+	samples_[(size_t)UI::UISound::CONFIRM] = std::unique_ptr<Sample>(LoadSample("sfx_confirm.wav"));
+	samples_[(size_t)UI::UISound::TOGGLE_ON] = std::unique_ptr<Sample>(LoadSample("sfx_toggle_on.wav"));
+	samples_[(size_t)UI::UISound::TOGGLE_OFF] = std::unique_ptr<Sample>(LoadSample("sfx_toggle_off.wav"));
+	samples_[(size_t)UI::UISound::ACHIEVEMENT_UNLOCKED] = std::unique_ptr<Sample>(LoadSample("sfx_achievement_unlocked.wav"));
+	samples_[(size_t)UI::UISound::LEADERBOARD_SUBMITTED] = std::unique_ptr<Sample>(LoadSample("sfx_leaderbord_submitted.wav"));
+
+	UI::SetSoundCallback([](UI::UISound sound, float volume) {
+		g_BackgroundAudio.SFX().Play(sound, volume);
+	});
 }

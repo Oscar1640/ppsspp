@@ -146,3 +146,7 @@ CMakeFiles
 /assets/ui_atlas.zim
 /assets/ui_atlas.zim
 /assets/ui_atlas.meta
+build
+libretro/obj/local
+
+ppsspp_retroachievements.dat

@@ -25,7 +25,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.PowerManager;
 import android.os.Vibrator;
-import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import androidx.documentfile.provider.DocumentFile;
 import android.text.InputType;
@@ -105,6 +104,11 @@ public abstract class NativeActivity extends Activity {
 	private static final int RESULT_LOAD_IMAGE = 1;
 	private static final int RESULT_OPEN_DOCUMENT = 2;
 	private static final int RESULT_OPEN_DOCUMENT_TREE = 3;
+
+	// These can probably be merged, but conceptually nice to have them separate.
+	private int imageRequestId = -1;
+	private int fileRequestId = -1;
+	private int folderRequestId = -1;
 
 	// Allow for multiple connected gamepads but just consider them the same for now.
 	// Actually this is not entirely true, see the code.
@@ -196,9 +200,9 @@ public abstract class NativeActivity extends Activity {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
 			// Let's start out granted if it was granted already.
 			if (this.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
-				NativeApp.sendMessage("permission_granted", "storage");
+				NativeApp.sendMessageFromJava("permission_granted", "storage");
 			} else {
-				NativeApp.sendMessage("permission_denied", "storage");
+				NativeApp.sendMessageFromJava("permission_denied", "storage");
 			}
 		}
 	}
@@ -216,9 +220,9 @@ public abstract class NativeActivity extends Activity {
 		switch (requestCode) {
 		case REQUEST_CODE_STORAGE_PERMISSION:
 			if (permissionsGranted(permissions, grantResults)) {
-				NativeApp.sendMessage("permission_granted", "storage");
+				NativeApp.sendMessageFromJava("permission_granted", "storage");
 			} else {
-				NativeApp.sendMessage("permission_denied", "storage");
+				NativeApp.sendMessageFromJava("permission_denied", "storage");
 			}
 			break;
 		case REQUEST_CODE_LOCATION_PERMISSION:
@@ -360,7 +364,7 @@ public abstract class NativeActivity extends Activity {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
 			if (powerManager != null && powerManager.isSustainedPerformanceModeSupported()) {
 				sustainedPerfSupported = true;
-				NativeApp.sendMessage("sustained_perf_supported", "1");
+				NativeApp.sendMessageFromJava("sustained_perf_supported", "1");
 			}
 		}
 
@@ -399,8 +403,6 @@ public abstract class NativeActivity extends Activity {
 
 		isXperiaPlay = IsXperiaPlay();
 
-		String libraryDir = getApplicationLibraryDir(appInfo);
-
 		String extStorageState = Environment.getExternalStorageState();
 		String extStorageDir = Environment.getExternalStorageDirectory().getAbsolutePath();
 		File externalFiles = this.getExternalFilesDir(null);
@@ -426,6 +428,7 @@ public abstract class NativeActivity extends Activity {
 			additionalStorageDirs = s.toString();
 		}
 		catch (Exception e) {
+			NativeApp.reportException(e, null);
 			Log.e(TAG, "Failed to get SD storage dirs: " + e.toString());
 		}
 
@@ -446,7 +449,7 @@ public abstract class NativeActivity extends Activity {
 		overrideShortcutParam = null;
 
 		NativeApp.audioConfig(optimalFramesPerBuffer, optimalSampleRate);
-		NativeApp.init(model, deviceType, languageRegion, apkFilePath, dataDir, extStorageDir, externalFilesDir, additionalStorageDirs, libraryDir, cacheDir, shortcut, Build.VERSION.SDK_INT, Build.BOARD);
+		NativeApp.init(model, deviceType, languageRegion, apkFilePath, dataDir, extStorageDir, externalFilesDir, additionalStorageDirs, cacheDir, shortcut, Build.VERSION.SDK_INT, Build.BOARD);
 
 		// Allow C++ to tell us to use JavaGL or not.
 		javaGL = "true".equalsIgnoreCase(NativeApp.queryConfig("androidJavaGL"));
@@ -575,17 +578,17 @@ public abstract class NativeActivity extends Activity {
 		public void run() {
 			Log.i(TAG, "Starting the render loop: " + mSurface);
 			// Start emulation using the provided Surface.
-			if (!runEGLRenderLoop(mSurface)) {
+			if (!runVulkanRenderLoop(mSurface)) {
 				// Shouldn't happen.
-				Log.e(TAG, "Failed to start up OpenGL/Vulkan");
+				Log.e(TAG, "Failed to start up OpenGL/Vulkan - runVulkanRenderLoop returned false");
 			}
 			Log.i(TAG, "Left the render loop: " + mSurface);
 		}
 	};
 
-	public native boolean runEGLRenderLoop(Surface surface);
+	public native boolean runVulkanRenderLoop(Surface surface);
 	// Tells the render loop thread to exit, so we can restart it.
-	public native void exitEGLRenderLoop();
+	public native void requestExitVulkanRenderLoop();
 
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
@@ -690,17 +693,17 @@ public abstract class NativeActivity extends Activity {
 		updateSustainedPerformanceMode();
 	}
 
-	// Invariants: After this, mRenderLoopThread will be set, and the thread will be running.
+	// Invariants: After this, mRenderLoopThread will be set, and the thread will be running,
+	// if in Vulkan mode.
 	protected synchronized void ensureRenderLoop() {
 		if (javaGL) {
-			Log.e(TAG, "JavaGL - should not get into ensureRenderLoop.");
+			Log.e(TAG, "JavaGL mode - should not get into ensureRenderLoop.");
 			return;
 		}
 		if (mSurface == null) {
 			Log.w(TAG, "ensureRenderLoop - not starting thread, needs surface");
 			return;
 		}
-
 		if (mRenderLoopThread == null) {
 			Log.w(TAG, "ensureRenderLoop: Starting thread");
 			mRenderLoopThread = new Thread(mEmulationRunner);
@@ -717,8 +720,8 @@ public abstract class NativeActivity extends Activity {
 
 		if (mRenderLoopThread != null) {
 			// This will wait until the thread has exited.
-			Log.i(TAG, "exitEGLRenderLoop");
-			exitEGLRenderLoop();
+			Log.i(TAG, "requestExitVulkanRenderLoop");
+			requestExitVulkanRenderLoop();
 			try {
 				Log.i(TAG, "joining render loop thread...");
 				mRenderLoopThread.join();
@@ -752,7 +755,7 @@ public abstract class NativeActivity extends Activity {
 		super.onDestroy();
 		Log.i(TAG, "onDestroy");
 		if (javaGL) {
-			if (nativeRenderer.isRenderingFrame()) {
+			if (nativeRenderer != null && nativeRenderer.isRenderingFrame()) {
 				Log.i(TAG, "Waiting for renderer to finish.");
 				int tries = 200;
 				do {
@@ -982,11 +985,7 @@ public abstract class NativeActivity extends Activity {
 			// XInput device on Android returns source 1281 or 0x501, which equals GAMEPAD | KEYBOARD.
 			// Shield Remote returns 769 or 0x301 which equals DPAD | KEYBOARD.
 
-			// Don't disable passthrough if app at top level.
-			if (((sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
-					(sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK ||
-					(sources & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD))
-			{
+			if (InputDeviceState.inputSourceIsJoystick(sources)) {
 				passThrough = false;
 			}
 
@@ -1028,7 +1027,7 @@ public abstract class NativeActivity extends Activity {
 	@TargetApi(Build.VERSION_CODES.HONEYCOMB_MR1)
 	public boolean onGenericMotionEvent(MotionEvent event) {
 		// Log.d(TAG, "onGenericMotionEvent: " + event);
-		if ((event.getSource() & InputDevice.SOURCE_JOYSTICK) != 0) {
+		if (InputDeviceState.inputSourceIsJoystick(event.getSource())) {
 			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR1) {
 				InputDeviceState state = getInputDeviceState(event);
 				if (state == null) {
@@ -1081,7 +1080,7 @@ public abstract class NativeActivity extends Activity {
 		case KeyEvent.KEYCODE_DPAD_LEFT:
 		case KeyEvent.KEYCODE_DPAD_RIGHT:
 			// Joysticks are supported in Honeycomb MR1 and later via the onGenericMotionEvent method.
-			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR1 && event.getSource() == InputDevice.SOURCE_JOYSTICK) {
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR1 && InputDeviceState.inputSourceIsJoystick(event.getSource())) {
 				// Pass through / ignore
 				return super.onKeyDown(keyCode, event);
 			}
@@ -1119,7 +1118,7 @@ public abstract class NativeActivity extends Activity {
 		case KeyEvent.KEYCODE_DPAD_LEFT:
 		case KeyEvent.KEYCODE_DPAD_RIGHT:
 			// Joysticks are supported in Honeycomb MR1 and later via the onGenericMotionEvent method.
-			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR1 && event.getSource() == InputDevice.SOURCE_JOYSTICK) {
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR1 && InputDeviceState.inputSourceIsJoystick(event.getSource())) {
 				return super.onKeyUp(keyCode, event);
 			}
 			// Fall through
@@ -1133,15 +1132,16 @@ public abstract class NativeActivity extends Activity {
 	@Override
 	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 		super.onActivityResult(requestCode, resultCode, data);
-		if (resultCode != RESULT_OK || data == null) {
-			return;
-		}
 		if (requestCode == RESULT_LOAD_IMAGE) {
+			if (resultCode != RESULT_OK || data == null) {
+				NativeApp.sendRequestResult(imageRequestId, false, "", 0);
+				return;
+			}
 			try {
 				Uri selectedImage = data.getData();
 				if (selectedImage != null) {
 					if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-						NativeApp.sendMessage("bgImage_updated", selectedImage.toString());
+						NativeApp.sendRequestResult(imageRequestId, true, selectedImage.toString(), 0);
 					} else {
 						String[] filePathColumn = {MediaStore.Images.Media.DATA};
 						Cursor cursor = getContentResolver().query(selectedImage, filePathColumn, null, null, null);
@@ -1150,14 +1150,22 @@ public abstract class NativeActivity extends Activity {
 							int columnIndex = cursor.getColumnIndex(filePathColumn[0]);
 							String picturePath = cursor.getString(columnIndex);
 							cursor.close();
-							NativeApp.sendMessage("bgImage_updated", picturePath);
+							NativeApp.sendRequestResult(imageRequestId, true, picturePath, 0);
 						}
 					}
+				} else {
+					NativeApp.sendRequestResult(imageRequestId, false, "", 0);
 				}
 			} catch (Exception e) {
+				NativeApp.reportException(e, null);
 				Log.w(TAG, "Exception receiving image: " + e);
 			}
+			imageRequestId = -1;
 		} else if (requestCode == RESULT_OPEN_DOCUMENT) {
+			if (resultCode != RESULT_OK || data == null) {
+				NativeApp.sendRequestResult(fileRequestId, false, "", 0);
+				return;
+			}
 			Uri selectedFile = data.getData();
 			if (selectedFile != null) {
 				try {
@@ -1167,21 +1175,39 @@ public abstract class NativeActivity extends Activity {
 					}
 				} catch (Exception e) {
 					Log.w(TAG, "Exception getting permissions for document: " + e.toString());
+					NativeApp.sendRequestResult(fileRequestId, false, "", 0);
+					NativeApp.reportException(e, selectedFile.toString());
+					fileRequestId = -1;
+					return;
 				}
 				// Even if we got an exception getting permissions, try to pass along the file. Maybe this version of Android
 				// doesn't need it.
 				Log.i(TAG, "Browse file finished:" + selectedFile.toString());
-				NativeApp.sendMessage("browse_fileSelect", selectedFile.toString());
+				NativeApp.sendRequestResult(fileRequestId, true, selectedFile.toString(), 0);
 			}
+			fileRequestId = -1;
 		} else if (requestCode == RESULT_OPEN_DOCUMENT_TREE) {
+			if (folderRequestId == -1) {
+				Log.e(TAG, "Unexpected request ID -1");
+			}
+
+			if (resultCode != RESULT_OK || data == null) {
+				NativeApp.sendRequestResult(folderRequestId, false, "", 0);
+				folderRequestId = -1;
+				return;
+			}
 			Uri selectedDirectoryUri = data.getData();
 			if (selectedDirectoryUri != null) {
 				String path = selectedDirectoryUri.toString();
 				Log.i(TAG, "Browse folder finished: " + path);
 				try {
-					getContentResolver().takePersistableUriPermission(selectedDirectoryUri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+					if (Build.VERSION.SDK_INT >= 19) {
+						getContentResolver().takePersistableUriPermission(selectedDirectoryUri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+					}
 				} catch (Exception e) {
+					NativeApp.reportException(e, selectedDirectoryUri.toString());
 					Log.w(TAG, "Exception getting permissions for document: " + e.toString());
+					// Intentionally don't return - see below.
 				}
 				// Even if we got an exception getting permissions, try to pass along the file. Maybe this version of Android
 				// doesn't need it. If we can't access it, we'll fail in some other way later.
@@ -1194,8 +1220,9 @@ public abstract class NativeActivity extends Activity {
 					Log.i(TAG, "Child: " + child.getUri() + " " + child.getName());
 				}
 				*/
-				NativeApp.sendMessage("browse_folderSelect", documentFile.getUri().toString());
+				NativeApp.sendRequestResult(folderRequestId, true, documentFile.getUri().toString(), 0);
 			}
+			folderRequestId = -1;
 		}
 	}
 
@@ -1233,11 +1260,11 @@ public abstract class NativeActivity extends Activity {
 		return bld;
 	}
 
-	// The return value is sent to C++ via seqID.
-	public void inputBox(final String seqID, final String title, String defaultText, String defaultAction) {
+	// The return value is sent to C++ via requestID.
+	public void inputBox(final int requestId, final String title, String defaultText, String defaultAction) {
 		// Workaround for issue #13363 to fix Split/Second game start
 		if (isVRDevice()) {
-			NativeApp.sendInputBox(seqID, false, defaultText);
+			NativeApp.sendRequestResult(requestId, false, defaultText, 0);
 			return;
 		}
 
@@ -1272,14 +1299,14 @@ public abstract class NativeActivity extends Activity {
 			.setPositiveButton(defaultAction, new DialogInterface.OnClickListener() {
 				@Override
 				public void onClick(DialogInterface d, int which) {
-					NativeApp.sendInputBox(seqID, true, input.getText().toString());
+					NativeApp.sendRequestResult(requestId, true, input.getText().toString(), 0);
 					d.dismiss();
 				}
 			})
 			.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
 				@Override
 				public void onClick(DialogInterface d, int which) {
-					NativeApp.sendInputBox(seqID, false, "");
+					NativeApp.sendRequestResult(requestId, false, "", 0);
 					d.cancel();
 				}
 			});
@@ -1287,7 +1314,7 @@ public abstract class NativeActivity extends Activity {
 			builder.setOnDismissListener(new DialogInterface.OnDismissListener() {
 				@Override
 				public void onDismiss(DialogInterface d) {
-					NativeApp.sendInputBox(seqID, false, "");
+					NativeApp.sendRequestResult(requestId, false, "", 0);
 					updateSystemUiVisibility();
 				}
 			});
@@ -1301,14 +1328,32 @@ public abstract class NativeActivity extends Activity {
 	public boolean processCommand(String command, String params) {
 		SurfaceView surfView = javaGL ? mGLSurfaceView : mSurfaceView;
 		if (command.equals("launchBrowser")) {
-			try {
-				Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(params));
-				startActivity(i);
-				return true;
-			} catch (Exception e) {
-				// No browser?
-				Log.e(TAG, e.toString());
-				return false;
+			// Special case for twitter
+			if (params.startsWith("https://twitter.com/#!/")) {
+				try {
+					String twitter_user_name = params.replaceFirst("https://twitter.com/#!/", "");
+					try {
+						Log.i(TAG, "Launching twitter directly: " + twitter_user_name);
+						startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("twitter://user?screen_name=" + twitter_user_name)));
+					} catch (Exception e) {
+						startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://twitter.com/#!/" + twitter_user_name)));
+					}
+					return true;
+				} catch (Exception e) { // For example, android.content.ActivityNotFoundException
+					Log.e(TAG, e.toString());
+					return false;
+				}
+			} else {
+				try {
+					Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(params));
+					startActivity(i);
+					return true;
+				} catch (Exception e) {
+					NativeApp.reportException(e, params);
+					// No browser?
+					Log.e(TAG, e.toString());
+					return false;
+				}
 			}
 		} else if (command.equals("launchEmail")) {
 			try {
@@ -1321,20 +1366,26 @@ public abstract class NativeActivity extends Activity {
 				startActivity(Intent.createChooser(send, "E-mail the app author!"));
 				return true;
 			} catch (Exception e) { // For example, android.content.ActivityNotFoundException
+				NativeApp.reportException(e, params);
 				Log.e(TAG, e.toString());
 				return false;
 			}
-		} else if (command.equals("bgImage_browse")) {
+		} else if (command.equals("browse_image")) {
 			try {
+				imageRequestId = Integer.parseInt(params);
+				Log.i(TAG, "image request ID: " + imageRequestId);
 				Intent i = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
 				startActivityForResult(i, RESULT_LOAD_IMAGE);
 				return true;
 			} catch (Exception e) { // For example, android.content.ActivityNotFoundException
+				NativeApp.reportException(e, params);
+				imageRequestId = -1;
 				Log.e(TAG, e.toString());
 				return false;
 			}
 		} else if (command.equals("browse_file")) {
 			try {
+				fileRequestId = Integer.parseInt(params);
 				Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
 				intent.addCategory(Intent.CATEGORY_OPENABLE);
 				intent.setType("*/*");
@@ -1345,11 +1396,14 @@ public abstract class NativeActivity extends Activity {
 				startActivityForResult(intent, RESULT_OPEN_DOCUMENT);
 				// intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, pickerInitialUri);
 			} catch (Exception e) {
+				NativeApp.reportException(e, params);
+				fileRequestId = -1;
 				Log.e(TAG, e.toString());
 				return false;
 			}
 		} else if (command.equals("browse_folder")) {
 			try {
+				folderRequestId = Integer.parseInt(params);
 				Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
 				intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 				intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
@@ -1358,21 +1412,12 @@ public abstract class NativeActivity extends Activity {
 				startActivityForResult(intent, RESULT_OPEN_DOCUMENT_TREE);
 				return true;
 			} catch (Exception e) {
+				NativeApp.reportException(e, params);
+				folderRequestId = -1;
 				Log.e(TAG, e.toString());
 				return false;
 			}
-		} else if (command.equals("sharejpeg")) {
-			try {
-				Intent share = new Intent(Intent.ACTION_SEND);
-				share.setType("image/jpeg");
-				share.putExtra(Intent.EXTRA_STREAM, Uri.parse("file://" + params));
-				startActivity(Intent.createChooser(share, "Share Picture"));
-				return true;
-			} catch (Exception e) { // For example, android.content.ActivityNotFoundException
-				Log.e(TAG, e.toString());
-				return false;
-			}
-		} else if (command.equals("sharetext")) {
+		} else if (command.equals("share_text")) {
 			try {
 				Intent sendIntent = new Intent();
 				sendIntent.setType("text/plain");
@@ -1382,19 +1427,7 @@ public abstract class NativeActivity extends Activity {
 				startActivity(shareIntent);
 				return true;
 			} catch (Exception e) { // For example, android.content.ActivityNotFoundException
-				Log.e(TAG, e.toString());
-				return false;
-			}
-		} else if (command.equals("showTwitter")) {
-			try {
-				String twitter_user_name = params;
-				try {
-					startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("twitter://user?screen_name=" + twitter_user_name)));
-				} catch (Exception e) {
-					startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://twitter.com/#!/" + twitter_user_name)));
-				}
-				return true;
-			} catch (Exception e) { // For example, android.content.ActivityNotFoundException
+				NativeApp.reportException(e, params);
 				Log.e(TAG, e.toString());
 				return false;
 			}
@@ -1422,13 +1455,13 @@ public abstract class NativeActivity extends Activity {
 			String title = "Input";
 			String defString = "";
 			String[] param = params.split(":@:", 3);
-			String seqID = param[0];
+			int requestID = Integer.parseInt(param[0]);
 			if (param.length > 1 && param[1].length() > 0)
 				title = param[1];
 			if (param.length > 2)
 				defString = param[2];
-			Log.i(TAG, "Launching inputbox: #" + seqID + " " + title + " " + defString);
-			inputBox(seqID, title, defString, "OK");
+			Log.i(TAG, "Launching inputbox: #" + requestID + " " + title + " " + defString);
+			inputBox(requestID, title, defString, "OK");
 			return true;
 		} else if (command.equals("vibrate")) {
 			int milliseconds = -1;
@@ -1495,9 +1528,9 @@ public abstract class NativeActivity extends Activity {
 			recreate();
 		} else if (command.equals("ask_permission") && params.equals("storage")) {
 			if (askForPermissions(permissionsForStorage, REQUEST_CODE_STORAGE_PERMISSION)) {
-				NativeApp.sendMessage("permission_pending", "storage");
+				NativeApp.sendMessageFromJava("permission_pending", "storage");
 			} else {
-				NativeApp.sendMessage("permission_granted", "storage");
+				NativeApp.sendMessageFromJava("permission_granted", "storage");
 			}
 		} else if (command.equals("gps_command")) {
 			if (params.equals("open")) {
@@ -1542,6 +1575,12 @@ public abstract class NativeActivity extends Activity {
 				// Only keep the screen bright ingame.
 				window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 			}
+		} else if (command.equals("testException")) {
+			try {
+				throw new Exception();
+			} catch (Exception e) {
+				NativeApp.reportException(e, params);
+			}
 		}
 		return false;
 	}
@@ -1558,6 +1597,6 @@ public abstract class NativeActivity extends Activity {
 	}
 
 	public static boolean isVRDevice() {
-		return BuildConfig.FLAVOR.startsWith("vr_");
+		return BuildConfig.FLAVOR.startsWith("vr");
 	}
 }

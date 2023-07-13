@@ -48,8 +48,6 @@ struct ThemeInfo {
 	uint32_t uHeaderStyleFg = 0xFFFFFFFF;
 	uint32_t uInfoStyleFg = 0xFFFFFFFF;
 	uint32_t uInfoStyleBg = 0x00000000;
-	uint32_t uPopupTitleStyleFg = 0xFFF27391;
-	uint32_t uPopupStyleFg = 0xFFFFFFFF;
 	uint32_t uPopupStyleBg = 0xFF303030;
 	uint32_t uBackgroundColor = 0xFF88375C;
 
@@ -86,7 +84,7 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 
 	for (size_t d = 0; d < directories.size(); d++) {
 		std::vector<File::FileInfo> fileInfo;
-		VFSGetFileListing(directories[d].c_str(), &fileInfo, "ini:");
+		g_VFS.GetFileListing(directories[d].c_str(), &fileInfo, "ini:");
 
 		if (fileInfo.empty()) {
 			File::GetFilesInDir(directories[d], &fileInfo, "ini:");
@@ -106,15 +104,14 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 			if (path.ToString().substr(0, 7) == "assets/")
 				path = Path(path.ToString().substr(7));
 
-			if (ini.LoadFromVFS(name.ToString()) || ini.Load(fileInfo[f].fullName)) {
+			if (ini.LoadFromVFS(g_VFS, name.ToString()) || ini.Load(fileInfo[f].fullName)) {
 				success = true;
-				// vsh load. meh.
 			}
 
 			if (!success)
 				continue;
 
-			// Alright, let's loop through the sections and see if any is a themes.
+			// Alright, let's loop through the sections and see if any is a theme.
 			for (size_t i = 0; i < ini.Sections().size(); i++) {
 				Section &section = ini.Sections()[i];
 				ThemeInfo info;
@@ -132,8 +129,6 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 				section.Get("HeaderStyleFg", &info.uHeaderStyleFg, info.uHeaderStyleFg);
 				section.Get("InfoStyleFg", &info.uInfoStyleFg, info.uInfoStyleFg);
 				section.Get("InfoStyleBg", &info.uInfoStyleBg, info.uInfoStyleBg);
-				section.Get("PopupTitleStyleFg", &info.uPopupTitleStyleFg, info.uPopupTitleStyleFg);
-				section.Get("PopupStyleFg", &info.uPopupStyleFg, info.uPopupStyleFg);
 				section.Get("PopupStyleBg", &info.uPopupStyleBg, info.uPopupStyleBg);
 				section.Get("BackgroundColor", &info.uBackgroundColor, info.uBackgroundColor);
 
@@ -143,7 +138,7 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 					tmpPath = (path / tmpPath).ToString();
 
 					File::FileInfo tmpInfo;
-					if (VFSGetFileInfo((tmpPath+".meta").c_str(), &tmpInfo) && VFSGetFileInfo((tmpPath+".zim").c_str(), &tmpInfo)) {
+					if (g_VFS.GetFileInfo((tmpPath + ".meta").c_str(), &tmpInfo) && g_VFS.GetFileInfo((tmpPath + ".zim").c_str(), &tmpInfo)) {
 						info.sUIAtlas = tmpPath;
 					}
 				}
@@ -163,7 +158,7 @@ static UI::Style MakeStyle(uint32_t fg, uint32_t bg) {
 
 static void LoadAtlasMetadata(Atlas &metadata, const char *filename, bool required) {
 	size_t atlas_data_size = 0;
-	const uint8_t *atlas_data = VFSReadFile(filename, &atlas_data_size);
+	const uint8_t *atlas_data = g_VFS.ReadFile(filename, &atlas_data_size);
 	bool load_success = atlas_data != nullptr && metadata.Load(atlas_data, atlas_data_size);
 	if (!load_success) {
 		if (required)
@@ -219,8 +214,7 @@ void UpdateTheme(UIContext *ctx) {
 	ui_theme.headerStyle.fgColor = themeInfos[i].uHeaderStyleFg;
 	ui_theme.infoStyle = MakeStyle(themeInfos[i].uInfoStyleFg, themeInfos[i].uInfoStyleBg);
 
-	ui_theme.popupTitle.fgColor = themeInfos[i].uPopupTitleStyleFg;
-	ui_theme.popupStyle = MakeStyle(themeInfos[i].uPopupStyleFg, themeInfos[i].uPopupStyleBg);
+	ui_theme.popupStyle = MakeStyle(themeInfos[i].uItemStyleFg, themeInfos[i].uPopupStyleBg);
 	ui_theme.backgroundColor = themeInfos[i].uBackgroundColor;
 
 	// Load any missing atlas metadata (the images are loaded from UIContext).

@@ -24,7 +24,6 @@
 #include "Core/Debugger/Breakpoints.h"
 #include "Core/HLE/HLE.h"
 #include "Core/HLE/ReplaceTables.h"
-#include "Core/Host.h"
 #include "Core/MemMap.h"
 #include "Core/MIPS/MIPS.h"
 #include "Core/MIPS/MIPSTables.h"
@@ -82,19 +81,19 @@ u32 RunMemCheck(u32 pc, u32 addr) {
 template <uint32_t alignment>
 u32 RunValidateAddress(u32 pc, u32 addr, u32 isWrite) {
 	const auto toss = [&](MemoryExceptionType t) {
-		Core_MemoryException(addr, pc, t);
+		Core_MemoryException(addr, alignment, pc, t);
 		return coreState != CORE_RUNNING ? 1 : 0;
 	};
 
 	if (!Memory::IsValidRange(addr, alignment)) {
 		MemoryExceptionType t = isWrite == 1 ? MemoryExceptionType::WRITE_WORD : MemoryExceptionType::READ_WORD;
-		if (alignment > 4)
+		if constexpr (alignment > 4)
 			t = isWrite ? MemoryExceptionType::WRITE_BLOCK : MemoryExceptionType::READ_BLOCK;
 		return toss(t);
 	}
-	if (alignment > 1 && (addr & (alignment - 1)) != 0) {
-		return toss(MemoryExceptionType::ALIGNMENT);
-	}
+	if constexpr (alignment > 1)
+		if ((addr & (alignment - 1)) != 0)
+			return toss(MemoryExceptionType::ALIGNMENT);
 	return 0;
 }
 

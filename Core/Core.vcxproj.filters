@@ -300,9 +300,6 @@
     <ClCompile Include="CoreTiming.cpp">
       <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="Host.cpp">
-      <Filter>Core</Filter>
-    </ClCompile>
     <ClCompile Include="Loaders.cpp">
       <Filter>Core</Filter>
     </ClCompile>
@@ -652,9 +649,6 @@
     <ClCompile Include="FileLoaders\RamCachingFileLoader.cpp">
       <Filter>FileLoaders</Filter>
     </ClCompile>
-    <ClCompile Include="TextureReplacer.cpp">
-      <Filter>Core</Filter>
-    </ClCompile>
     <ClCompile Include="MIPS\IR\IRAsm.cpp">
       <Filter>MIPS\IR</Filter>
     </ClCompile>
@@ -694,7 +688,6 @@
     <ClCompile Include="AVIDump.cpp">
       <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="WaveFile.cpp" />
     <ClCompile Include="HLE\KUBridge.cpp">
       <Filter>HLE\Libraries</Filter>
     </ClCompile>
@@ -723,6 +716,9 @@
       <Filter>Debugger\WebSocket</Filter>
     </ClCompile>
     <ClCompile Include="Debugger\WebSocket\CPUCoreSubscriber.cpp">
+      <Filter>Debugger\WebSocket</Filter>
+    </ClCompile>
+    <ClCompile Include="Debugger\WebSocket\ClientConfigSubscriber.cpp">
       <Filter>Debugger\WebSocket</Filter>
     </ClCompile>
     <ClCompile Include="Debugger\WebSocket\WebSocketUtils.cpp">
@@ -1190,6 +1186,24 @@
     <ClCompile Include="HLE\sceNp2.cpp">
       <Filter>HLE\Libraries</Filter>
     </ClCompile>
+    <ClCompile Include="WaveFile.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ext\riscv-disas.cpp">
+      <Filter>Ext</Filter>
+    </ClCompile>
+    <ClCompile Include="TiltEventProcessor.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="MIPS\MIPSVFPUFallbacks.cpp">
+      <Filter>MIPS</Filter>
+    </ClCompile>
+    <ClCompile Include="ConfigSettings.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="RetroAchievements.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ELF\ElfReader.h">
@@ -1394,9 +1408,6 @@
       <Filter>Core</Filter>
     </ClInclude>
     <ClInclude Include="CoreTiming.h">
-      <Filter>Core</Filter>
-    </ClInclude>
-    <ClInclude Include="Host.h">
       <Filter>Core</Filter>
     </ClInclude>
     <ClInclude Include="Loaders.h">
@@ -1729,9 +1740,6 @@
     <ClInclude Include="FileLoaders\RamCachingFileLoader.h">
       <Filter>FileLoaders</Filter>
     </ClInclude>
-    <ClInclude Include="TextureReplacer.h">
-      <Filter>Core</Filter>
-    </ClInclude>
     <ClInclude Include="MIPS\IR\IRJit.h">
       <Filter>MIPS\IR</Filter>
     </ClInclude>
@@ -1753,7 +1761,6 @@
     <ClInclude Include="AVIDump.h">
       <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="WaveFile.h" />
     <ClInclude Include="HLE\KUBridge.h">
       <Filter>HLE\Libraries</Filter>
     </ClInclude>
@@ -1779,6 +1786,9 @@
       <Filter>Debugger\WebSocket</Filter>
     </ClInclude>
     <ClInclude Include="Debugger\WebSocket\GameBroadcaster.h">
+      <Filter>Debugger\WebSocket</Filter>
+    </ClInclude>
+    <ClInclude Include="Debugger\WebSocket\ClientConfigSubscriber.h">
       <Filter>Debugger\WebSocket</Filter>
     </ClInclude>
     <ClInclude Include="Debugger\WebSocket\CPUCoreSubscriber.h">
@@ -1922,11 +1932,27 @@
     <ClInclude Include="HLE\sceNp2.h">
       <Filter>HLE\Libraries</Filter>
     </ClInclude>
+    <ClInclude Include="WaveFile.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\ext\riscv-disas.h">
+      <Filter>Ext</Filter>
+    </ClInclude>
+    <ClInclude Include="TiltEventProcessor.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="MIPS\MIPSVFPUFallbacks.h">
+      <Filter>MIPS</Filter>
+    </ClInclude>
+    <ClInclude Include="ConfigSettings.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="RetroAchievements.h">
+      <Filter>Core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="CMakeLists.txt" />
     <None Include="..\LICENSE.TXT" />
-    <None Include="..\android\jni\Android.mk" />
     <None Include="..\ext\gason\LICENSE">
       <Filter>Ext\gason</Filter>
     </None>
@@ -1946,6 +1972,9 @@
     </Text>
     <Text Include="..\ext\libzip\CMakeLists.txt">
       <Filter>Ext\libzip</Filter>
+    </Text>
+    <Text Include="..\ext\CMakeLists.txt">
+      <Filter>Ext</Filter>
     </Text>
   </ItemGroup>
 </Project>

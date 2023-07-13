@@ -7,7 +7,13 @@
 #include <pwd.h>
 
 #include "ppsspp_config.h"
+#if PPSSPP_PLATFORM(MAC)
+#include "SDL2/SDL.h"
+#include "SDL2/SDL_syswm.h"
+#else
 #include "SDL.h"
+#include "SDL_syswm.h"
+#endif
 #include "SDL/SDLJoystick.h"
 SDLJoystick *joystick = NULL;
 
@@ -24,16 +30,16 @@ SDLJoystick *joystick = NULL;
 
 #include "Common/System/Display.h"
 #include "Common/System/System.h"
+#include "Common/System/Request.h"
 #include "Common/System/NativeApp.h"
 #include "ext/glslang/glslang/Public/ShaderLang.h"
 #include "Common/Data/Format/PNGLoad.h"
 #include "Common/Net/Resolve.h"
+#include "Common/File/FileUtil.h"
 #include "NKCodeFromSDL.h"
 #include "Common/Math/math_util.h"
 #include "Common/GPU/OpenGL/GLRenderManager.h"
 #include "Common/Profiler/Profiler.h"
-
-#include "SDL_syswm.h"
 
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
 #include <X11/Xlib.h>
@@ -58,19 +64,43 @@ SDLJoystick *joystick = NULL;
 #include "SDLGLGraphicsContext.h"
 #include "SDLVulkanGraphicsContext.h"
 
+#if PPSSPP_PLATFORM(MAC) || PPSSPP_PLATFORM(IOS)
+#include "UI/DarwinFileSystemServices.h"
+#endif
+
+#if PPSSPP_PLATFORM(MAC)
+#include "CocoaBarItems.h"
+#endif
+
+#if PPSSPP_PLATFORM(SWITCH)
+#define LIBNX_SWKBD_LIMIT 500 // enforced by HOS
+extern u32 __nx_applet_type; // Not exposed through a header?
+#endif
 
 GlobalUIState lastUIState = UISTATE_MENU;
 GlobalUIState GetUIState();
 
-static bool g_ToggleFullScreenNextFrame = false;
-static int g_ToggleFullScreenType;
-static int g_QuitRequested = 0;
+static bool g_QuitRequested = false;
+static bool g_RestartRequested = false;
 
 static int g_DesktopWidth = 0;
 static int g_DesktopHeight = 0;
 static float g_RefreshRate = 60.f;
+static int g_sampleRate = 44100;
 
 static SDL_AudioSpec g_retFmt;
+
+// Window state to be transferred to the main SDL thread.
+static std::mutex g_mutexWindow;
+struct WindowState {
+	std::string title;
+	bool toggleFullScreenNextFrame;
+	int toggleFullScreenType;
+	bool clipboardDataAvailable;
+	std::string clipboardString;
+	bool update;
+};
+static WindowState g_windowState;
 
 int getDisplayNumber(void) {
 	int displayNumber = 0;
@@ -87,7 +117,7 @@ int getDisplayNumber(void) {
 }
 
 void sdl_mixaudio_callback(void *userdata, Uint8 *stream, int len) {
-	NativeMix((short *)stream, len / (2 * 2));
+	NativeMix((short *)stream, len / (2 * 2), g_sampleRate);
 }
 
 static SDL_AudioDeviceID audioDev = 0;
@@ -96,10 +126,10 @@ static SDL_AudioDeviceID audioDev = 0;
 static void InitSDLAudioDevice(const std::string &name = "") {
 	SDL_AudioSpec fmt;
 	memset(&fmt, 0, sizeof(fmt));
-	fmt.freq = 44100;
+	fmt.freq = g_sampleRate;
 	fmt.format = AUDIO_S16;
 	fmt.channels = 2;
-	fmt.samples = 1024;
+	fmt.samples = 256;
 	fmt.callback = &sdl_mixaudio_callback;
 	fmt.userdata = nullptr;
 
@@ -155,43 +185,123 @@ void System_Toast(const char *text) {
 #endif
 }
 
-void ShowKeyboard() {
+void System_ShowKeyboard() {
 	// Irrelevant on PC
 }
 
-void Vibrate(int length_ms) {
+void System_Vibrate(int length_ms) {
 	// Ignore on PC
 }
 
-void System_SendMessage(const char *command, const char *parameter) {
-	if (!strcmp(command, "toggle_fullscreen")) {
-		g_ToggleFullScreenNextFrame = true;
-		if (strcmp(parameter, "1") == 0) {
-			g_ToggleFullScreenType = 1;
-		} else if (strcmp(parameter, "0") == 0) {
-			g_ToggleFullScreenType = 0;
-		} else {
-			// Just toggle.
-			g_ToggleFullScreenType = -1;
-		}
-	} else if (!strcmp(command, "finish")) {
+bool System_MakeRequest(SystemRequestType type, int requestId, const std::string &param1, const std::string &param2, int param3) {
+	switch (type) {
+	case SystemRequestType::RESTART_APP:
+		g_RestartRequested = true;
+		// TODO: Also save param1 and then split it into an argv.
+		return true;
+	case SystemRequestType::EXIT_APP:
 		// Do a clean exit
 		g_QuitRequested = true;
-	} else if (!strcmp(command, "graphics_restart")) {
-		// Not sure how we best do this, but do a clean exit, better than being stuck in a bad state.
-		g_QuitRequested = true;
-	} else if (!strcmp(command, "setclipboardtext")) {
-		SDL_SetClipboardText(parameter);
-	} else if (!strcmp(command, "audio_resetDevice")) {
-		StopSDLAudioDevice();
-		InitSDLAudioDevice();
+		return true;
+#if PPSSPP_PLATFORM(SWITCH)
+	case SystemRequestType::INPUT_TEXT_MODAL: {
+		Result rc;
+		SwkbdConfig kbd;
+		// swkbd only works on "real" titles
+		if (__nx_applet_type != AppletType_Application && __nx_applet_type != AppletType_SystemApplication) {
+			g_requestManager.PostSystemFailure(requestId);
+			return true;
+		}
+
+		rc = swkbdCreate(&kbd, 0);
+
+		if (R_SUCCEEDED(rc)) {
+			char buf[LIBNX_SWKBD_LIMIT] = {'\0'};
+			swkbdConfigMakePresetDefault(&kbd);
+
+			swkbdConfigSetHeaderText(&kbd, param1.c_str());
+			swkbdConfigSetInitialText(&kbd, param2.c_str());
+
+			rc = swkbdShow(&kbd, buf, sizeof(buf));
+
+			swkbdClose(&kbd);
+
+			g_requestManager.PostSystemSuccess(requestId, buf);
+			return true;
+		}
+
+		g_requestManager.PostSystemFailure(requestId);
+		return true;
+	}
+#endif // PPSSPP_PLATFORM(SWITCH)
+#if PPSSPP_PLATFORM(MAC) || PPSSPP_PLATFORM(IOS)
+	case SystemRequestType::BROWSE_FOR_FILE:
+	{
+		DarwinDirectoryPanelCallback callback = [requestId] (bool success, Path path) {
+			if (success) {
+				g_requestManager.PostSystemSuccess(requestId, path.c_str());
+			} else {
+				g_requestManager.PostSystemFailure(requestId);
+			}
+		};
+		DarwinFileSystemServices services;
+		services.presentDirectoryPanel(callback, /* allowFiles = */ true, /* allowDirectories = */ false);
+		return true;
+	}
+	case SystemRequestType::BROWSE_FOR_FOLDER:
+	{
+		DarwinDirectoryPanelCallback callback = [requestId] (bool success, Path path) {
+			if (success) {
+				g_requestManager.PostSystemSuccess(requestId, path.c_str());
+			} else {
+				g_requestManager.PostSystemFailure(requestId);
+			}
+		};
+		DarwinFileSystemServices services;
+		services.presentDirectoryPanel(callback, /* allowFiles = */ false, /* allowDirectories = */ true);
+		return true;
+	}
+#endif
+	case SystemRequestType::TOGGLE_FULLSCREEN_STATE:
+	{
+		std::lock_guard<std::mutex> guard(g_mutexWindow);
+		g_windowState.update = true;
+		g_windowState.toggleFullScreenNextFrame = true;
+		if (param1 == "1") {
+			g_windowState.toggleFullScreenType = 1;
+		} else if (param1 == "0") {
+			g_windowState.toggleFullScreenType = 0;
+		} else {
+			// Just toggle.
+			g_windowState.toggleFullScreenType = -1;
+		}
+		return true;
+	}
+	case SystemRequestType::SET_WINDOW_TITLE:
+	{
+		std::lock_guard<std::mutex> guard(g_mutexWindow);
+		const char *app_name = System_GetPropertyBool(SYSPROP_APP_GOLD) ? "PPSSPP Gold" : "PPSSPP";
+		g_windowState.title = param1.empty() ? app_name : param1;
+		g_windowState.update = true;
+		return true;
+	}
+	case SystemRequestType::COPY_TO_CLIPBOARD:
+	{
+		std::lock_guard<std::mutex> guard(g_mutexWindow);
+		g_windowState.clipboardString = param1;
+		g_windowState.clipboardDataAvailable = true;
+		g_windowState.update = true;
+		return true;
+	}
+	default:
+		return false;
 	}
 }
 
 void System_AskForPermission(SystemPermission permission) {}
 PermissionStatus System_GetPermissionStatus(SystemPermission permission) { return PERMISSION_STATUS_GRANTED; }
 
-void OpenDirectory(const char *path) {
+void System_ShowFileInFolder(const char *path) {
 #if PPSSPP_PLATFORM(WINDOWS)
 	SFGAOF flags;
 	PIDLIST_ABSOLUTE pidl = nullptr;
@@ -201,84 +311,66 @@ void OpenDirectory(const char *path) {
 			SHOpenFolderAndSelectItems(pidl, 0, NULL, 0);
 		CoTaskMemFree(pidl);
 	}
-#elif PPSSPP_PLATFORM(MAC) || (PPSSPP_PLATFORM(LINUX) && !PPSSPP_PLATFORM(ANDROID))
+#elif PPSSPP_PLATFORM(MAC)
+	OSXShowInFinder(path);
+#elif (PPSSPP_PLATFORM(LINUX) && !PPSSPP_PLATFORM(ANDROID))
 	pid_t pid = fork();
 	if (pid < 0)
 		return;
 
 	if (pid == 0) {
-#if PPSSPP_PLATFORM(MAC)
-		execlp("open", "open", path, nullptr);
-#else
 		execlp("xdg-open", "xdg-open", path, nullptr);
-#endif
 		exit(1);
 	}
-#endif
+#endif /* PPSSPP_PLATFORM(WINDOWS) */
 }
 
-void LaunchBrowser(const char *url) {
+void System_LaunchUrl(LaunchUrlType urlType, const char *url) {
+	switch (urlType) {
+	case LaunchUrlType::BROWSER_URL:
+	case LaunchUrlType::MARKET_URL:
+	{
 #if PPSSPP_PLATFORM(SWITCH)
-	Uuid uuid = { 0 };
-	WebWifiConfig conf;
-	webWifiCreate(&conf, NULL, url, uuid, 0);
-	webWifiShow(&conf, NULL);
+		Uuid uuid = { 0 };
+		WebWifiConfig conf;
+		webWifiCreate(&conf, NULL, url, uuid, 0);
+		webWifiShow(&conf, NULL);
 #elif defined(MOBILE_DEVICE)
-	INFO_LOG(SYSTEM, "Would have gone to %s but LaunchBrowser is not implemented on this platform", url);
+		INFO_LOG(SYSTEM, "Would have gone to %s but LaunchBrowser is not implemented on this platform", url);
 #elif defined(_WIN32)
-	std::wstring wurl = ConvertUTF8ToWString(url);
-	ShellExecute(NULL, L"open", wurl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+		std::wstring wurl = ConvertUTF8ToWString(url);
+		ShellExecute(NULL, L"open", wurl.c_str(), NULL, NULL, SW_SHOWNORMAL);
 #elif defined(__APPLE__)
-	std::string command = std::string("open ") + url;
-	system(command.c_str());
+		OSXOpenURL(url);
 #else
-	std::string command = std::string("xdg-open ") + url;
-	int err = system(command.c_str());
-	if (err) {
-		INFO_LOG(SYSTEM, "Would have gone to %s but xdg-utils seems not to be installed", url);
-	}
+		std::string command = std::string("xdg-open ") + url;
+		int err = system(command.c_str());
+		if (err) {
+			INFO_LOG(SYSTEM, "Would have gone to %s but xdg-utils seems not to be installed", url);
+		}
 #endif
-}
-
-void LaunchMarket(const char *url) {
-#if PPSSPP_PLATFORM(SWITCH)
-	Uuid uuid = { 0 };
-	WebWifiConfig conf;
-	webWifiCreate(&conf, NULL, url, uuid, 0);
-	webWifiShow(&conf, NULL);
-#elif defined(MOBILE_DEVICE)
-	INFO_LOG(SYSTEM, "Would have gone to %s but LaunchMarket is not implemented on this platform", url);
-#elif defined(_WIN32)
-	std::wstring wurl = ConvertUTF8ToWString(url);
-	ShellExecute(NULL, L"open", wurl.c_str(), NULL, NULL, SW_SHOWNORMAL);
-#elif defined(__APPLE__)
-	std::string command = std::string("open ") + url;
-	system(command.c_str());
-#else
-	std::string command = std::string("xdg-open ") + url;
-	int err = system(command.c_str());
-	if (err) {
-		INFO_LOG(SYSTEM, "Would have gone to %s but xdg-utils seems not to be installed", url);
+		break;
 	}
-#endif
-}
-
-void LaunchEmail(const char *email_address) {
+	case LaunchUrlType::EMAIL_ADDRESS:
+	{
 #if defined(MOBILE_DEVICE)
-	INFO_LOG(SYSTEM, "Would have opened your email client for %s but LaunchEmail is not implemented on this platform", email_address);
+		INFO_LOG(SYSTEM, "Would have opened your email client for %s but LaunchEmail is not implemented on this platform", url);
 #elif defined(_WIN32)
-	std::wstring mailto = std::wstring(L"mailto:") + ConvertUTF8ToWString(email_address);
-	ShellExecute(NULL, L"open", mailto.c_str(), NULL, NULL, SW_SHOWNORMAL);
+		std::wstring mailto = std::wstring(L"mailto:") + ConvertUTF8ToWString(url);
+		ShellExecute(NULL, L"open", mailto.c_str(), NULL, NULL, SW_SHOWNORMAL);
 #elif defined(__APPLE__)
-	std::string command = std::string("open mailto:") + email_address;
-	system(command.c_str());
+		std::string mailToURL = std::string("mailto:") + url;
+		OSXOpenURL(mailToURL.c_str());
 #else
-	std::string command = std::string("xdg-email ") + email_address;
-	int err = system(command.c_str());
-	if (err) {
-		INFO_LOG(SYSTEM, "Would have gone to %s but xdg-utils seems not to be installed", email_address);
-	}
+		std::string command = std::string("xdg-email ") + url;
+		int err = system(command.c_str());
+		if (err) {
+			INFO_LOG(SYSTEM, "Would have gone to %s but xdg-utils seems not to be installed", url);
+		}
 #endif
+		break;
+	}
+	}
 }
 
 std::string System_GetProperty(SystemProperty prop) {
@@ -413,8 +505,18 @@ float System_GetPropertyFloat(SystemProperty prop) {
 
 bool System_GetPropertyBool(SystemProperty prop) {
 	switch (prop) {
+	case SYSPROP_HAS_OPEN_DIRECTORY:
+#if PPSSPP_PLATFORM(WINDOWS)
+		return true;
+#elif PPSSPP_PLATFORM(MAC) || (PPSSPP_PLATFORM(LINUX) && !PPSSPP_PLATFORM(ANDROID))
+		return true;
+#endif
 	case SYSPROP_HAS_BACK_BUTTON:
 		return true;
+#if PPSSPP_PLATFORM(SWITCH)
+	case SYSPROP_HAS_TEXT_INPUT_DIALOG:
+		return true;
+#endif
 	case SYSPROP_APP_GOLD:
 #ifdef GOLD
 		return true;
@@ -425,9 +527,25 @@ bool System_GetPropertyBool(SystemProperty prop) {
 		return true;
 	case SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR:
 		return true;  // FileUtil.cpp: OpenFileInEditor
-
+#if PPSSPP_PLATFORM(MAC)
+	case SYSPROP_HAS_FOLDER_BROWSER:
+	case SYSPROP_HAS_FILE_BROWSER:
+		return true;
+#endif
 	default:
 		return false;
+	}
+}
+
+void System_Notify(SystemNotification notification) {
+	switch (notification) {
+	case SystemNotification::AUDIO_RESET_DEVICE:
+		StopSDLAudioDevice();
+		InitSDLAudioDevice();
+		break;
+
+	default:
+		break;
 	}
 }
 
@@ -454,20 +572,27 @@ static float parseFloat(const char *str) {
 	}
 }
 
-void ToggleFullScreenIfFlagSet(SDL_Window *window) {
-	if (g_ToggleFullScreenNextFrame) {
-		g_ToggleFullScreenNextFrame = false;
+void UpdateWindowState(SDL_Window *window) {
+	SDL_SetWindowTitle(window, g_windowState.title.c_str());
+	if (g_windowState.toggleFullScreenNextFrame) {
+		g_windowState.toggleFullScreenNextFrame = false;
 
 		Uint32 window_flags = SDL_GetWindowFlags(window);
-		if (g_ToggleFullScreenType == -1) {
+		if (g_windowState.toggleFullScreenType == -1) {
 			window_flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
-		} else if (g_ToggleFullScreenType == 1) {
+		} else if (g_windowState.toggleFullScreenType == 1) {
 			window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 		} else {
 			window_flags &= ~SDL_WINDOW_FULLSCREEN_DESKTOP;
 		}
 		SDL_SetWindowFullscreen(window, window_flags);
 	}
+	if (g_windowState.clipboardDataAvailable) {
+		SDL_SetClipboardText(g_windowState.clipboardString.c_str());
+		g_windowState.clipboardDataAvailable = false;
+		g_windowState.clipboardString.clear();
+	}
+	g_windowState.update = false;
 }
 
 enum class EmuThreadState {
@@ -504,7 +629,7 @@ static void EmuThreadStart(GraphicsContext *context) {
 	emuThread = std::thread(&EmuThreadFunc, context);
 }
 
-static void EmuThreadStop() {
+static void EmuThreadStop(const char *reason) {
 	emuThreadState = (int)EmuThreadState::QUIT_REQUESTED;
 }
 
@@ -557,7 +682,6 @@ int main(int argc, char *argv[]) {
 	SDL_version linked;
 	int set_xres = -1;
 	int set_yres = -1;
-	int w = 0, h = 0;
 	bool portrait = false;
 	bool set_ipad = false;
 	float set_dpi = 1.0f;
@@ -656,16 +780,16 @@ int main(int argc, char *argv[]) {
 #endif
 
 	if (mode & SDL_WINDOW_FULLSCREEN_DESKTOP) {
-		pixel_xres = g_DesktopWidth;
-		pixel_yres = g_DesktopHeight;
+		g_display.pixel_xres = g_DesktopWidth;
+		g_display.pixel_yres = g_DesktopHeight;
 		if (g_Config.iForceFullScreen == -1)
 			g_Config.bFullScreen = true;
 	} else {
 		// set a sensible default resolution (2x)
-		pixel_xres = 480 * 2 * set_scale;
-		pixel_yres = 272 * 2 * set_scale;
+		g_display.pixel_xres = 480 * 2 * set_scale;
+		g_display.pixel_yres = 272 * 2 * set_scale;
 		if (portrait) {
-			std::swap(pixel_xres, pixel_yres);
+			std::swap(g_display.pixel_xres, g_display.pixel_yres);
 		}
 		if (g_Config.iForceFullScreen == -1)
 			g_Config.bFullScreen = false;
@@ -674,26 +798,23 @@ int main(int argc, char *argv[]) {
 	set_dpi = 1.0f / set_dpi;
 
 	if (set_ipad) {
-		pixel_xres = 1024;
-		pixel_yres = 768;
+		g_display.pixel_xres = 1024;
+		g_display.pixel_yres = 768;
 	}
 	if (!landscape) {
-		std::swap(pixel_xres, pixel_yres);
+		std::swap(g_display.pixel_xres, g_display.pixel_yres);
 	}
 
 	if (set_xres > 0) {
-		pixel_xres = set_xres;
+		g_display.pixel_xres = set_xres;
 	}
 	if (set_yres > 0) {
-		pixel_yres = set_yres;
+		g_display.pixel_yres = set_yres;
 	}
 	float dpi_scale = 1.0f;
 	if (set_dpi > 0) {
 		dpi_scale = set_dpi;
 	}
-
-	dp_xres = (float)pixel_xres * dpi_scale;
-	dp_yres = (float)pixel_yres * dpi_scale;
 
 	// Mac / Linux
 	char path[2048];
@@ -730,16 +851,31 @@ int main(int argc, char *argv[]) {
 
 	int x = SDL_WINDOWPOS_UNDEFINED_DISPLAY(getDisplayNumber());
 	int y = SDL_WINDOWPOS_UNDEFINED;
+	int w = g_display.pixel_xres;
+	int h = g_display.pixel_yres;
 
-	pixel_in_dps_x = (float)pixel_xres / dp_xres;
-	pixel_in_dps_y = (float)pixel_yres / dp_yres;
-	g_dpi_scale_x = dp_xres / (float)pixel_xres;
-	g_dpi_scale_y = dp_yres / (float)pixel_yres;
-	g_dpi_scale_real_x = g_dpi_scale_x;
-	g_dpi_scale_real_y = g_dpi_scale_y;
+	if (!g_Config.bFullScreen) {
+		if (g_Config.iWindowX != -1)
+			x = g_Config.iWindowX;
+		if (g_Config.iWindowY != -1)
+			y = g_Config.iWindowY;
+		if (g_Config.iWindowWidth > 0)
+			w = g_Config.iWindowWidth;
+		if (g_Config.iWindowHeight > 0)
+			h = g_Config.iWindowHeight;
+	}
+	g_display.pixel_xres = w;
+	g_display.pixel_yres = h;
+	g_display.dp_xres = (float)g_display.pixel_xres * dpi_scale;
+	g_display.dp_yres = (float)g_display.pixel_yres * dpi_scale;
 
-	printf("Pixels: %i x %i\n", pixel_xres, pixel_yres);
-	printf("Virtual pixels: %i x %i\n", dp_xres, dp_yres);
+	g_display.pixel_in_dps_x = (float)g_display.pixel_xres / g_display.dp_xres;
+	g_display.pixel_in_dps_y = (float)g_display.pixel_yres / g_display.dp_yres;
+	g_display.dpi_scale_x = g_display.dp_xres / (float)g_display.pixel_xres;
+	g_display.dpi_scale_y = g_display.dp_yres / (float)g_display.pixel_yres;
+	g_display.dpi_scale_real_x = g_display.dpi_scale_x;
+	g_display.dpi_scale_real_y = g_display.dpi_scale_y;
+	// g_display.Print();
 
 	GraphicsContext *graphicsContext = nullptr;
 	SDL_Window *window = nullptr;
@@ -747,20 +883,20 @@ int main(int argc, char *argv[]) {
 	std::string error_message;
 	if (g_Config.iGPUBackend == (int)GPUBackend::OPENGL) {
 		SDLGLGraphicsContext *ctx = new SDLGLGraphicsContext();
-		if (ctx->Init(window, x, y, mode, &error_message) != 0) {
+		if (ctx->Init(window, x, y, w, h, mode, &error_message) != 0) {
 			printf("GL init error '%s'\n", error_message.c_str());
 		}
 		graphicsContext = ctx;
 #if !PPSSPP_PLATFORM(SWITCH)
 	} else if (g_Config.iGPUBackend == (int)GPUBackend::VULKAN) {
 		SDLVulkanGraphicsContext *ctx = new SDLVulkanGraphicsContext();
-		if (!ctx->Init(window, x, y, mode, &error_message)) {
+		if (!ctx->Init(window, x, y, w, h, mode | SDL_WINDOW_VULKAN, &error_message)) {
 			printf("Vulkan init error '%s' - falling back to GL\n", error_message.c_str());
 			g_Config.iGPUBackend = (int)GPUBackend::OPENGL;
 			SetGPUBackend((GPUBackend)g_Config.iGPUBackend);
 			delete ctx;
 			SDLGLGraphicsContext *glctx = new SDLGLGraphicsContext();
-			glctx->Init(window, x, y, mode, &error_message);
+			glctx->Init(window, x, y, w, h, mode, &error_message);
 			graphicsContext = glctx;
 		} else {
 			graphicsContext = ctx;
@@ -832,6 +968,14 @@ int main(int argc, char *argv[]) {
 	int mouseWheelMovedDownFrames = 0;
 	bool mouseCaptured = false;
 	bool windowHidden = false;
+	
+#if PPSSPP_PLATFORM(MAC)
+	// setup menu items for macOS
+	initializeOSXExtras();
+#endif
+	
+	bool rebootEmuThread = false;
+
 	while (true) {
 		double startTime = time_now_d();
 
@@ -859,8 +1003,8 @@ int main(int argc, char *argv[]) {
 		}
 		SDL_Event event, touchEvent;
 		while (SDL_PollEvent(&event)) {
-			float mx = event.motion.x * g_dpi_scale_x;
-			float my = event.motion.y * g_dpi_scale_y;
+			float mx = event.motion.x * g_display.dpi_scale_x;
+			float my = event.motion.y * g_display.dpi_scale_y;
 
 			switch (event.type) {
 			case SDL_QUIT:
@@ -890,11 +1034,28 @@ int main(int argc, char *argv[]) {
 						g_Config.iForceFullScreen = -1;
 					}
 
+					if (!g_Config.bFullScreen) {
+						g_Config.iWindowWidth = new_width;
+						g_Config.iWindowHeight = new_height;
+					}
 					// Hide/Show cursor correctly toggling fullscreen
 					if (lastUIState == UISTATE_INGAME && fullscreen && !g_Config.bShowTouchControls) {
 						SDL_ShowCursor(SDL_DISABLE);
 					} else if (lastUIState != UISTATE_INGAME || !fullscreen) {
 						SDL_ShowCursor(SDL_ENABLE);
+					}
+					break;
+				}
+
+				case SDL_WINDOWEVENT_MOVED:
+				{
+					int x = event.window.data1;
+					int y = event.window.data2;
+					Uint32 window_flags = SDL_GetWindowFlags(window);
+					bool fullscreen = (window_flags & SDL_WINDOW_FULLSCREEN);
+					if (!fullscreen) {
+						g_Config.iWindowX = x;
+						g_Config.iWindowY = y;
 					}
 					break;
 				}
@@ -927,6 +1088,13 @@ int main(int argc, char *argv[]) {
 					key.keyCode = mapped->second;
 					key.deviceId = DEVICE_ID_KEYBOARD;
 					NativeKey(key);
+
+#ifdef _DEBUG
+					if (k == SDLK_F7 && useEmuThread) {
+						printf("f7 pressed - rebooting emuthread\n");
+						rebootEmuThread = true;
+					}
+#endif
 					break;
 				}
 			case SDL_KEYUP:
@@ -950,7 +1118,7 @@ int main(int argc, char *argv[]) {
 					int c = u8_nextchar(event.text.text, &pos);
 					KeyInput key;
 					key.flags = KEY_CHAR;
-					key.keyCode = c;
+					key.unicodeChar = c;
 					key.deviceId = DEVICE_ID_KEYBOARD;
 					NativeKey(key);
 					break;
@@ -1011,7 +1179,7 @@ int main(int argc, char *argv[]) {
 				case SDL_BUTTON_LEFT:
 					{
 						mouseDown = true;
-						TouchInput input;
+						TouchInput input{};
 						input.x = mx;
 						input.y = my;
 						input.flags = TOUCH_DOWN | TOUCH_MOUSE;
@@ -1052,6 +1220,21 @@ int main(int argc, char *argv[]) {
 					KeyInput key;
 					key.deviceId = DEVICE_ID_MOUSE;
 					key.flags = KEY_DOWN;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+					if (event.wheel.preciseY != 0.0f) {
+						// Should the scale be DPI-driven?
+						const float scale = 30.0f;
+						key.keyCode = event.wheel.preciseY > 0 ? NKCODE_EXT_MOUSEWHEEL_UP : NKCODE_EXT_MOUSEWHEEL_DOWN;
+						key.flags |= KEY_HASWHEELDELTA;
+						int wheelDelta = event.wheel.preciseY * scale;
+						if (event.wheel.preciseY < 0) {
+							 wheelDelta = -wheelDelta;
+						}
+						key.flags |= wheelDelta << 16;
+						NativeKey(key);
+						break;
+					}
+#endif
 					if (event.wheel.y > 0) {
 						key.keyCode = NKCODE_EXT_MOUSEWHEEL_UP;
 						mouseWheelMovedUpFrames = 5;
@@ -1065,7 +1248,7 @@ int main(int argc, char *argv[]) {
 				}
 			case SDL_MOUSEMOTION:
 				if (mouseDown) {
-					TouchInput input;
+					TouchInput input{};
 					input.x = mx;
 					input.y = my;
 					input.flags = TOUCH_MOVE | TOUCH_MOUSE;
@@ -1080,7 +1263,7 @@ int main(int argc, char *argv[]) {
 				case SDL_BUTTON_LEFT:
 					{
 						mouseDown = false;
-						TouchInput input;
+						TouchInput input{};
 						input.x = mx;
 						input.y = my;
 						input.flags = TOUCH_UP | TOUCH_MOUSE;
@@ -1148,14 +1331,15 @@ int main(int argc, char *argv[]) {
 				break;
 			}
 		}
-		if (g_QuitRequested)
+		if (g_QuitRequested || g_RestartRequested)
 			break;
 		const uint8_t *keys = SDL_GetKeyboardState(NULL);
 		if (emuThreadState == (int)EmuThreadState::DISABLED) {
 			UpdateRunLoop();
 		}
-		if (g_QuitRequested)
+		if (g_QuitRequested || g_RestartRequested)
 			break;
+
 #if !defined(MOBILE_DEVICE)
 		if (lastUIState != GetUIState()) {
 			lastUIState = GetUIState();
@@ -1168,8 +1352,8 @@ int main(int argc, char *argv[]) {
 
 		// Disabled by default, needs a workaround to map to psp keys.
 		if (g_Config.bMouseControl) {
-			float scaleFactor_x = g_dpi_scale_x * 0.1 * g_Config.fMouseSensitivity;
-			float scaleFactor_y = g_dpi_scale_y * 0.1 * g_Config.fMouseSensitivity;
+			float scaleFactor_x = g_display.dpi_scale_x * 0.1 * g_Config.fMouseSensitivity;
+			float scaleFactor_y = g_display.dpi_scale_y * 0.1 * g_Config.fMouseSensitivity;
 
 			AxisInput axisX, axisY;
 			axisX.axisId = JOYSTICK_AXIS_MOUSE_REL_X;
@@ -1205,10 +1389,44 @@ int main(int argc, char *argv[]) {
 				break;
 		}
 
-
 		graphicsContext->SwapBuffers();
 
-		ToggleFullScreenIfFlagSet(window);
+		{
+			std::lock_guard<std::mutex> guard(g_mutexWindow);
+			if (g_windowState.update) {
+				UpdateWindowState(window);
+			}
+		}
+
+		if (rebootEmuThread) {
+			printf("rebooting emu thread");
+			rebootEmuThread = false;
+			EmuThreadStop("shutdown");
+			// Skipping GL calls, the old context is gone.
+			while (graphicsContext->ThreadFrame()) {
+				INFO_LOG(SYSTEM, "graphicsContext->ThreadFrame executed to clear buffers");
+			}
+			EmuThreadJoin();
+			graphicsContext->ThreadEnd();
+			graphicsContext->ShutdownFromRenderThread();
+
+			printf("OK, shutdown complete. starting up graphics again.\n");
+
+			if (g_Config.iGPUBackend == (int)GPUBackend::OPENGL) {
+				SDLGLGraphicsContext *ctx  = (SDLGLGraphicsContext *)graphicsContext;
+				if (!ctx->Init(window, x, y, w, h, mode, &error_message)) {
+					printf("Failed to reinit graphics.\n");
+				}
+			}
+
+			if (!graphicsContext->InitFromRenderThread(&error_message)) {
+				System_Toast("Graphics initialization failed. Quitting.");
+				return 1;
+			}
+
+			EmuThreadStart(graphicsContext);
+			graphicsContext->ThreadStart();
+		}
 
 		// Simple throttling to not burn the GPU in the menu.
 		if (GetUIState() != UISTATE_INGAME || !PSP_IsInited() || renderThreadPaused) {
@@ -1222,7 +1440,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (useEmuThread) {
-		EmuThreadStop();
+		EmuThreadStop("shutdown");
 		while (graphicsContext->ThreadFrame()) {
 			// Need to keep eating frames to allow the EmuThread to exit correctly.
 			continue;
@@ -1258,5 +1476,16 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_LIBNX
 	socketExit();
 #endif
+
+	// If a restart was requested (and supported on this platform), respawn the executable.
+	if (g_RestartRequested) {
+#if PPSSPP_PLATFORM(MAC)
+		RestartMacApp();
+#elif PPSSPP_PLATFORM(LINUX)
+		// Hackery from https://unix.stackexchange.com/questions/207935/how-to-restart-or-reset-a-running-process-in-linux,
+		char *exec_argv[] = { argv[0], nullptr };
+		execv("/proc/self/exe", exec_argv);
+#endif
+	}
 	return 0;
 }

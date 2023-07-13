@@ -62,6 +62,9 @@ enum LOG_TYPE {
 	SCEMISC,
 
 	NUMBER_OF_LOGS,  // Must be last
+
+	// Temporary aliases
+	ACHIEVEMENTS = HLE,  // TODO: Make a real category
 };
 
 enum LOG_LEVELS : int {
@@ -83,6 +86,7 @@ void GenericLog(LogTypes::LOG_LEVELS level, LogTypes::LOG_TYPE type,
 		;
 bool GenericLogEnabled(LogTypes::LOG_LEVELS level, LogTypes::LOG_TYPE type);
 
+// Exception for Windows - enable more log levels in release mode than on other platforms.
 #if defined(_DEBUG) || defined(_WIN32)
 
 #define MAX_LOGLEVEL DEBUG_LEVEL
@@ -128,12 +132,12 @@ void SetExtraAssertInfo(const char *info);
 #define __FILENAME__ __FILE__
 #endif
 
-// If we're in "debug" assert mode
-#if MAX_LOGLEVEL >= DEBUG_LEVEL
+// If we're a debug build, _dbg_assert_ is active. Not otherwise, even on Windows.
+#if defined(_DEBUG)
 
 #define _dbg_assert_(_a_) \
 	if (!(_a_)) {\
-		if (!HandleAssert(__FUNCTION__, __FILENAME__, __LINE__, #_a_, "*** Assertion ***\n")) Crash(); \
+		if (!HandleAssert(__FUNCTION__, __FILENAME__, __LINE__, #_a_, "Assert!\n")) Crash(); \
 	}
 
 #define _dbg_assert_msg_(_a_, ...) \
@@ -152,7 +156,7 @@ void SetExtraAssertInfo(const char *info);
 
 #define _assert_(_a_) \
 	if (!(_a_)) {\
-		if (!HandleAssert(__FUNCTION__, __FILENAME__, __LINE__, #_a_, "*** Assertion ***\n")) Crash(); \
+		if (!HandleAssert(__FUNCTION__, __FILENAME__, __LINE__, #_a_, "Assert!\n")) Crash(); \
 	}
 
 #define _assert_msg_(_a_, ...) \

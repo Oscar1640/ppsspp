@@ -24,6 +24,7 @@
 #include "GPU/Common/TextureDecoder.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/GraphicsContext.h"
+#include "Common/LogReporting.h"
 #include "Core/Config.h"
 #include "Core/ConfigValues.h"
 #include "Core/Core.h"
@@ -33,7 +34,6 @@
 #include "Core/HLE/sceKernelInterrupt.h"
 #include "Core/HLE/sceGe.h"
 #include "Core/MIPS/MIPS.h"
-#include "Core/Reporting.h"
 #include "Core/Util/PPGeDraw.h"
 #include "Common/Profiler/Profiler.h"
 #include "Common/GPU/thin3d.h"
@@ -433,11 +433,15 @@ SoftGPU::SoftGPU(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	Rasterizer::Init();
 	Sampler::Init();
 	drawEngine_ = new SoftwareDrawEngine();
+	if (!drawEngine_)
+		return;
+
 	drawEngine_->Init();
 	drawEngineCommon_ = drawEngine_;
 
 	// Push the initial CLUT buffer in case it's all zero (we push only on change.)
-	drawEngine_->transformUnit.NotifyClutUpdate(clut);
+	if (drawEngine_->transformUnit.IsStarted())
+		drawEngine_->transformUnit.NotifyClutUpdate(clut);
 
 	// No need to flush for simple parameter changes.
 	flushOnParams_ = false;
@@ -445,11 +449,13 @@ SoftGPU::SoftGPU(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	if (gfxCtx && draw) {
 		presentation_ = new PresentationCommon(draw_);
 		presentation_->SetLanguage(draw_->GetShaderLanguageDesc().shaderLanguage);
+		presentation_->UpdateDisplaySize(PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
+		presentation_->UpdateRenderSize(PSP_CoreParameter().renderWidth, PSP_CoreParameter().renderHeight);
 	}
 
 	NotifyConfigChanged();
-	NotifyRenderResized();
 	NotifyDisplayResized();
+	NotifyRenderResized();
 }
 
 void SoftGPU::DeviceLost() {
@@ -462,9 +468,8 @@ void SoftGPU::DeviceLost() {
 	}
 }
 
-void SoftGPU::DeviceRestore() {
-	if (PSP_CoreParameter().graphicsContext)
-		draw_ = (Draw::DrawContext *)PSP_CoreParameter().graphicsContext->GetDrawContext();
+void SoftGPU::DeviceRestore(Draw::DrawContext *draw) {
+	draw_ = draw;
 	if (presentation_)
 		presentation_->DeviceRestore(draw_);
 	PPGeSetDrawContext(draw_);
@@ -559,7 +564,7 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(int srcwidth, int srcheight) {
 	desc.tag = "SoftGPU";
 	bool hasImage = true;
 
-	OutputFlags outputFlags = g_Config.iBufFilter == SCALE_NEAREST ? OutputFlags::NEAREST : OutputFlags::LINEAR;
+	OutputFlags outputFlags = g_Config.iDisplayFilter == SCALE_NEAREST ? OutputFlags::NEAREST : OutputFlags::LINEAR;
 	bool hasPostShader = presentation_ && presentation_->HasPostShader();
 
 	if (PSP_CoreParameter().compat.flags().DarkStalkersPresentHack && displayFormat_ == GE_FORMAT_5551 && g_DarkStalkerStretch != DSStretch::Off) {
@@ -667,6 +672,9 @@ void SoftGPU::MarkDirty(uint32_t addr, uint32_t bytes, SoftGPUVRAMDirty value) {
 
 	uint32_t start = ((addr - PSP_GetVidMemBase()) & 0x001FFFFF) >> 10;
 	uint32_t end = start + ((bytes + 1023) >> 10);
+	if (end > sizeof(vramDirty_)) {
+		end = sizeof(vramDirty_);
+	}
 	if (value == SoftGPUVRAMDirty::CLEAR || value == (SoftGPUVRAMDirty::DIRTY | SoftGPUVRAMDirty::REALLY_DIRTY)) {
 		memset(vramDirty_ + start, (uint8_t)value, end - start);
 	} else {
@@ -717,14 +725,28 @@ void SoftGPU::NotifyRenderResized() {
 }
 
 void SoftGPU::NotifyDisplayResized() {
-	if (presentation_) {
+	displayResized_ = true;
+}
+
+void SoftGPU::CheckDisplayResized() {
+	if (displayResized_ && presentation_) {
 		presentation_->UpdateDisplaySize(PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
 		presentation_->UpdateRenderSize(PSP_CoreParameter().renderWidth, PSP_CoreParameter().renderHeight);
 		presentation_->UpdatePostShader();
+		displayResized_ = false;
 	}
 }
 
-void SoftGPU::NotifyConfigChanged() {}
+void SoftGPU::CheckConfigChanged() {
+	if (configChanged_) {
+		drawEngineCommon_->NotifyConfigChanged();
+		BuildReportingInfo();
+		if (presentation_) {
+			presentation_->UpdatePostShader();
+		}
+		configChanged_ = false;
+	}
+}
 
 void SoftGPU::FastRunLoop(DisplayList &list) {
 	PROFILE_THIS_SCOPE("soft_runloop");
@@ -760,6 +782,10 @@ void SoftGPU::FastRunLoop(DisplayList &list) {
 	}
 	downcount = 0;
 	dirtyFlags_ = dirty;
+}
+
+bool SoftGPU::IsStarted() {
+	return drawEngine_ && drawEngine_->transformUnit.IsStarted();
 }
 
 void SoftGPU::ExecuteOp(u32 op, u32 diff) {

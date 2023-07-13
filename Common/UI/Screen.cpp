@@ -2,23 +2,24 @@
 #include "Common/Input/InputState.h"
 #include "Common/UI/Root.h"
 #include "Common/UI/Screen.h"
+#include "Common/UI/ScrollView.h"
 #include "Common/UI/UI.h"
 #include "Common/UI/View.h"
 #include "Common/UI/ViewGroup.h"
+#include "Common/UI/IconCache.h"
 
 #include "Common/Log.h"
 #include "Common/TimeUtil.h"
 
-ScreenManager::ScreenManager() {
-	uiContext_ = 0;
-	dialogFinished_ = 0;
-}
+#include "Core/KeyMap.h"
 
 ScreenManager::~ScreenManager() {
 	shutdown();
 }
 
 void ScreenManager::switchScreen(Screen *screen) {
+	// TODO: inputLock_ ?
+
 	if (!nextStack_.empty() && screen == nextStack_.front().screen) {
 		ERROR_LOG(SYSTEM, "Already switching to this screen");
 		return;
@@ -50,6 +51,11 @@ void ScreenManager::update() {
 	if (stack_.size()) {
 		stack_.back().screen->update();
 	}
+
+	// NOTE: We should not update the OverlayScreen. In fact, we must never update more than one
+	// UIScreen in here, because we might end up double-processing the stuff in Root.cpp.
+
+	g_iconCache.FrameUpdate();
 }
 
 void ScreenManager::switchToNext() {
@@ -75,37 +81,35 @@ void ScreenManager::switchToNext() {
 	nextStack_.clear();
 }
 
-bool ScreenManager::touch(const TouchInput &touch) {
+void ScreenManager::touch(const TouchInput &touch) {
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
-	bool result = false;
 	// Send release all events to every screen layer.
 	if (touch.flags & TOUCH_RELEASE_ALL) {
 		for (auto &layer : stack_) {
 			Screen *screen = layer.screen;
-			result = layer.screen->touch(screen->transformTouch(touch));
+			layer.screen->UnsyncTouch(screen->transformTouch(touch));
 		}
 	} else if (!stack_.empty()) {
 		Screen *screen = stack_.back().screen;
-		result = stack_.back().screen->touch(screen->transformTouch(touch));
+		stack_.back().screen->UnsyncTouch(screen->transformTouch(touch));
 	}
-	return result;
 }
 
 bool ScreenManager::key(const KeyInput &key) {
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
 	bool result = false;
-	// Send key up to every screen layer.
+	// Send key up to every screen layer, to avoid stuck keys.
 	if (key.flags & KEY_UP) {
 		for (auto &layer : stack_) {
-			result = layer.screen->key(key);
+			result = layer.screen->UnsyncKey(key);
 		}
 	} else if (!stack_.empty()) {
-		result = stack_.back().screen->key(key);
+		result = stack_.back().screen->UnsyncKey(key);
 	}
 	return result;
 }
 
-bool ScreenManager::axis(const AxisInput &axis) {
+void ScreenManager::axis(const AxisInput &axis) {
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
 
 	// Ignore duplicate values to prevent axis values overwriting each other.
@@ -114,25 +118,24 @@ bool ScreenManager::axis(const AxisInput &axis) {
 	// PSP games can't see higher resolution than this.
 	int value = 128 + ceilf(axis.value * 127.5f + 127.5f);
 	if (lastAxis_[key] == value) {
-		return false;
+		return;
 	}
 	lastAxis_[key] = value;
 
-	bool result = false;
 	// Send center axis to every screen layer.
 	if (axis.value == 0) {
 		for (auto &layer : stack_) {
-			result = layer.screen->axis(axis);
+			layer.screen->UnsyncAxis(axis);
 		}
 	} else if (!stack_.empty()) {
-		result = stack_.back().screen->axis(axis);
+		stack_.back().screen->UnsyncAxis(axis);
 	}
-	return result;
 }
 
 void ScreenManager::deviceLost() {
 	for (auto &iter : stack_)
 		iter.screen->deviceLost();
+	g_iconCache.ClearTextures();
 }
 
 void ScreenManager::deviceRestored() {
@@ -141,7 +144,7 @@ void ScreenManager::deviceRestored() {
 }
 
 void ScreenManager::resized() {
-	INFO_LOG(SYSTEM, "ScreenManager::resized(dp: %dx%d)", dp_xres, dp_yres);
+	INFO_LOG(SYSTEM, "ScreenManager::resized(dp: %dx%d)", g_display.dp_xres, g_display.dp_yres);
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
 	// Have to notify the whole stack, otherwise there will be problems when going back
 	// to non-top screens.
@@ -173,6 +176,9 @@ void ScreenManager::render() {
 				stack_.back().screen->render();
 				if (postRenderCb_)
 					postRenderCb_(getUIContext(), postRenderUserdata_);
+				if (overlayScreen_) {
+					overlayScreen_->render();
+				}
 				backback.screen->postRender();
 				break;
 			}
@@ -182,6 +188,9 @@ void ScreenManager::render() {
 			stack_.back().screen->render();
 			if (postRenderCb_)
 				postRenderCb_(getUIContext(), postRenderUserdata_);
+			if (overlayScreen_) {
+				overlayScreen_->render();
+			}
 			stack_.back().screen->postRender();
 			break;
 		}
@@ -205,7 +214,9 @@ void ScreenManager::sendMessage(const char *msg, const char *value) {
 	if (!strcmp(msg, "recreateviews"))
 		RecreateAllViews();
 	if (!strcmp(msg, "lost_focus")) {
-		TouchInput input;
+		TouchInput input{};
+		input.x = -50000.0f;
+		input.y = -50000.0f;
 		input.flags = TOUCH_RELEASE_ALL;
 		input.timestamp = time_now_d();
 		input.id = 0;
@@ -230,6 +241,8 @@ void ScreenManager::shutdown() {
 	for (auto layer : nextStack_)
 		delete layer.screen;
 	nextStack_.clear();
+	delete overlayScreen_;
+	overlayScreen_ = nullptr;
 }
 
 void ScreenManager::push(Screen *screen, int layerFlags) {
@@ -241,7 +254,9 @@ void ScreenManager::push(Screen *screen, int layerFlags) {
 
 	// Release touches and unfocus.
 	UI::SetFocusedView(nullptr);
-	TouchInput input;
+	TouchInput input{};
+	input.x = -50000.0f;
+	input.y = -50000.0f;
 	input.flags = TOUCH_RELEASE_ALL;
 	input.timestamp = time_now_d();
 	input.id = 0;
@@ -319,4 +334,12 @@ void ScreenManager::processFinishDialog() {
 		delete dialogFinished_;
 		dialogFinished_ = nullptr;
 	}
+}
+
+void ScreenManager::SetOverlayScreen(Screen *screen) {
+	if (overlayScreen_) {
+		delete overlayScreen_;
+	}
+	overlayScreen_ = screen;
+	overlayScreen_->setScreenManager(this);
 }
