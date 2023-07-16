@@ -854,11 +854,6 @@ UI::EventReturn CreditsScreen::OnForums(UI::EventParams &e) {
 	return UI::EVENT_DONE;
 }
 
-UI::EventReturn CreditsScreen::OnDiscord(UI::EventParams &e) {
-	System_LaunchUrl(LaunchUrlType::BROWSER_URL, "https://discord.gg/5NJB6dD");
-	return UI::EVENT_DONE;
-}
-
 UI::EventReturn CreditsScreen::OnShare(UI::EventParams &e) {
 	auto cr = GetI18NCategory(I18NCat::PSPCREDITS);
 	System_ShareText(cr->T("CheckOutPPSSPP", "Check out PPSSPP, the awesome PSP emulator: https://www.ppsspp.org/"));

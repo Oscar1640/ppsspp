@@ -279,7 +279,7 @@ void GameSettingsScreen::CreateGraphicsSettings(UI::ViewGroup *graphicsSettings)
 		}
 	}
 
-	PopupSliderChoice *internalResolutions = graphicsSettings->Add(new PopupSliderChoice(&g_Config.iInternalResolution, 0, 32, gr->T("Rendering Resolution", "Rendering Resolution"), 1, I18NCat::GRAPHICS, screenManager(), gr->T("* PSP res, 0:Auto")));
+	PopupSliderChoice *internalResolutions = graphicsSettings->Add(new PopupSliderChoice(&g_Config.iInternalResolution, 0, 32, NO_DEFAULT_INT, gr->T("Rendering Resolution", "Rendering Resolution"), 1, screenManager(), gr->T("* PSP res, 0:Auto")));
 	internalResolutions->SetFormat("%ix");
 	internalResolutions->SetZeroLabel(gr->T("Auto (1:1)"));
 	internalResolutions->OnChange.Handle(this, &GameSettingsScreen::OnResolutionChange);
@@ -594,9 +594,9 @@ void GameSettingsScreen::CreateAudioSettings(UI::ViewGroup *audioSettings) {
 	reverbVolume->SetEnabledPtr(&g_Config.bEnableSound);
 	reverbVolume->SetZeroLabel(a->T("Disabled"));
 
-	PopupSliderChoice *sasVol = audioSettings->Add(new PopupSliderChoice(&g_Config.iSASVolume, 0, MAX_CONFIG_VOLUME, a->T("SAS volume"), screenManager()));
+	PopupSliderChoice *sasVol = audioSettings->Add(new PopupSliderChoice(&g_Config.iSASVolume, 0, MAX_CONFIG_VOLUME, NO_DEFAULT_INT, a->T("SAS volume"), screenManager()));
 	sasVol->SetEnabledPtr(&g_Config.bEnableSound);
-	PopupSliderChoice * atracmp3Vol = audioSettings->Add(new PopupSliderChoice(&g_Config.iATRACMP3Volume, 0, MAX_CONFIG_VOLUME, a->T("ATRAC / MP3 volume"), screenManager()));
+	PopupSliderChoice * atracmp3Vol = audioSettings->Add(new PopupSliderChoice(&g_Config.iATRACMP3Volume, 0, MAX_CONFIG_VOLUME, NO_DEFAULT_INT, a->T("ATRAC / MP3 volume"), screenManager()));
 	atracmp3Vol->SetEnabledPtr(&g_Config.bEnableSound);
 
 	if (!g_Config.bSimpleUI) {
@@ -664,7 +664,7 @@ void GameSettingsScreen::CreateControlsSettings(UI::ViewGroup *controlsSettings)
 	controlsSettings->Add(new CheckBox(&g_Config.bEnableDInputWithXInput, co->T("Enable Dinput along Xinput","Enable Dinput along Xinput gamepads(might cause problems with gamepads that can use both without manual switch)")));
 
 #endif
-	auto axisToButton = new PopupSliderChoiceFloat(&g_Config.fAxisBindThreshold, 0.01f, 0.96f, co->T("Axis to button threshold"), 0.05f, screenManager());
+	auto axisToButton = new PopupSliderChoiceFloat(&g_Config.fAxisBindThreshold, 0.01f, 0.96f, 0.0f, co->T("Axis to button threshold"), 0.05f, screenManager());
 	controlsSettings->Add(axisToButton);
 	axisToButton->OnChange.Add([=](EventParams &e) {
 		settingInfo_->Show(co->T("AxisToButton Tip", "Affects how far you have to push the analog stick(not mouse) to trigger the PSP button mapped to it."), e.v);
@@ -1094,7 +1094,7 @@ void GameSettingsScreen::CreateSystemSettings(UI::ViewGroup *systemSettings) {
 		enableReportsCheckbox_->SetEnabled(Reporting::IsSupported());
 		return UI::EVENT_CONTINUE;
 	});
-	}
+	
 	systemSettings->Add(new ItemHeader(sy->T("PSP Settings")));
 	if (!g_Config.bSimpleUI) {
 	static const char *models[] = { "PSP-1000", "PSP-2000/3000" };
@@ -1116,12 +1116,13 @@ void GameSettingsScreen::CreateSystemSettings(UI::ViewGroup *systemSettings) {
 
 	if (!g_Config.bSimpleUI) {
 	systemSettings->Add(new CheckBox(&g_Config.bDayLightSavings, sy->T("Day Light Saving")));
-	static const char *dateFormat[] = { "YYYYMMDD", "MMDDYYYY", "DDMMYYYY" };
+	static const char* dateFormat[] = { "YYYYMMDD", "MMDDYYYY", "DDMMYYYY" };
 	systemSettings->Add(new PopupMultiChoice(&g_Config.iDateFormat, sy->T("Date Format"), dateFormat, 0, 3, I18NCat::SYSTEM, screenManager()));
 	static const char* timeFormat[] = { "24HR", "12HR" };
 	systemSettings->Add(new PopupMultiChoice(&g_Config.iTimeFormat, sy->T("Time Format"), timeFormat, 0, 2, I18NCat::SYSTEM, screenManager()));
 	static const char* buttonPref[] = { "Use O to confirm", "Use X to confirm" };
 	systemSettings->Add(new PopupMultiChoice(&g_Config.iButtonPreference, sy->T("Confirmation Button"), buttonPref, 0, 2, I18NCat::SYSTEM, screenManager()));
+	}
 }
 
 void GameSettingsScreen::CreateVRSettings(UI::ViewGroup *vrSettings) {
@@ -1789,10 +1790,10 @@ void OtherSettingsScreen::CreateViews() {
 	settingsScroll->SetTag("OtherSettings");
 	root_->Add(settingsScroll);
 
-	auto gr = GetI18NCategory("Graphics");
-	auto sy = GetI18NCategory("System");
-	auto n = GetI18NCategory("Networking");
-	auto dev = GetI18NCategory("Developer");
+	auto dev = GetI18NCategory(I18NCat::DEVELOPER);
+	auto gr = GetI18NCategory(I18NCat::GRAPHICS);
+	auto sy = GetI18NCategory(I18NCat::SYSTEM);
+	auto n = GetI18NCategory(I18NCat::NETWORKING);
 
 	AddStandardBack(root_);
 
@@ -1819,16 +1820,16 @@ void OtherSettingsScreen::CreateViews() {
 		const int currentScreenWidth = GetSystemMetrics(SM_CXSCREEN);
 		const int currentScreenHeight = GetSystemMetrics(SM_CYSCREEN);
 		bool portrait = g_Config.IsPortrait();
-		PopupSliderChoice* pWindowPosX = list->Add(new PopupSliderChoice(&g_Config.iWindowX, 0, currentScreenWidth, gr->T("X Coordinate of the window"), 1, screenManager(), gr->T("X")));
+		PopupSliderChoice* pWindowPosX = list->Add(new PopupSliderChoice(&g_Config.iWindowX, 0, currentScreenWidth, NO_DEFAULT_INT, gr->T("X Coordinate of the window"), 1, screenManager(), gr->T("X")));
 		pWindowPosX->SetFormat("%i X");
 		pWindowPosX->OnChange.Handle(this, &OtherSettingsScreen::OnDisableWinBorders);
-		PopupSliderChoice* pWindowPosY = list->Add(new PopupSliderChoice(&g_Config.iWindowY, 0, currentScreenHeight, gr->T("Y Coordinate of the window"), 1, screenManager(), gr->T("Y")));
+		PopupSliderChoice* pWindowPosY = list->Add(new PopupSliderChoice(&g_Config.iWindowY, 0, currentScreenHeight, NO_DEFAULT_INT, gr->T("Y Coordinate of the window"), 1, screenManager(), gr->T("Y")));
 		pWindowPosY->SetFormat("%i Y");
 		pWindowPosY->OnChange.Handle(this, &OtherSettingsScreen::OnDisableWinBorders);
-		PopupSliderChoice* pWindowWidth = list->Add(new PopupSliderChoice(&g_Config.iWindowWidth, portrait ? 272 : 480, currentScreenWidth, gr->T("X Size of the window"), 1, screenManager(), gr->T("X")));
+		PopupSliderChoice* pWindowWidth = list->Add(new PopupSliderChoice(&g_Config.iWindowWidth, portrait ? 272 : 480, currentScreenWidth, NO_DEFAULT_INT, gr->T("X Size of the window"), 1, screenManager(), gr->T("X")));
 		pWindowWidth->SetFormat("%i X");
 		pWindowWidth->OnChange.Handle(this, &OtherSettingsScreen::OnDisableWinBorders);
-		PopupSliderChoice* pWindowHeight = list->Add(new PopupSliderChoice(&g_Config.iWindowHeight, portrait ? 480 : 272, currentScreenHeight, gr->T("Y Size of the window"), 1, screenManager(), gr->T("Y")));
+		PopupSliderChoice* pWindowHeight = list->Add(new PopupSliderChoice(&g_Config.iWindowHeight, portrait ? 480 : 272, currentScreenHeight, NO_DEFAULT_INT, gr->T("Y Size of the window"), 1, screenManager(), gr->T("Y")));
 		pWindowHeight->SetFormat("%i Y");
 		pWindowHeight->OnChange.Handle(this, &OtherSettingsScreen::OnDisableWinBorders);
 	}

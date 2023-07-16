@@ -1518,35 +1518,6 @@ void D3D11DrawContext::Clear(int mask, uint32_t colorval, float depthVal, int st
 	}
 }
 
-void D3D11DrawContext::BeginFrame() {
-	context_->OMSetRenderTargets(1, &curRenderTargetView_, curDepthStencilView_);
-
-	if (curBlend_ != nullptr) {
-		context_->OMSetBlendState(curBlend_->bs, blendFactor_, 0xFFFFFFFF);
-	}
-	if (curDepthStencil_ != nullptr) {
-		context_->OMSetDepthStencilState(GetCachedDepthStencilState(curDepthStencil_, stencilWriteMask_, stencilCompareMask_), stencilRef_);
-	}
-	if (curRaster_ != nullptr) {
-		context_->RSSetState(curRaster_->rs);
-	}
-	context_->IASetInputLayout(curInputLayout_);
-	context_->VSSetShader(curVS_, nullptr, 0);
-	context_->PSSetShader(curPS_, nullptr, 0);
-	context_->GSSetShader(curGS_, nullptr, 0);
-	if (curTopology_ != D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED) {
-		context_->IASetPrimitiveTopology(curTopology_);
-	}
-	if (curPipeline_ != nullptr) {
-		context_->IASetVertexBuffers(0, 1, nextVertexBuffers_, (UINT *)curPipeline_->input->strides.data(), (UINT *)nextVertexBufferOffsets_);
-		context_->IASetIndexBuffer(nextIndexBuffer_, DXGI_FORMAT_R16_UINT, nextIndexBufferOffset_);
-		if (curPipeline_->dynamicUniforms) {
-			context_->VSSetConstantBuffers(0, 1, &curPipeline_->dynamicUniforms);
-			context_->PSSetConstantBuffers(0, 1, &curPipeline_->dynamicUniforms);
-		}
-	}
-}
-
 void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x, int y, int z, Framebuffer *dstfb, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBit, const char *tag) {
 	D3D11Framebuffer *src = (D3D11Framebuffer *)srcfb;
 	D3D11Framebuffer *dst = (D3D11Framebuffer *)dstfb;

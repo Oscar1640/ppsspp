@@ -1500,9 +1500,7 @@ UI::EventReturn MainScreen::OnGameSettings(UI::EventParams &e) {
 
 UI::EventReturn MainScreen::OnRecentChange(UI::EventParams &e) {
 	RecreateViews();
-	if (host) {
-		host->UpdateUI();
-	}
+	UpdateUIState(UISTATE_MENU);
 	return UI::EVENT_DONE;
 }
 

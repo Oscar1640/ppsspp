@@ -1978,10 +1978,6 @@ std::string GPUCommon::PrintReplacementInfo(u32 texAddr) {
 	return textureCache_->GetTextureReplacementInfo(texAddr);
 }
 
-std::vector<FramebufferInfo> GPUCommon::GetFramebufferList() const {
-	return framebufferManager_->GetFramebufferList();
-}
-
 bool GPUCommon::GetCurrentSimpleVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices) {
 	UpdateUVScaleOffset();
 	return drawEngineCommon_->GetCurrentSimpleVertices(count, vertices, indices);

@@ -760,10 +760,10 @@ static const ConfigSetting controlSettings[] = {
 	ConfigSetting("AnalogAutoRotSpeed", &g_Config.fAnalogAutoRotSpeed, 8.0f, CfgFlag::PER_GAME),
 
 	ConfigSetting("AnalogLimiterDeadzone", &g_Config.fAnalogLimiterDeadzone, 0.6f, CfgFlag::DEFAULT),
-	ConfigSetting("EnableDInputWithXInput", &g_Config.bEnableDInputWithXInput, false, true, true),
+	ConfigSetting("EnableDInputWithXInput", &g_Config.bEnableDInputWithXInput, false, CfgFlag::DEFAULT),
 
 	ConfigSetting("AllowMappingCombos", &g_Config.bAllowMappingCombos, false, CfgFlag::DEFAULT),
-	ConfigSetting("AxisBindThreshold", &g_Config.fAxisBindThreshold, 0.25f, true, true),
+	ConfigSetting("AxisBindThreshold", &g_Config.fAxisBindThreshold, 0.25f, CfgFlag::DEFAULT),
 
 	ConfigSetting("LeftStickHeadScale", &g_Config.fLeftStickHeadScale, 1.0f, CfgFlag::PER_GAME),
 	ConfigSetting("RightStickHeadScale", &g_Config.fRightStickHeadScale, 1.0f, CfgFlag::PER_GAME),

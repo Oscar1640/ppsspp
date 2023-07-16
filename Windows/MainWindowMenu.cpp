@@ -163,7 +163,7 @@ namespace MainWindow {
 	}
 
 	void CreateSimpleUIMenu(HMENU menu) {
-		auto des = GetI18NCategory("DesktopUI");
+		auto des = GetI18NCategory(I18NCat::DESKTOPUI);
 
 		const std::wstring simpleUI = ConvertUTF8ToWString(des->T("Simple UI"));
 		const std::wstring enable = ConvertUTF8ToWString(des->T("Enable"));
@@ -917,10 +917,6 @@ namespace MainWindow {
 			ShellExecute(NULL, L"open", L"https://www.ppsspp.org/", NULL, NULL, SW_SHOWNORMAL);
 			break;
 
-		case ID_HELP_BUYGOLD:
-			ShellExecute(NULL, L"open", L"https://www.ppsspp.org/buygold", NULL, NULL, SW_SHOWNORMAL);
-			break;
-
 		case ID_HELP_OPENFORUM:
 			ShellExecute(NULL, L"open", L"https://forums.ppsspp.org/", NULL, NULL, SW_SHOWNORMAL);
 			break;
@@ -957,11 +953,11 @@ namespace MainWindow {
 
 		case ID_SIMPLEUI_TOGGLE:
 			g_Config.bSimpleUI = !g_Config.bSimpleUI;
-			NativeMessageReceived("recreateviews", "");
+			System_PostUIMessage("recreateviews", "");
 			break;
 		case ID_SIMPLEUI_HIDE:
 			g_Config.bSimpleUIhide = !g_Config.bSimpleUIhide;
-			NativeMessageReceived("recreateviews", "");
+			System_PostUIMessage("recreateviews", "");
 			break;
 
 		default:
