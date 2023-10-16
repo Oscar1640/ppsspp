@@ -19,6 +19,7 @@
 #if PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64)
 
 #include "Common/Profiler/Profiler.h"
+#include "Core/Config.h"
 #include "Core/Core.h"
 #include "Core/Debugger/Breakpoints.h"
 #include "Core/HLE/HLE.h"
@@ -204,10 +205,10 @@ void X64JitBackend::CompIR_System(IRInst inst) {
 		SaveStaticRegisters();
 
 		WriteDebugProfilerStatus(IRProfilerStatus::SYSCALL);
-#ifdef USE_PROFILER
+if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::FRAME_PROFILE || (DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::SIMPLE_PROFILE) {
 		// When profiling, we can't skip CallSyscall, since it times syscalls.
 		ABI_CallFunctionC((const u8 *)&CallSyscall, inst.constant);
-#else
+} else {
 		// Skip the CallSyscall where possible.
 		{
 			MIPSOpcode op(inst.constant);
@@ -218,7 +219,7 @@ void X64JitBackend::CompIR_System(IRInst inst) {
 				ABI_CallFunctionC((const u8 *)&CallSyscall, inst.constant);
 			}
 		}
-#endif
+}
 
 		WriteDebugProfilerStatus(IRProfilerStatus::IN_JIT);
 		LoadStaticRegisters();

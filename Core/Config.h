@@ -263,6 +263,7 @@ public:
 
 	// These aren't saved, just for instant debugging.
 	bool bLogFrameDrops;
+	bool bShowFrameProfiler;
 
 	// Analog stick tilting
 	// This is the held base angle (from the horizon), that we compute the tilt relative from.

@@ -683,7 +683,7 @@ void ArmJit::Comp_Syscall(MIPSOpcode op)
 	FlushAll();
 
 	SaveDowncount();
-	if (g_Config.bShowFrameProfiler || g_Config.bSimpleFrameStats) {
+	if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::FRAME_PROFILE || (DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::SIMPLE_PROFILE) {
 		// When profiling, we can't skip CallSyscall, since it times syscalls.
 		gpr.SetRegImm(R0, op.encoding);
 		QuickCallFunction(R1, (void *)&CallSyscall);

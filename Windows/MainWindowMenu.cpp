@@ -942,11 +942,11 @@ namespace MainWindow {
 
 		case ID_SIMPLEUI_TOGGLE:
 			g_Config.bSimpleUI = !g_Config.bSimpleUI;
-			System_PostUIMessage("recreateviews", "");
+			System_PostUIMessage(UIMessage::RECREATE_VIEWS);
 			break;
 		case ID_SIMPLEUI_HIDE:
 			g_Config.bSimpleUIhide = !g_Config.bSimpleUIhide;
-			System_PostUIMessage("recreateviews", "");
+			System_PostUIMessage(UIMessage::RECREATE_VIEWS);
 			break;
 
 		default:

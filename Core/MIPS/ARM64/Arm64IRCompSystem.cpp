@@ -20,6 +20,7 @@
 #if PPSSPP_ARCH(ARM64) || (PPSSPP_PLATFORM(WINDOWS) && !defined(__LIBRETRO__))
 
 #include "Common/Profiler/Profiler.h"
+#include "Core/Config.h"
 #include "Core/Core.h"
 #include "Core/Debugger/Breakpoints.h"
 #include "Core/HLE/HLE.h"
@@ -211,11 +212,11 @@ void Arm64JitBackend::CompIR_System(IRInst inst) {
 		SaveStaticRegisters();
 
 		WriteDebugProfilerStatus(IRProfilerStatus::SYSCALL);
-#ifdef USE_PROFILER
+if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::FRAME_PROFILE || (DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::SIMPLE_PROFILE) {
 		// When profiling, we can't skip CallSyscall, since it times syscalls.
 		MOVI2R(W0, inst.constant);
 		QuickCallFunction(SCRATCH2_64, &CallSyscall);
-#else
+} else {
 		// Skip the CallSyscall where possible.
 		{
 			MIPSOpcode op(inst.constant);
@@ -228,7 +229,7 @@ void Arm64JitBackend::CompIR_System(IRInst inst) {
 				QuickCallFunction(SCRATCH2_64, &CallSyscall);
 			}
 		}
-#endif
+}
 
 		WriteDebugProfilerStatus(IRProfilerStatus::IN_JIT);
 		LoadStaticRegisters();

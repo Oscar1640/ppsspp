@@ -58,7 +58,7 @@ enum ProfileCatStatus {
 };
 
 void DrawProfile(UIContext &ui) {
-	if (g_Config.bShowFrameProfiler) {
+	if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::FRAME_PROFILE) {
 		PROFILE_THIS_SCOPE("timing");
 		int numCategories = Profiler_GetNumCategories();
 		int numThreads = Profiler_GetNumThreads();
@@ -212,7 +212,7 @@ void DrawProfile(UIContext &ui) {
 
 		lastMaxVal = lastMaxVal * 0.95f + maxVal * 0.05f;
 	}
-	if (g_Config.bSimpleFrameStats) {
+	if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::SIMPLE_PROFILE) {
 		PROFILE_THIS_SCOPE("timing");
 		int numCategories = Profiler_GetNumCategories();
 		int historyLength = Profiler_GetHistoryLength();

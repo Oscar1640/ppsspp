@@ -1852,9 +1852,7 @@ void OtherSettingsScreen::CreateViews() {
 	list->Add(new ItemHeader(sy->T("Settings that should not be changed by most users")));
 	list->Add(new CheckBox(&g_Config.bEncryptSave, sy->T("Encrypt savedata")));
 	list->Add(new CheckBox(&g_Config.bSavedataUpgrade, sy->T("Allow savedata with wrong encryption(unsafe workaround for outdated PSP savedata)")));
-	list->Add(new CheckBox(&g_Config.bShowFrameProfiler, gr->T("Display frame profiler(heavy!)")));
-	list->Add(new CheckBox(&g_Config.bSimpleFrameStats, gr->T("Display simple frame stats(heavy!)")));
-	list->Add(new CheckBox(&g_Config.bDrawFrameGraph, dev->T("Draw Frametimes Graph")));
+
 	list->Add(new CheckBox(&g_Config.bFullscreenOnDoubleclick, gr->T("Doubleclick fullscreen(only when no mouse or touch control is used)")));
 	list->Add(new CheckBox(&g_Config.bHideSlowWarnings, gr->T("Hide performance warnings")));
 	list->Add(new CheckBox(&g_Config.bSavestateScreenshotResLimit, gr->T("Limit resolution of savestates screenshots")));

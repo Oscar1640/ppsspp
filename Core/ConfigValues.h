@@ -182,9 +182,10 @@ enum class DebugOverlay : int {
 	DEBUG_STATS,
 	FRAME_GRAPH,
 	FRAME_TIMING,
-#ifdef USE_PROFILER
+//#ifdef USE_PROFILER
 	FRAME_PROFILE,
-#endif
+	SIMPLE_PROFILE,
+//#endif
 	CONTROL,
 	AUDIO,
 	GPU_PROFILE,

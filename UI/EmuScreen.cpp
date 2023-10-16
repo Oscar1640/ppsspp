@@ -1577,6 +1577,9 @@ void EmuScreen::renderUI() {
 	if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::FRAME_PROFILE && !invalid_) {
 		DrawProfile(*ctx);
 	}
+	if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::SIMPLE_PROFILE && !invalid_) {
+		DrawProfile(*ctx);
+	}
 
 	if (coreState == CORE_RUNTIME_ERROR || coreState == CORE_STEPPING) {
 		const MIPSExceptionInfo &info = Core_GetExceptionInfo();

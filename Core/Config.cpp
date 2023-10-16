@@ -179,8 +179,6 @@ static const ConfigSetting generalSettings[] = {
 	ConfigSetting("ShowDebuggerOnLoad", &g_Config.bShowDebuggerOnLoad, false, CfgFlag::DEFAULT),
 	ConfigSetting("SimpleUI", &g_Config.bSimpleUI, true, CfgFlag::DEFAULT),
 	ConfigSetting("SimpleUIhide", &g_Config.bSimpleUIhide, false, CfgFlag::DEFAULT),
-	ConfigSetting("ShowFrameProfiler", &g_Config.bShowFrameProfiler, false, CfgFlag::DEFAULT),
-	ConfigSetting("SimpleFrameStats", &g_Config.bSimpleFrameStats, false, CfgFlag::DEFAULT),
 	ConfigSetting("CheckForNewVersion", &g_Config.bCheckForNewVersion, true, CfgFlag::DEFAULT),
 	ConfigSetting("Language", &g_Config.sLanguageIni, &DefaultLangRegion, CfgFlag::DEFAULT),
 	ConfigSetting("ForceLagSync2", &g_Config.bForceLagSync, false, CfgFlag::PER_GAME),

@@ -164,6 +164,22 @@ private:
 	HasIni hasTexturesIni_ = HasIni::MAYBE;
 };
 
+class OtherSettingsScreen : public UIDialogScreenWithGameBackground {
+public:
+	OtherSettingsScreen(const Path& gamePath) : UIDialogScreenWithGameBackground(gamePath) {}
+	void onFinish(DialogResult result) override;
+
+	const char* tag() const override { return "OtherSettingsScreen"; }
+
+protected:
+	void CreateViews() override;
+
+private:
+	UI::EventReturn OnDisableWinBorders(UI::EventParams& e);
+	bool QualityDepth_;
+};
+
+
 class HostnameSelectScreen : public PopupScreen {
 public:
 	HostnameSelectScreen(std::string *value, const std::string &title)

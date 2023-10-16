@@ -95,9 +95,10 @@ static const char *g_debugOverlayList[] = {
 	"Debug stats",
 	"Draw Frametimes Graph",
 	"Frame timing",
-#ifdef USE_PROFILER
+//#ifdef USE_PROFILER
 	"Frame profile",
-#endif
+	"Simple profile",
+//#endif
 	"Control Debug",
 	"Audio Debug",
 	"GPU Profile",
@@ -122,9 +123,6 @@ void DevMenuScreen::CreatePopupContents(UI::ViewGroup *parent) {
 	ScrollView *scroll = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT, 1.0f));
 	LinearLayout *items = new LinearLayout(ORIENT_VERTICAL);
 
-	items->Add(new CheckBox(&g_Config.bShowFrameProfiler, dev->T("Frame Profiler"), ""));
-	items->Add(new CheckBox(&g_Config.bSimpleFrameStats, dev->T("Simple Frame Stats"), ""));
-	items->Add(new CheckBox(&g_Config.bDrawFrameGraph, dev->T("Draw Frametimes Graph")));
 #if !defined(MOBILE_DEVICE)
 	items->Add(new Choice(dev->T("Log View")))->OnClick.Handle(this, &DevMenuScreen::OnLogView);
 #endif

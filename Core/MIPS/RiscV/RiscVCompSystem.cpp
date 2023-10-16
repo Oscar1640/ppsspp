@@ -16,6 +16,7 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include "Common/Profiler/Profiler.h"
+#include "Core/Config.h"
 #include "Core/Core.h"
 #include "Core/HLE/HLE.h"
 #include "Core/HLE/ReplaceTables.h"
@@ -189,11 +190,11 @@ void RiscVJitBackend::CompIR_System(IRInst inst) {
 		SaveStaticRegisters();
 
 		WriteDebugProfilerStatus(IRProfilerStatus::SYSCALL);
-#ifdef USE_PROFILER
+if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::FRAME_PROFILE || (DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::SIMPLE_PROFILE) {
 		// When profiling, we can't skip CallSyscall, since it times syscalls.
 		LI(X10, (int32_t)inst.constant);
 		QuickCallFunction(&CallSyscall, SCRATCH2);
-#else
+} else {
 		// Skip the CallSyscall where possible.
 		{
 			MIPSOpcode op(inst.constant);
@@ -206,7 +207,7 @@ void RiscVJitBackend::CompIR_System(IRInst inst) {
 				QuickCallFunction(&CallSyscall, SCRATCH2);
 			}
 		}
-#endif
+}
 
 		WriteDebugProfilerStatus(IRProfilerStatus::IN_JIT);
 		LoadStaticRegisters();
