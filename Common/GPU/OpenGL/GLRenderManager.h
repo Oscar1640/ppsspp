@@ -198,6 +198,7 @@ public:
 };
 
 enum class GLRRunType {
+	SUBMIT,
 	PRESENT,
 	SYNC,
 	EXIT,
@@ -226,7 +227,7 @@ struct GLRRenderThreadTask {
 // directly in the destructor.
 class GLRenderManager {
 public:
-	GLRenderManager();
+	GLRenderManager(HistoryBuffer<FrameTimeData, FRAME_TIME_HISTORY_LENGTH> &frameTimeHistory);
 	~GLRenderManager();
 
 	GLRenderManager(GLRenderManager &) = delete;
@@ -253,7 +254,8 @@ public:
 	// Makes sure that the GPU has caught up enough that we can start writing buffers of this frame again.
 	void BeginFrame(bool enableProfiling);
 	// Can run on a different thread!
-	void Finish(); 
+	void Finish();
+	void Present();
 
 	// Creation commands. These were not needed in Vulkan since there we can do that on the main thread.
 	// We pass in width/height here even though it's not strictly needed until we support glTextureStorage
@@ -347,24 +349,31 @@ public:
 	}
 
 	void DeleteShader(GLRShader *shader) {
+		_dbg_assert_(shader != nullptr);
 		deleter_.shaders.push_back(shader);
 	}
 	void DeleteProgram(GLRProgram *program) {
+		_dbg_assert_(program != nullptr);
 		deleter_.programs.push_back(program);
 	}
 	void DeleteBuffer(GLRBuffer *buffer) {
+		_dbg_assert_(buffer != nullptr);
 		deleter_.buffers.push_back(buffer);
 	}
 	void DeleteTexture(GLRTexture *texture) {
+		_dbg_assert_(texture != nullptr);
 		deleter_.textures.push_back(texture);
 	}
 	void DeleteInputLayout(GLRInputLayout *inputLayout) {
+		_dbg_assert_(inputLayout != nullptr);
 		deleter_.inputLayouts.push_back(inputLayout);
 	}
 	void DeleteFramebuffer(GLRFramebuffer *framebuffer) {
+		_dbg_assert_(framebuffer != nullptr);
 		deleter_.framebuffers.push_back(framebuffer);
 	}
 	void DeletePushBuffer(GLPushBuffer *pushbuffer) {
+		_dbg_assert_(pushbuffer != nullptr);
 		deleter_.pushBuffers.push_back(pushbuffer);
 	}
 
@@ -810,9 +819,8 @@ public:
 		_dbg_assert_(foundCount == 1);
 	}
 
-	void SetSwapFunction(std::function<void()> swapFunction, bool retainControl) {
+	void SetSwapFunction(std::function<void()> swapFunction) {
 		swapFunction_ = swapFunction;
-		retainControl_ = retainControl;
 	}
 
 	void SetSwapIntervalFunction(std::function<void(int)> swapIntervalFunction) {
@@ -891,7 +899,6 @@ private:
 
 	std::function<void()> swapFunction_;
 	std::function<void(int)> swapIntervalFunction_;
-	bool retainControl_ = false;
 	GLBufferStrategy bufferStrategy_ = GLBufferStrategy::SUBDATA;
 
 	int inflightFrames_ = MAX_INFLIGHT_FRAMES;
@@ -910,4 +917,7 @@ private:
 
 	std::string profilePassesString_;
 	InvalidationCallback invalidationCallback_;
+
+	uint64_t frameIdGen_ = FRAME_TIME_HISTORY_LENGTH;
+	HistoryBuffer<FrameTimeData, FRAME_TIME_HISTORY_LENGTH> &frameTimeHistory_;
 };

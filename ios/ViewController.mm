@@ -49,7 +49,7 @@ class IOSGraphicsContext : public GraphicsContext {
 public:
 	IOSGraphicsContext() {
 		CheckGLExtensions();
-		draw_ = Draw::T3DCreateGLContext();
+		draw_ = Draw::T3DCreateGLContext(false);
 		renderManager_ = (GLRenderManager *)draw_->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
 		renderManager_->SetInflightFrames(g_Config.iInflightFrames);
 		SetGPUBackend(GPUBackend::OPENGL);
@@ -63,8 +63,6 @@ public:
 		return draw_;
 	}
 
-	void SwapInterval(int interval) override {}
-	void SwapBuffers() override {}
 	void Resize() override {}
 	void Shutdown() override {}
 
@@ -238,8 +236,7 @@ extern float g_safeInsetBottom;
 
 		INFO_LOG(SYSTEM, "Emulation thread starting\n");
 		while (threadEnabled) {
-			NativeUpdate();
-			NativeRender(graphicsContext);
+			NativeFrame(graphicsContext);
 		}
 
 
@@ -465,7 +462,7 @@ int ToTouchID(UITouch *uiTouch, bool allowAllocate) {
 					break;
 			}
 			axis.deviceId = DEVICE_ID_PAD_0;
-			NativeAxis(axis);
+			NativeAxis(&axis, 1);
 		} else {
 			KeyInput key;
 			key.flags = KEY_DOWN;
@@ -534,7 +531,7 @@ int ToTouchID(UITouch *uiTouch, bool allowAllocate) {
 				break;
 		}
 		axis.deviceId = DEVICE_ID_PAD_0;
-		NativeAxis(axis);
+		NativeAxis(&axis, 1);
 	} else {
 		KeyInput key;
 		key.flags = KEY_UP;
@@ -692,7 +689,7 @@ int ToTouchID(UITouch *uiTouch, bool allowAllocate) {
 		axisInput.deviceId = DEVICE_ID_PAD_0;
 		axisInput.axisId = JOYSTICK_AXIS_X;
 		axisInput.value = value;
-		NativeAxis(axisInput);
+		NativeAxis(&axisInput, 1);
 	};
 
 	extendedProfile.leftThumbstick.yAxis.valueChangedHandler = ^(GCControllerAxisInput *axis, float value) {
@@ -700,7 +697,7 @@ int ToTouchID(UITouch *uiTouch, bool allowAllocate) {
 		axisInput.deviceId = DEVICE_ID_PAD_0;
 		axisInput.axisId = JOYSTICK_AXIS_Y;
 		axisInput.value = -value;
-		NativeAxis(axisInput);
+		NativeAxis(&axisInput, 1);
 	};
 
 	// Map right thumbstick as another analog stick, particularly useful for controllers like the DualShock 3/4 when connected to an iOS device
@@ -709,7 +706,7 @@ int ToTouchID(UITouch *uiTouch, bool allowAllocate) {
 		axisInput.deviceId = DEVICE_ID_PAD_0;
 		axisInput.axisId = JOYSTICK_AXIS_Z;
 		axisInput.value = value;
-		NativeAxis(axisInput);
+		NativeAxis(&axisInput, 1);
 	};
 
 	extendedProfile.rightThumbstick.yAxis.valueChangedHandler = ^(GCControllerAxisInput *axis, float value) {
@@ -717,7 +714,7 @@ int ToTouchID(UITouch *uiTouch, bool allowAllocate) {
 		axisInput.deviceId = DEVICE_ID_PAD_0;
 		axisInput.axisId = JOYSTICK_AXIS_RZ;
 		axisInput.value = -value;
-		NativeAxis(axisInput);
+		NativeAxis(&axisInput, 1);
 	};
 }
 #endif
@@ -756,10 +753,6 @@ void stopLocation() {
 }
 
 @end
-
-void System_ShowFileInFolder(const char *path) {
-	// Unsupported
-}
 
 void System_LaunchUrl(LaunchUrlType urlType, char const* url)
 {

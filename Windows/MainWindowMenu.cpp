@@ -303,7 +303,6 @@ namespace MainWindow {
 		TranslateMenuItem(menu, ID_TEXTURESCALING_HYBRID_BICUBIC);
 		TranslateMenuItem(menu, ID_TEXTURESCALING_DEPOSTERIZE);
 		TranslateMenuItem(menu, ID_OPTIONS_HARDWARETRANSFORM);
-		TranslateMenuItem(menu, ID_OPTIONS_VERTEXCACHE);
 		TranslateMenuItem(menu, ID_EMULATION_SOUND);
 		TranslateMenuItem(menu, ID_EMULATION_CHEATS, g_Config.bSystemControls ? L"\tCtrl+T" : L"");
 		TranslateMenuItem(menu, ID_EMULATION_CHAT, g_Config.bSystemControls ? L"\tCtrl+C" : L"");
@@ -331,12 +330,6 @@ namespace MainWindow {
 	void BrowseAndBootDone(std::string filename);
 
 	void BrowseAndBoot(std::string defaultPath, bool browseDirectory) {
-		static std::wstring filter = L"All supported file types (*.iso *.cso *.pbp *.elf *.prx *.zip *.ppdmp)|*.pbp;*.elf;*.iso;*.cso;*.prx;*.zip;*.ppdmp|PSP ROMs (*.iso *.cso *.pbp *.elf *.prx)|*.pbp;*.elf;*.iso;*.cso;*.prx|Homebrew/Demos installers (*.zip)|*.zip|All files (*.*)|*.*||";
-		for (int i = 0; i < (int)filter.length(); i++) {
-			if (filter[i] == '|')
-				filter[i] = '\0';
-		}
-
 		browsePauseAfter = false;
 		if (GetUIState() == UISTATE_INGAME) {
 			browsePauseAfter = Core_IsStepping();
@@ -363,22 +356,15 @@ namespace MainWindow {
 			Core_EnableStepping(false);
 		}
 		filename = ReplaceAll(filename, "\\", "/");
-		System_PostUIMessage("boot", filename.c_str());
+		System_PostUIMessage(UIMessage::REQUEST_GAME_BOOT, filename);
 		W32Util::MakeTopMost(GetHWND(), g_Config.bTopMost);
 	}
 
 	static void UmdSwitchAction() {
-		std::string fn;
-		std::string filter = "PSP ROMs (*.iso *.cso *.pbp *.elf)|*.pbp;*.elf;*.iso;*.cso;*.prx|All files (*.*)|*.*||";
-
-		for (int i = 0; i < (int)filter.length(); i++) {
-			if (filter[i] == '|')
-				filter[i] = '\0';
-		}
-
-		if (W32Util::BrowseForFileName(true, GetHWND(), L"Switch UMD", 0, ConvertUTF8ToWString(filter).c_str(), L"*.pbp;*.elf;*.iso;*.cso;", fn)) {
-			__UmdReplace(Path(fn));
-		}
+		auto mm = GetI18NCategory(I18NCat::MAINMENU);
+		System_BrowseForFile(mm->T("Switch UMD"), BrowseFileType::BOOTABLE, [](const std::string &value, int) {
+			__UmdReplace(Path(value));
+		});
 	}
 
 	static void SaveStateActionFinished(SaveState::Status status, const std::string &message, void *userdata) {
@@ -391,17 +377,17 @@ namespace MainWindow {
 	// not static
 	void setTexScalingMultiplier(int level) {
 		g_Config.iTexScalingLevel = level;
-		System_PostUIMessage("gpu_configChanged", "");
+		System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 	}
 
 	static void setTexScalingType(int type) {
 		g_Config.iTexScalingType = type;
-		System_PostUIMessage("gpu_configChanged", "");
+		System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 	}
 
 	static void setSkipBufferEffects(bool skip) {
 		g_Config.bSkipBufferEffects = skip;
-		System_PostUIMessage("gpu_configChanged", "");
+		System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 	}
 
 	static void setFrameSkipping(int framesToSkip = -1) {
@@ -446,7 +432,7 @@ namespace MainWindow {
 	}
 
 	static void RestartApp() {
-		if (IsDebuggerPresent()) {
+		if (System_GetPropertyBool(SYSPROP_DEBUGGER_PRESENT)) {
 			PostMessage(MainWindow::GetHWND(), WM_USER_RESTART_EMUTHREAD, 0, 0);
 		} else {
 			g_Config.bRestartRequired = true;
@@ -484,8 +470,8 @@ namespace MainWindow {
 
 		case ID_TOGGLE_BREAK:
 			if (GetUIState() == UISTATE_PAUSEMENU) {
-				// Causes hang
-				//System_PostUIMessage("run", "");
+				// Causes hang (outdated comment?)
+				// System_PostUIMessage(UIMessage::REQUEST_GAME_RUN, "");
 
 				if (disasmWindow)
 					SendMessage(disasmWindow->GetDlgHandle(), WM_COMMAND, IDC_STOPGO, 0);
@@ -504,7 +490,7 @@ namespace MainWindow {
 			break;
 
 		case ID_EMULATION_PAUSE:
-			System_PostUIMessage("pause", "");
+			System_PostUIMessage(UIMessage::REQUEST_GAME_PAUSE);
 			break;
 
 		case ID_EMULATION_STOP:
@@ -512,12 +498,12 @@ namespace MainWindow {
 				Core_EnableStepping(false);
 
 			Core_Stop();
-			System_PostUIMessage("stop", "");
+			System_PostUIMessage(UIMessage::REQUEST_GAME_STOP);
 			Core_WaitInactive();
 			break;
 
 		case ID_EMULATION_RESET:
-			System_PostUIMessage("reset", "");
+			System_PostUIMessage(UIMessage::REQUEST_GAME_RESET);
 			Core_EnableStepping(false);
 			break;
 
@@ -537,7 +523,7 @@ namespace MainWindow {
 
 		case ID_EMULATION_CHAT:
 			if (GetUIState() == UISTATE_INGAME) {
-				System_PostUIMessage("chat screen", "");
+				System_PostUIMessage(UIMessage::SHOW_CHAT_SCREEN);
 			}
 			break;
 		case ID_FILE_LOADSTATEFILE:
@@ -561,7 +547,7 @@ namespace MainWindow {
 		{
 			if (!Achievements::WarnUserIfChallengeModeActive()) {
 				SaveState::NextSlot();
-				System_PostUIMessage("savestate_displayslot", "");
+				System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
 			}
 			break;
 		}
@@ -571,7 +557,7 @@ namespace MainWindow {
 			if (!Achievements::WarnUserIfChallengeModeActive()) {
 				if (!KeyMap::PspButtonHasMappings(VIRTKEY_NEXT_SLOT)) {
 					SaveState::NextSlot();
-					System_PostUIMessage("savestate_displayslot", "");
+					System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
 				}
 			}
 			break;
@@ -627,7 +613,7 @@ namespace MainWindow {
 		}
 
 		case ID_OPTIONS_LANGUAGE:
-			System_PostUIMessage("language screen", "");
+			System_PostUIMessage(UIMessage::SHOW_LANGUAGE_SCREEN);
 			break;
 
 		case ID_OPTIONS_IGNOREWINKEY:
@@ -672,7 +658,7 @@ namespace MainWindow {
 			g_Config.bAutoFrameSkip = !g_Config.bAutoFrameSkip;
 			if (g_Config.bAutoFrameSkip && g_Config.bSkipBufferEffects) {
 				g_Config.bSkipBufferEffects = false;
-				System_PostUIMessage("gpu_configChanged", "");
+				System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 			}
 			break;
 
@@ -690,7 +676,7 @@ namespace MainWindow {
 
 		case ID_TEXTURESCALING_DEPOSTERIZE:
 			g_Config.bTexDeposterize = !g_Config.bTexDeposterize;
-			System_PostUIMessage("gpu_configChanged", "");
+			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 			break;
 
 		case ID_OPTIONS_DIRECT3D9:
@@ -719,23 +705,29 @@ namespace MainWindow {
 
 		case ID_OPTIONS_SKIP_BUFFER_EFFECTS:
 			g_Config.bSkipBufferEffects = !g_Config.bSkipBufferEffects;
-			System_PostUIMessage("gpu_renderResized", "");
+			System_PostUIMessage(UIMessage::GPU_RENDER_RESIZED);
 			g_OSD.ShowOnOff(gr->T("Skip Buffer Effects"), g_Config.bSkipBufferEffects);
 			break;
 
 		case ID_DEBUG_SHOWDEBUGSTATISTICS:
-			g_Config.bShowDebugStats = !g_Config.bShowDebugStats;
-			System_PostUIMessage("clear jit", "");
+			// This is still useful as a shortcut to tell users to use.
+			// So let's fake the enum.
+			if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS) {
+				g_Config.iDebugOverlay = (int)DebugOverlay::OFF;
+			} else {
+				g_Config.iDebugOverlay = (int)DebugOverlay::DEBUG_STATS;
+			}
+			System_PostUIMessage(UIMessage::REQUEST_CLEAR_JIT);
 			break;
 
 		case ID_OPTIONS_HARDWARETRANSFORM:
 			g_Config.bHardwareTransform = !g_Config.bHardwareTransform;
-			System_PostUIMessage("gpu_configChanged", "");
+			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 			g_OSD.ShowOnOff(gr->T("Hardware Transform"), g_Config.bHardwareTransform);
 			break;
 
 		case ID_OPTIONS_DISPLAY_LAYOUT:
-			System_PostUIMessage("display layout editor", "");
+			System_PostUIMessage(UIMessage::SHOW_DISPLAY_LAYOUT_EDITOR);
 			break;
 
 
@@ -766,7 +758,7 @@ namespace MainWindow {
 			break;
 
 		case ID_DEBUG_DUMPNEXTFRAME:
-			System_PostUIMessage("gpu dump next frame", "");
+			System_PostUIMessage(UIMessage::REQUEST_GPU_DUMP_NEXT_FRAME);
 			break;
 
 		case ID_DEBUG_LOADMAPFILE:
@@ -881,9 +873,6 @@ namespace MainWindow {
 			SendToggleFullscreen(!g_Config.UseFullScreen());
 			break;
 
-		case ID_OPTIONS_VERTEXCACHE:
-			g_Config.bVertexCache = !g_Config.bVertexCache;
-			break;
 		case ID_OPTIONS_TEXTUREFILTERING_AUTO:   g_Config.iTexFiltering = TEX_FILTER_AUTO; break;
 		case ID_OPTIONS_NEARESTFILTERING:        g_Config.iTexFiltering = TEX_FILTER_FORCE_NEAREST; break;
 		case ID_OPTIONS_LINEARFILTERING:         g_Config.iTexFiltering = TEX_FILTER_FORCE_LINEAR; break;
@@ -902,11 +891,11 @@ namespace MainWindow {
 			break;
 
 		case ID_OPTIONS_CONTROLS:
-			System_PostUIMessage("control mapping", "");
+			System_PostUIMessage(UIMessage::SHOW_CONTROL_MAPPING);
 			break;
 
 		case ID_OPTIONS_MORE_SETTINGS:
-			System_PostUIMessage("settings", "");
+			System_PostUIMessage(UIMessage::SHOW_SETTINGS);
 			break;
 
 		case ID_EMULATION_SOUND:
@@ -974,10 +963,9 @@ namespace MainWindow {
 		HMENU menu = GetMenu(GetHWND());
 #define CHECKITEM(item,value) 	CheckMenuItem(menu,item,MF_BYCOMMAND | ((value) ? MF_CHECKED : MF_UNCHECKED));
 		CHECKITEM(ID_DEBUG_IGNOREILLEGALREADS, g_Config.bIgnoreBadMemAccess);
-		CHECKITEM(ID_DEBUG_SHOWDEBUGSTATISTICS, g_Config.bShowDebugStats);
+		CHECKITEM(ID_DEBUG_SHOWDEBUGSTATISTICS, (DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS);
 		CHECKITEM(ID_OPTIONS_HARDWARETRANSFORM, g_Config.bHardwareTransform);
 		CHECKITEM(ID_DEBUG_BREAKONLOAD, !g_Config.bAutoRun);
-		CHECKITEM(ID_OPTIONS_VERTEXCACHE, g_Config.bVertexCache);
 		CHECKITEM(ID_OPTIONS_FRAMESKIP_AUTO, g_Config.bAutoFrameSkip);
 		CHECKITEM(ID_OPTIONS_FRAMESKIP, g_Config.iFrameSkip != FRAMESKIP_OFF);
 		CHECKITEM(ID_OPTIONS_FRAMESKIPTYPE_COUNT, g_Config.iFrameSkipType == FRAMESKIPTYPE_COUNT);
@@ -1011,13 +999,6 @@ namespace MainWindow {
 
 		for (int i = 0; i < ARRAY_SIZE(displayrotationitems); i++) {
 			CheckMenuItem(menu, displayrotationitems[i], MF_BYCOMMAND | ((i + 1) == g_Config.iInternalScreenRotation ? MF_CHECKED : MF_UNCHECKED));
-		}
-
-		// Disable Vertex Cache when HW T&L is disabled.
-		if (!g_Config.bHardwareTransform) {
-			EnableMenuItem(menu, ID_OPTIONS_VERTEXCACHE, MF_GRAYED);
-		} else {
-			EnableMenuItem(menu, ID_OPTIONS_VERTEXCACHE, MF_ENABLED);
 		}
 
 		static const int zoomitems[11] = {

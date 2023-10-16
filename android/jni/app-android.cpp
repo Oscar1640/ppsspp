@@ -148,8 +148,8 @@ static int deviceType;
 // Should only be used for display detection during startup (for config defaults etc)
 // This is the ACTUAL display size, not the hardware scaled display size.
 // Exposed so it can be displayed on the touchscreen test.
-int display_xres;
-int display_yres;
+static int display_xres;
+static int display_yres;
 static int display_dpi_x;
 static int display_dpi_y;
 static int backbuffer_format;	// Android PixelFormat enum
@@ -158,7 +158,8 @@ static int desiredBackbufferSizeX;
 static int desiredBackbufferSizeY;
 
 // Cache the class loader so we can use it from native threads. Required for TextAndroid.
-static JavaVM* gJvm = nullptr;
+extern JavaVM *gJvm;
+
 static jobject gClassLoader;
 static jmethodID gFindClassMethod;
 
@@ -201,10 +202,10 @@ int utimensat(int fd, const char *path, const struct timespec times[2]) {
 void AndroidLogger::Log(const LogMessage &message) {
 	int mode;
 	switch (message.level) {
-	case LogTypes::LWARNING:
+	case LogLevel::LWARNING:
 		mode = ANDROID_LOG_WARN;
 		break;
-	case LogTypes::LERROR:
+	case LogLevel::LERROR:
 		mode = ANDROID_LOG_ERROR;
 		break;
 	default:
@@ -251,7 +252,7 @@ void Android_AttachThreadToJNI() {
 	JNIEnv *env;
 	int status = gJvm->GetEnv((void **)&env, JNI_VERSION_1_6);
 	if (status < 0) {
-		INFO_LOG(SYSTEM, "Attaching thread '%s' (not already attached) to JNI.", GetCurrentThreadName());
+		DEBUG_LOG(SYSTEM, "Attaching thread '%s' (not already attached) to JNI.", GetCurrentThreadName());
 		JavaVMAttachArgs args{};
 		args.version = JNI_VERSION_1_6;
 		args.name = GetCurrentThreadName();
@@ -268,7 +269,7 @@ void Android_AttachThreadToJNI() {
 
 void Android_DetachThreadFromJNI() {
 	if (gJvm->DetachCurrentThread() == JNI_OK) {
-		INFO_LOG(SYSTEM, "Detached thread from JNI: '%s'", GetCurrentThreadName());
+		DEBUG_LOG(SYSTEM, "Detached thread from JNI: '%s'", GetCurrentThreadName());
 	} else {
 		WARN_LOG(SYSTEM, "Failed to detach thread '%s' from JNI - never attached?", GetCurrentThreadName());
 	}
@@ -294,12 +295,11 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *pjvm, void *reserved) {
 
 // Only used in OpenGL mode.
 static void EmuThreadFunc() {
-	JNIEnv *env;
-
 	SetCurrentThreadName("EmuThread");
 
 	// Name the thread in the JVM, because why not (might result in better debug output in Play Console).
 	// TODO: Do something clever with getEnv() and stored names from SetCurrentThreadName?
+	JNIEnv *env;
 	JavaVMAttachArgs args{};
 	args.version = JNI_VERSION_1_6;
 	args.name = "EmuThread";
@@ -310,7 +310,7 @@ static void EmuThreadFunc() {
 	// Wait for render loop to get started.
 	INFO_LOG(SYSTEM, "Runloop: Waiting for displayInit...");
 	while (!graphicsContext || graphicsContext->GetState() == GraphicsContextState::PENDING) {
-		sleep_ms(20);
+		sleep_ms(5);
 	}
 
 	// Check the state of the graphics context before we try to feed it into NativeInitGraphics.
@@ -390,10 +390,6 @@ void System_Vibrate(int length_ms) {
 	PushCommand("vibrate", temp);
 }
 
-void System_ShowFileInFolder(const char *path) {
-	// Unsupported
-}
-
 void System_LaunchUrl(LaunchUrlType urlType, const char *url) {
 	switch (urlType) {
 	case LaunchUrlType::BROWSER_URL: PushCommand("launchBrowser", url); break;
@@ -412,6 +408,8 @@ std::string System_GetProperty(SystemProperty prop) {
 		return mogaVersion;
 	case SYSPROP_BOARDNAME:
 		return boardName;
+	case SYSPROP_BUILD_VERSION:
+		return PPSSPP_GIT_VERSION;
 	default:
 		return "";
 	}
@@ -532,6 +530,10 @@ bool System_GetPropertyBool(SystemProperty prop) {
 		}
 	case SYSPROP_HAS_KEYBOARD:
 		return deviceType != DEVICE_TYPE_VR;
+#ifndef HTTPS_NOT_AVAILABLE
+	case SYSPROP_SUPPORTS_HTTPS:
+		return !g_Config.bDisableHTTPS;
+#endif
 	default:
 		return false;
 	}
@@ -685,8 +687,9 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_init
 	EARLY_LOG("NativeApp.init() -- begin");
 	PROFILE_INIT();
 
-	std::lock_guard<std::mutex> guard(renderLock);  // Note: This is held for the rest of this function - intended?
+	std::lock_guard<std::mutex> guard(renderLock);
 	renderer_inited = false;
+	exitRenderLoop = false;
 	androidVersion = jAndroidVersion;
 	deviceType = jdeviceType;
 
@@ -860,7 +863,7 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_resume(JNIEnv *, jclass) {
 	INFO_LOG(SYSTEM, "NativeApp.resume() - resuming audio");
 	AndroidAudio_Resume(g_audioState);
 
-	System_PostUIMessage("app_resumed", "");
+	System_PostUIMessage(UIMessage::APP_RESUMED);
 }
 
 extern "C" void Java_org_ppsspp_ppsspp_NativeApp_pause(JNIEnv *, jclass) {
@@ -869,8 +872,14 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_pause(JNIEnv *, jclass) {
 }
 
 extern "C" void Java_org_ppsspp_ppsspp_NativeApp_shutdown(JNIEnv *, jclass) {
+	INFO_LOG(SYSTEM, "NativeApp.shutdown() -- begin");
+
 	if (renderer_inited && useCPUThread && graphicsContext) {
 		// Only used in Java EGL path.
+
+		// We can't lock renderLock here because the emu thread will be in NativeFrame
+		// which locks renderLock already, and only gets out once we call ThreadFrame()
+		// in a loop before, to empty the queue.
 		EmuThreadStop("shutdown");
 		INFO_LOG(SYSTEM, "BeginAndroidShutdown");
 		graphicsContext->BeginAndroidShutdown();
@@ -888,19 +897,19 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_shutdown(JNIEnv *, jclass) {
 		EmuThreadJoin();
 	}
 
-	INFO_LOG(SYSTEM, "NativeApp.shutdown() -- begin");
-	if (renderer_inited) {
-		INFO_LOG(G3D, "Shutting down renderer");
-		graphicsContext->Shutdown();
-		delete graphicsContext;
-		graphicsContext = nullptr;
-		renderer_inited = false;
-	} else {
-		INFO_LOG(G3D, "Not shutting down renderer - not initialized");
-	}
-
 	{
 		std::lock_guard<std::mutex> guard(renderLock);
+
+		if (graphicsContext) {
+			INFO_LOG(G3D, "Shutting down renderer");
+			graphicsContext->Shutdown();
+			delete graphicsContext;
+			graphicsContext = nullptr;
+			renderer_inited = false;
+		} else {
+			INFO_LOG(G3D, "Not shutting down renderer - not initialized");
+		}
+
 		NativeShutdown();
 		g_VFS.Clear();
 	}
@@ -973,7 +982,7 @@ extern "C" bool Java_org_ppsspp_ppsspp_NativeRenderer_displayInit(JNIEnv * env, 
 		renderer_inited = true;
 	}
 
-	System_PostUIMessage("recreateviews", "");
+	System_PostUIMessage(UIMessage::RECREATE_VIEWS);
 
 	if (IsVREnabled()) {
 		EnterVR(firstStart, graphicsContext->GetAPIContext());
@@ -1066,8 +1075,18 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		PushCommand("browse_image", StringFromFormat("%d", requestId));
 		return true;
 	case SystemRequestType::BROWSE_FOR_FILE:
-		PushCommand("browse_file", StringFromFormat("%d", requestId));
+	{
+		BrowseFileType fileType = (BrowseFileType)param3;
+		switch (fileType) {
+		case BrowseFileType::SOUND_EFFECT:
+			PushCommand("browse_file_audio", StringFromFormat("%d", requestId));
+			break;
+		default:
+			PushCommand("browse_file", StringFromFormat("%d", requestId));
+			break;
+		}
 		return true;
+	}
 	case SystemRequestType::BROWSE_FOR_FOLDER:
 		PushCommand("browse_folder", StringFromFormat("%d", requestId));
 		return true;
@@ -1093,24 +1112,8 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 }
 
 extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_sendRequestResult(JNIEnv *env, jclass, jint jrequestID, jboolean result, jstring jvalue, jint jintValue) {
-	std::string value = GetJavaString(env, jvalue);
-
+	std::string value = jvalue ? GetJavaString(env, jvalue) : "(no value)";
 	INFO_LOG(SYSTEM, "Received result of request %d from Java: %d: %d '%s'", jrequestID, (int)result, jintValue, value.c_str());
-
-	if (jrequestID == -1) {
-		// Sanity check. This shouldn't happen.
-		ERROR_LOG(SYSTEM, "Unexpected request id %d", jrequestID);
-		System_Toast("Bad request ID -1");
-	}
-
-	static jint lastSeqID = -1337;
-	if (lastSeqID == jrequestID) {
-		// We send this on dismiss, so twice in many cases.
-		WARN_LOG(SYSTEM, "Ignoring duplicate sendRequestResult");
-		return;
-	}
-	lastSeqID = jrequestID;
-
 	if (result) {
 		g_requestManager.PostSystemSuccess(jrequestID, value.c_str());
 	} else {
@@ -1120,8 +1123,7 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_sendRequestResult(JNIEn
 
 void LockedNativeUpdateRender() {
 	std::lock_guard<std::mutex> renderGuard(renderLock);
-	NativeUpdate();
-	NativeRender(graphicsContext);
+	NativeFrame(graphicsContext);
 }
 
 void UpdateRunLoopAndroid(JNIEnv *env) {
@@ -1139,6 +1141,9 @@ void UpdateRunLoopAndroid(JNIEnv *env) {
 }
 
 extern "C" void Java_org_ppsspp_ppsspp_NativeRenderer_displayRender(JNIEnv *env, jobject obj) {
+	// This doesn't get called on the Vulkan path.
+	_assert_(useCPUThread);
+
 	static bool hasSetThreadName = false;
 	if (!hasSetThreadName) {
 		hasSetThreadName = true;
@@ -1148,13 +1153,9 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeRenderer_displayRender(JNIEnv *env,
 	if (IsVREnabled() && !StartVRRender())
 		return;
 
-	if (useCPUThread) {
-		// This is the "GPU thread". Call ThreadFrame.
-		if (!graphicsContext || !graphicsContext->ThreadFrame()) {
-			return;
-		}
-	} else {
-		UpdateRunLoopAndroid(env);
+	// This is the "GPU thread". Call ThreadFrame.
+	if (!graphicsContext || !graphicsContext->ThreadFrame()) {
+		return;
 	}
 
 	if (IsVREnabled()) {
@@ -1214,6 +1215,7 @@ extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_keyUp(JNIEnv *, jclass, jin
 	return NativeKey(keyInput);
 }
 
+// TODO: Make a batched interface, since we get these in batches on the Android side.
 extern "C" void Java_org_ppsspp_ppsspp_NativeApp_joystickAxis(
 		JNIEnv *env, jclass, jint deviceId, jint axisId, jfloat value) {
 	if (!renderer_inited)
@@ -1223,7 +1225,7 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_joystickAxis(
 	axis.deviceId = (InputDeviceID)deviceId;
 	axis.axisId = (InputAxis)axisId;
 	axis.value = value;
-	NativeAxis(axis);
+	NativeAxis(&axis, 1);
 }
 
 extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mouseWheelEvent(
@@ -1237,21 +1239,7 @@ extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mouseWheelEvent(
 extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_accelerometer(JNIEnv *, jclass, float x, float y, float z) {
 	if (!renderer_inited)
 		return;
-
-	AxisInput axis;
-	axis.deviceId = DEVICE_ID_ACCELEROMETER;
-
-	axis.axisId = JOYSTICK_AXIS_ACCELEROMETER_X;
-	axis.value = x;
-	NativeAxis(axis);
-
-	axis.axisId = JOYSTICK_AXIS_ACCELEROMETER_Y;
-	axis.value = y;
-	NativeAxis(axis);
-
-	axis.axisId = JOYSTICK_AXIS_ACCELEROMETER_Z;
-	axis.value = z;
-	NativeAxis(axis);
+	NativeAccelerometer(x, y, z);
 }
 
 extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_sendMessageFromJava(JNIEnv *env, jclass, jstring message, jstring param) {
@@ -1277,7 +1265,7 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_sendMessageFromJava(JNI
 		INFO_LOG(SYSTEM, "STORAGE PERMISSION: GRANTED");
 		permissions[SYSTEM_PERMISSION_STORAGE] = PERMISSION_STATUS_GRANTED;
 		// Send along.
-		System_PostUIMessage(msg.c_str(), prm.c_str());
+		System_PostUIMessage(UIMessage::PERMISSION_GRANTED, prm);
 	} else if (msg == "sustained_perf_supported") {
 		sustainedPerfSupported = true;
 	} else if (msg == "safe_insets") {
@@ -1296,22 +1284,11 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_sendMessageFromJava(JNI
 		KeyMap::NotifyPadConnected(nextInputDeviceID, prm);
 	} else if (msg == "core_powerSaving") {
 		// Forward.
-		System_PostUIMessage(msg.c_str(), prm.c_str());
+		System_PostUIMessage(UIMessage::POWER_SAVING, prm);
 	} else if (msg == "exception") {
 		g_OSD.Show(OSDType::MESSAGE_ERROR, std::string("Java Exception"), prm, 10.0f);
 	} else {
 		ERROR_LOG(SYSTEM, "Got unexpected message from Java, ignoring: %s / %s", msg.c_str(), prm.c_str());
-	}
-}
-
-extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeActivity_requestExitVulkanRenderLoop(JNIEnv *env, jobject obj) {
-	if (!renderLoopRunning) {
-		ERROR_LOG(SYSTEM, "Render loop already exited");
-		return;
-	}
-	exitRenderLoop = true;
-	while (renderLoopRunning) {
-		sleep_ms(10);
 	}
 }
 
@@ -1462,8 +1439,13 @@ static void ProcessFrameCommands(JNIEnv *env) {
 	}
 }
 
+std::thread g_vulkanRenderLoopThread;
+
+static void VulkanEmuThread(ANativeWindow *wnd);
+
 // This runs in Vulkan mode only.
-extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runVulkanRenderLoop(JNIEnv *env, jobject obj, jobject _surf) {
+// This handles the entire lifecycle of the Vulkan context, init and exit.
+extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runVulkanRenderLoop(JNIEnv * env, jobject obj, jobject _surf) {
 	_assert_(!useCPUThread);
 
 	if (!graphicsContext) {
@@ -1471,14 +1453,12 @@ extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runVulkanRenderLoo
 		return false;
 	}
 
-	exitRenderLoop = false;
-	// This is up here to prevent race conditions, in case we pause during init.
-	renderLoopRunning = true;
+	if (g_vulkanRenderLoopThread.joinable()) {
+		ERROR_LOG(G3D, "runVulkanRenderLoop: Already running");
+		return false;
+	}
 
 	ANativeWindow *wnd = _surf ? ANativeWindow_fromSurface(env, _surf) : nullptr;
-
-	WARN_LOG(G3D, "runVulkanRenderLoop. display_xres=%d display_yres=%d desiredBackbufferSizeX=%d desiredBackbufferSizeY=%d",
-		display_xres, display_yres, desiredBackbufferSizeX, desiredBackbufferSizeY);
 
 	if (!wnd) {
 		// This shouldn't ever happen.
@@ -1486,6 +1466,49 @@ extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runVulkanRenderLoo
 		renderLoopRunning = false;
 		return false;
 	}
+
+	g_vulkanRenderLoopThread = std::thread(VulkanEmuThread, wnd);
+	return true;
+}
+
+extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeActivity_requestExitVulkanRenderLoop(JNIEnv * env, jobject obj) {
+	if (!renderLoopRunning) {
+		ERROR_LOG(SYSTEM, "Render loop already exited");
+		return;
+	}
+	_assert_(g_vulkanRenderLoopThread.joinable());
+	exitRenderLoop = true;
+	g_vulkanRenderLoopThread.join();
+	_assert_(!g_vulkanRenderLoopThread.joinable());
+	g_vulkanRenderLoopThread = std::thread();
+}
+
+// TODO: Merge with the Win32 EmuThread and so on, and the Java EmuThread?
+static void VulkanEmuThread(ANativeWindow *wnd) {
+	SetCurrentThreadName("EmuThread");
+
+	AndroidJNIThreadContext ctx;
+	JNIEnv *env = getEnv();
+
+	if (!graphicsContext) {
+		ERROR_LOG(G3D, "runVulkanRenderLoop: Tried to enter without a created graphics context.");
+		renderLoopRunning = false;
+		exitRenderLoop = false;
+		return;
+	}
+
+	if (exitRenderLoop) {
+		WARN_LOG(G3D, "runVulkanRenderLoop: ExitRenderLoop requested at start, skipping the whole thing.");
+		renderLoopRunning = false;
+		exitRenderLoop = false;
+		return;
+	}
+
+	// This is up here to prevent race conditions, in case we pause during init.
+	renderLoopRunning = true;
+
+	WARN_LOG(G3D, "runVulkanRenderLoop. display_xres=%d display_yres=%d desiredBackbufferSizeX=%d desiredBackbufferSizeY=%d",
+		display_xres, display_yres, desiredBackbufferSizeX, desiredBackbufferSizeY);
 
 	if (!graphicsContext->InitFromRenderThread(wnd, desiredBackbufferSizeX, desiredBackbufferSizeY, backbuffer_format, androidVersion)) {
 		// On Android, if we get here, really no point in continuing.
@@ -1497,7 +1520,7 @@ extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runVulkanRenderLoo
 		delete graphicsContext;
 		graphicsContext = nullptr;
 		renderLoopRunning = false;
-		return false;
+		return;
 	}
 
 	if (!exitRenderLoop) {
@@ -1508,18 +1531,10 @@ extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runVulkanRenderLoo
 		graphicsContext->ThreadStart();
 		renderer_inited = true;
 
-		static bool hasSetThreadName = false;
-		if (!hasSetThreadName) {
-			hasSetThreadName = true;
-			SetCurrentThreadName("AndroidRender");
+		while (!exitRenderLoop) {
+			LockedNativeUpdateRender();
+			ProcessFrameCommands(env);
 		}
-	}
-
-	while (!exitRenderLoop) {
-		LockedNativeUpdateRender();
-		graphicsContext->SwapBuffers();
-
-		ProcessFrameCommands(env);
 	}
 
 	INFO_LOG(G3D, "Leaving EGL/Vulkan render loop.");
@@ -1533,9 +1548,9 @@ extern "C" bool JNICALL Java_org_ppsspp_ppsspp_NativeActivity_runVulkanRenderLoo
 	INFO_LOG(G3D, "Shutting down graphics context from render thread...");
 	graphicsContext->ShutdownFromRenderThread();
 	renderLoopRunning = false;
+	exitRenderLoop = false;
 
 	WARN_LOG(G3D, "Render loop function exited.");
-	return true;
 }
 
 // NOTE: This is defunct and not working, due to how the Android storage functions currently require

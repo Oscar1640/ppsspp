@@ -19,6 +19,7 @@
 
 #include "Common/StringUtils.h"
 #include "Common/CommonTypes.h"
+#include "Core/Loaders.h"  // for IdentifiedFileType
 
 #include "ext/rcheevos/include/rc_client.h"
 
@@ -56,6 +57,9 @@ bool IsActive();
 // Returns true if unofficial achievements are enabled.
 bool UnofficialEnabled();
 
+// Returns true if encore-mode is active.
+bool EncoreModeActive();
+
 // Returns true if the emulator should hold off on executing game code, such as during game identification.
 bool IsBlockingExecution();
 
@@ -79,6 +83,9 @@ rc_client_t *GetClient();
 void Initialize();
 void UpdateSettings();
 
+bool LoginProblems(std::string *errorString);
+bool HasToken();
+
 /// Called when the system is being shut down. If Shutdown() returns false, the shutdown should be aborted if possible.
 bool Shutdown();
 
@@ -99,8 +106,9 @@ bool HasAchievementsOrLeaderboards();
 bool LoginAsync(const char *username, const char *password);
 void Logout();
 
-void SetGame(const Path &path, FileLoader *fileLoader);
-void ChangeUMD(const Path &path);  // for in-game UMD change
+bool IsReadyToStart();
+void SetGame(const Path &path, IdentifiedFileType fileType, FileLoader *fileLoader);
+void ChangeUMD(const Path &path, FileLoader *fileLoader);  // for in-game UMD change
 void UnloadGame();  // Call when leaving a game.
 
 Statistics GetStatistics();

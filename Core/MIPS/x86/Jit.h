@@ -69,6 +69,7 @@ public:
 
 	// Ops
 	void Comp_ITypeMem(MIPSOpcode op) override;
+	void Comp_StoreSync(MIPSOpcode op) override;
 	void Comp_Cache(MIPSOpcode op) override;
 
 	void Comp_RelBranch(MIPSOpcode op) override;
@@ -224,7 +225,7 @@ private:
 	void CompITypeMemRead(MIPSOpcode op, u32 bits, void (XEmitter::*mov)(int, int, Gen::X64Reg, Gen::OpArg), T (*safeFunc)(u32 addr)) {
 		CompITypeMemRead(op, bits, mov, (const void *)safeFunc);
 	}
-	void CompITypeMemWrite(MIPSOpcode op, u32 bits, const void *safeFunc);
+	void CompITypeMemWrite(MIPSOpcode op, u32 bits, const void *safeFunc, bool makeRTWritable = false);
 	template <typename T>
 	void CompITypeMemWrite(MIPSOpcode op, u32 bits, void (*safeFunc)(T val, u32 addr)) {
 		CompITypeMemWrite(op, bits, (const void *)safeFunc);

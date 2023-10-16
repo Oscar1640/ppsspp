@@ -29,7 +29,7 @@ public:
 	void PostSystemSuccess(int requestId, const char *responseString, int responseValue = 0);
 	void PostSystemFailure(int requestId);
 
-	// This must be called every frame from the beginning of NativeUpdate().
+	// This must be called every frame from the beginning of NativeFrame().
 	// This will call the callback of any finished requests.
 	void ProcessRequests();
 
@@ -61,7 +61,8 @@ private:
 		RequestFailedCallback callback;
 	};
 
-	int idCounter_ = 0;
+	// Let's start at 10 to get a recognizably valid ID in logs.
+	int idCounter_ = 10;
 	std::vector<PendingSuccess> pendingSuccesses_;
 	std::vector<PendingFailure> pendingFailures_;
 	std::mutex responseMutex_;
@@ -89,6 +90,7 @@ enum class BrowseFileType {
 	IMAGE,
 	INI,
 	DB,
+	SOUND_EFFECT,
 	ANY,
 };
 
@@ -164,4 +166,4 @@ inline void System_SendDebugScreenshot(const std::string &data, int height) {
 
 // Non-inline to avoid including Path.h
 void System_CreateGameShortcut(const Path &path, const std::string &title);
-
+void System_ShowFileInFolder(const Path &path);

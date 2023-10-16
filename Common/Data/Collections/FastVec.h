@@ -69,6 +69,7 @@ public:
 	void clear() { size_ = 0; }
 	bool empty() const { return size_ == 0; }
 
+	const T *data() { return data_; }
 	T *begin() { return data_; }
 	T *end() { return data_ + size_; }
 	const T *begin() const { return data_; }
@@ -88,7 +89,7 @@ public:
 	T &insert(T *iter) {
 		int pos = iter - data_;
 		ExtendByOne();
-		if (pos + 1 < size_) {
+		if (pos + 1 < (int)size_) {
 			memmove(data_ + pos + 1, data_ + pos, (size_ - pos) * sizeof(T));
 		}
 		return data_[pos];
@@ -115,6 +116,29 @@ public:
 
 	void reserve(size_t newCapacity) {
 		IncreaseCapacityTo(newCapacity);
+	}
+
+	void extend(const T *newData, size_t count) {
+		IncreaseCapacityTo(size_ + count);
+		memcpy(data_ + size_, newData, count * sizeof(T));
+		size_ += count;
+	}
+
+	T *extend_uninitialized(size_t count) {
+		size_t sz = size_;
+		if (size_ + count <= capacity_) {
+			size_ += count;
+			return &data_[sz];
+		} else {
+			size_t newCapacity = size_ + count * 2;  // Leave some extra room when growing in all cases
+			if (newCapacity < capacity_ * 2) {
+				// Standard amortized O(1).
+				newCapacity = capacity_ * 2;
+			}
+			IncreaseCapacityTo(newCapacity);
+			size_ += count;
+			return &data_[sz];
+		}
 	}
 
 	void LockCapacity() {
@@ -154,4 +178,48 @@ private:
 #ifdef _DEBUG
 	bool capacityLocked_ = false;
 #endif
+};
+
+// Simple cyclical vector.
+template <class T, size_t size>
+class HistoryBuffer {
+public:
+	T &Add(size_t index) {
+#ifdef _DEBUG
+		_dbg_assert_((int64_t)index >= 0);
+#endif
+		if (index > maxIndex_)
+			maxIndex_ = index;
+		T &entry = data_[index % size];
+		entry = T{};
+		return entry;
+	}
+
+	const T &Back(size_t index) const {
+#ifdef _DEBUG
+		_dbg_assert_(index < maxIndex_ && index < size);
+#endif
+		return data_[(maxIndex_ - index) % size];
+	}
+
+	// Out of bounds (past size() - 1) is undefined behavior.
+	T &operator[] (const size_t index) {
+#ifdef _DEBUG
+		_dbg_assert_(index <= maxIndex_);
+#endif
+		return data_[index % size];
+	}
+	const T &operator[] (const size_t index) const {
+#ifdef _DEBUG
+		_dbg_assert_(index <= maxIndex_);
+#endif
+		return data_[index % size];
+	}
+	size_t MaxIndex() const {
+		return maxIndex_;
+	}
+
+private:
+	T data_[size]{};
+	size_t maxIndex_ = 0;
 };

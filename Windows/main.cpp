@@ -26,10 +26,10 @@
 #include "Common/GPU/Vulkan/VulkanLoader.h"
 #include "ppsspp_config.h"
 
-#include <Wbemidl.h>
-#include <shellapi.h>
-#include <ShlObj.h>
 #include <mmsystem.h>
+#include <shellapi.h>
+#include <Wbemidl.h>
+#include <ShlObj.h>
 
 #include "Common/System/Display.h"
 #include "Common/System/NativeApp.h"
@@ -43,6 +43,7 @@
 #include "Common/Thread/ThreadUtil.h"
 #include "Common/Data/Encoding/Utf8.h"
 #include "Common/Net/Resolve.h"
+#include "Common/TimeUtil.h"
 #include "W32Util/DarkMode.h"
 #include "W32Util/ShellUtil.h"
 
@@ -115,20 +116,11 @@ WindowsInputManager g_inputManager;
 
 int g_lastNumInstances = 0;
 
-void System_ShowFileInFolder(const char *path) {
-	// SHParseDisplayName can't handle relative paths, so normalize first.
-	std::string resolved = ReplaceAll(File::ResolvePath(path), "/", "\\");
-
-	SFGAOF flags{};
-	PIDLIST_ABSOLUTE pidl = nullptr;
-	HRESULT hr = SHParseDisplayName(ConvertUTF8ToWString(resolved).c_str(), nullptr, &pidl, 0, &flags);
-
-	if (pidl) {
-		if (SUCCEEDED(hr))
-			SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
-		CoTaskMemFree(pidl);
-	}
-}
+static double g_lastActivity = 0.0;
+static double g_lastKeepAwake = 0.0;
+// Time until we stop considering the core active without user input.
+// Should this be configurable?  2 hours currently.
+static const double ACTIVITY_IDLE_TIMEOUT = 2.0 * 3600.0;
 
 void System_LaunchUrl(LaunchUrlType urlType, const char *url) {
 	ShellExecute(NULL, L"open", ConvertUTF8ToWString(url).c_str(), NULL, NULL, SW_SHOWNORMAL);
@@ -234,6 +226,10 @@ std::string System_GetProperty(SystemProperty prop) {
 			gpuDriverVersion = GetVideoCardDriverVersion();
 		}
 		return gpuDriverVersion;
+	case SYSPROP_BUILD_VERSION:
+		return PPSSPP_GIT_VERSION;
+	case SYSPROP_USER_DOCUMENTS_DIR:
+		return Path(W32Util::UserDocumentsPath()).ToString();  // this'll reverse the slashes.
 	default:
 		return "";
 	}
@@ -287,20 +283,28 @@ static int ScreenDPI() {
 #endif
 
 static int ScreenRefreshRateHz() {
-	DEVMODE lpDevMode;
-	memset(&lpDevMode, 0, sizeof(DEVMODE));
-	lpDevMode.dmSize = sizeof(DEVMODE);
-	lpDevMode.dmDriverExtra = 0;
+	static int rate = 0;
+	static double lastCheck = 0.0;
+	double now = time_now_d();
+	if (!rate || lastCheck < now - 10.0) {
+		lastCheck = now;
+		DEVMODE lpDevMode{};
+		lpDevMode.dmSize = sizeof(DEVMODE);
+		lpDevMode.dmDriverExtra = 0;
 
-	if (EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS, &lpDevMode) == 0) {
-		return 60;  // default value
-	} else {
-		if (lpDevMode.dmFields & DM_DISPLAYFREQUENCY) {
-			return lpDevMode.dmDisplayFrequency > 60 ? lpDevMode.dmDisplayFrequency : 60;
+		// TODO: Use QueryDisplayConfig instead (Win7+) so we can get fractional refresh rates correctly.
+
+		if (EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS, &lpDevMode) == 0) {
+			rate = 60;  // default value
 		} else {
-			return 60;
+			if (lpDevMode.dmFields & DM_DISPLAYFREQUENCY) {
+				rate = lpDevMode.dmDisplayFrequency > 60 ? lpDevMode.dmDisplayFrequency : 60;
+			} else {
+				rate = 60;
+			}
 		}
 	}
+	return rate;
 }
 
 int System_GetPropertyInt(SystemProperty prop) {
@@ -354,6 +358,8 @@ bool System_GetPropertyBool(SystemProperty prop) {
 	case SYSPROP_HAS_FOLDER_BROWSER:
 	case SYSPROP_HAS_OPEN_DIRECTORY:
 	case SYSPROP_HAS_TEXT_INPUT_DIALOG:
+	case SYSPROP_CAN_CREATE_SHORTCUT:
+	case SYSPROP_CAN_SHOW_FILE:
 		return true;
 	case SYSPROP_HAS_IMAGE_BROWSER:
 		return true;
@@ -373,6 +379,10 @@ bool System_GetPropertyBool(SystemProperty prop) {
 		return true;
 	case SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR:
 		return true;  // FileUtil.cpp: OpenFileInEditor
+	case SYSPROP_SUPPORTS_HTTPS:
+		return !g_Config.bDisableHTTPS;
+	case SYSPROP_DEBUGGER_PRESENT:
+		return IsDebuggerPresent();
 	default:
 		return false;
 	}
@@ -440,6 +450,29 @@ void System_Notify(SystemNotification notification) {
 	case SystemNotification::TOGGLE_DEBUG_CONSOLE:
 		MainWindow::ToggleDebugConsoleVisibility();
 		break;
+
+	case SystemNotification::ACTIVITY:
+		g_lastActivity = time_now_d();
+		break;
+
+	case SystemNotification::KEEP_SCREEN_AWAKE:
+	{
+		// Keep the system awake for longer than normal for cutscenes and the like.
+		const double now = time_now_d();
+		if (now < g_lastActivity + ACTIVITY_IDLE_TIMEOUT) {
+			// Only resetting it ever prime number seconds in case the call is expensive.
+			// Using a prime number to ensure there's no interaction with other periodic events.
+			if (now - g_lastKeepAwake > 89.0 || now < g_lastKeepAwake) {
+				// Note that this needs to be called periodically.
+				// It's also possible to set ES_CONTINUOUS but let's not, for simplicity.
+#if defined(_WIN32) && !PPSSPP_PLATFORM(UWP)
+				SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+#endif
+				g_lastKeepAwake = now;
+			}
+		}
+		break;
+	}
 	}
 }
 
@@ -463,7 +496,7 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		restartArgs = param1;
 		if (!restartArgs.empty())
 			AddDebugRestartArgs();
-		if (IsDebuggerPresent()) {
+		if (System_GetPropertyBool(SYSPROP_DEBUGGER_PRESENT)) {
 			PostMessage(MainWindow::GetHWND(), MainWindow::WM_USER_RESTART_EMUTHREAD, 0, 0);
 		} else {
 			g_Config.bRestartRequired = true;
@@ -529,13 +562,16 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		std::wstring filter;
 		switch (type) {
 		case BrowseFileType::BOOTABLE:
-			filter = MakeFilter(L"All supported file types (*.iso *.cso *.pbp *.elf *.prx *.zip *.ppdmp)|*.pbp;*.elf;*.iso;*.cso;*.prx;*.zip;*.ppdmp|PSP ROMs (*.iso *.cso *.pbp *.elf *.prx)|*.pbp;*.elf;*.iso;*.cso;*.prx|Homebrew/Demos installers (*.zip)|*.zip|All files (*.*)|*.*||");
+			filter = MakeFilter(L"All supported file types (*.iso *.cso *.chd *.pbp *.elf *.prx *.zip *.ppdmp)|*.pbp;*.elf;*.iso;*.cso;*.chd;*.prx;*.zip;*.ppdmp|PSP ROMs (*.iso *.cso *.chd *.pbp *.elf *.prx)|*.pbp;*.elf;*.iso;*.cso;*.chd;*.prx|Homebrew/Demos installers (*.zip)|*.zip|All files (*.*)|*.*||");
 			break;
 		case BrowseFileType::INI:
 			filter = MakeFilter(L"Ini files (*.ini)|*.ini|All files (*.*)|*.*||");
 			break;
 		case BrowseFileType::DB:
 			filter = MakeFilter(L"Cheat db files (*.db)|*.db|All files (*.*)|*.*||");
+			break;
+		case BrowseFileType::SOUND_EFFECT:
+			filter = MakeFilter(L"WAVE files (*.wav)|*.wav|All files (*.*)|*.*||");
 			break;
 		case BrowseFileType::ANY:
 			filter = MakeFilter(L"All files (*.*)|*.*||");
@@ -566,6 +602,11 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		}).detach();
 		return true;
 	}
+
+	case SystemRequestType::SHOW_FILE_IN_FOLDER:
+		W32Util::ShowFileInFolder(param1);
+		return true;
+
 	case SystemRequestType::TOGGLE_FULLSCREEN_STATE:
 	{
 		bool flag = !MainWindow::IsFullscreen();
@@ -587,7 +628,6 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		return true;
 	}
 	case SystemRequestType::CREATE_GAME_SHORTCUT:
-		// This is not actually working, but ported it to the request framework anyway.
 		return W32Util::CreateDesktopShortcut(param1, param2);
 	default:
 		return false;
@@ -656,28 +696,13 @@ static bool DetectVulkanInExternalProcess() {
 
 	const wchar_t *cmdline = L"--vulkan-available-check";
 
-	SHELLEXECUTEINFO info{ sizeof(SHELLEXECUTEINFO) };
-	info.fMask = SEE_MASK_NOCLOSEPROCESS;
-	info.lpFile = moduleFilename.c_str();
-	info.lpParameters = cmdline;
-	info.lpDirectory = workingDirectory.c_str();
-	info.nShow = SW_HIDE;
-	if (ShellExecuteEx(&info) != TRUE) {
-		return false;
-	}
-	if (info.hProcess == nullptr) {
-		return false;
-	}
-
-	DWORD result = WaitForSingleObject(info.hProcess, 10000);
 	DWORD exitCode = 0;
-	if (result == WAIT_FAILED || GetExitCodeProcess(info.hProcess, &exitCode) == 0) {
-		CloseHandle(info.hProcess);
+	if (W32Util::ExecuteAndGetReturnCode(moduleFilename.c_str(), cmdline, workingDirectory.c_str(), &exitCode)) {
+		return exitCode == EXIT_CODE_VULKAN_WORKS;
+	} else {
+		ERROR_LOG(G3D, "Failed to detect Vulkan in external process somehow");
 		return false;
 	}
-	CloseHandle(info.hProcess);
-
-	return exitCode == EXIT_CODE_VULKAN_WORKS;
 }
 #endif
 
@@ -697,6 +722,65 @@ std::vector<std::wstring> GetWideCmdLine() {
 	LocalFree(wargv);
 
 	return wideArgs;
+}
+
+static void InitMemstickDirectory() {
+	if (!g_Config.memStickDirectory.empty() && !g_Config.flash0Directory.empty())
+		return;
+
+	const Path &exePath = File::GetExeDirectory();
+	// Mount a filesystem
+	g_Config.flash0Directory = exePath / "assets/flash0";
+
+	// Caller sets this to the Documents folder.
+	const Path rootMyDocsPath = g_Config.internalDataDirectory;
+	const Path myDocsPath = rootMyDocsPath / "PPSSPP";
+	const Path installedFile = exePath / "installed.txt";
+	const bool installed = File::Exists(installedFile);
+
+	// If installed.txt exists(and we can determine the Documents directory)
+	if (installed && !rootMyDocsPath.empty()) {
+		FILE *fp = File::OpenCFile(installedFile, "rt");
+		if (fp) {
+			char temp[2048];
+			char *tempStr = fgets(temp, sizeof(temp), fp);
+			// Skip UTF-8 encoding bytes if there are any. There are 3 of them.
+			if (tempStr && strncmp(tempStr, "\xEF\xBB\xBF", 3) == 0) {
+				tempStr += 3;
+			}
+			std::string tempString = tempStr ? tempStr : "";
+			if (!tempString.empty() && tempString.back() == '\n')
+				tempString.resize(tempString.size() - 1);
+
+			g_Config.memStickDirectory = Path(tempString);
+			fclose(fp);
+		}
+
+		// Check if the file is empty first, before appending the slash.
+		if (g_Config.memStickDirectory.empty())
+			g_Config.memStickDirectory = myDocsPath;
+	} else {
+		g_Config.memStickDirectory = exePath / "memstick";
+	}
+
+	// Create the memstickpath before trying to write to it, and fall back on Documents yet again
+	// if we can't make it.
+	if (!File::Exists(g_Config.memStickDirectory)) {
+		if (!File::CreateDir(g_Config.memStickDirectory))
+			g_Config.memStickDirectory = myDocsPath;
+		INFO_LOG(COMMON, "Memstick directory not present, creating at '%s'", g_Config.memStickDirectory.c_str());
+	}
+
+	Path testFile = g_Config.memStickDirectory / "_writable_test.$$$";
+
+	// If any directory is read-only, fall back to the Documents directory.
+	// We're screwed anyway if we can't write to Documents, or can't detect it.
+	if (!File::CreateEmptyFile(testFile))
+		g_Config.memStickDirectory = myDocsPath;
+
+	// Clean up our mess.
+	if (File::Exists(testFile))
+		File::Delete(testFile);
 }
 
 static void WinMainInit() {
@@ -731,11 +815,36 @@ static void WinMainCleanup() {
 	CoUninitialize();
 
 	if (g_Config.bRestartRequired) {
+		// TODO: ExitAndRestart prevents the Config::~Config destructor from running,
+		// which normally would have done this instance counter update.
+		// ExitAndRestart calls ExitProcess which really bad, we should do something better that
+		// allows us to fall out of main() properly.
+		if (g_Config.bUpdatedInstanceCounter) {
+			ShutdownInstanceCounter();
+		}
 		W32Util::ExitAndRestart(!restartArgs.empty(), restartArgs);
 	}
 }
 
 int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine, int iCmdShow) {
+	std::vector<std::wstring> wideArgs = GetWideCmdLine();
+
+	// Check for the Vulkan workaround before any serious init.
+	for (size_t i = 1; i < wideArgs.size(); ++i) {
+		if (wideArgs[i][0] == L'-') {
+			// This should only be called by DetectVulkanInExternalProcess().
+			if (wideArgs[i] == L"--vulkan-available-check") {
+				// Just call it, this way it will crash here if it doesn't work.
+				// (this is an external process.)
+				bool result = VulkanMayBeAvailable();
+
+				LogManager::Shutdown();
+				WinMainCleanup();
+				return result ? EXIT_CODE_VULKAN_WORKS : EXIT_FAILURE;
+			}
+		}
+	}
+
 	SetCurrentThreadName("Main");
 
 	WinMainInit();
@@ -759,7 +868,6 @@ int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLin
 	std::string controlsConfigFilename = "";
 	const std::wstring controlsOption = L"--controlconfig=";
 
-	std::vector<std::wstring> wideArgs = GetWideCmdLine();
 
 	for (size_t i = 1; i < wideArgs.size(); ++i) {
 		if (wideArgs[i][0] == L'\0')
@@ -782,23 +890,9 @@ int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLin
 	// On Win32 it makes more sense to initialize the system directories here
 	// because the next place it was called was in the EmuThread, and it's too late by then.
 	g_Config.internalDataDirectory = Path(W32Util::UserDocumentsPath());
-	InitSysDirectories();
+	InitMemstickDirectory();
+	CreateSysDirectories();
 
-	// Check for the Vulkan workaround before any serious init.
-	for (size_t i = 1; i < wideArgs.size(); ++i) {
-		if (wideArgs[i][0] == L'-') {
-			// This should only be called by DetectVulkanInExternalProcess().
-			if (wideArgs[i] == L"--vulkan-available-check") {
-				// Just call it, this way it will crash here if it doesn't work.
-				// (this is an external process.)
-				bool result = VulkanMayBeAvailable();
-
-				LogManager::Shutdown();
-				WinMainCleanup();
-				return result ? EXIT_CODE_VULKAN_WORKS : EXIT_FAILURE;
-			}
-		}
-	}
 
 	// Load config up here, because those changes below would be overwritten
 	// if it's not loaded here first.
@@ -879,7 +973,7 @@ int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLin
 	LogManager::GetInstance()->GetConsoleListener()->Init(showLog, 150, 120, "PPSSPP Debug Console");
 
 	if (debugLogLevel) {
-		LogManager::GetInstance()->SetAllLogLevels(LogTypes::LDEBUG);
+		LogManager::GetInstance()->SetAllLogLevels(LogLevel::LDEBUG);
 	}
 
 	// This still seems to improve performance noticeably.

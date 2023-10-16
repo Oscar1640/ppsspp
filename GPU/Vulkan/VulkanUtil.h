@@ -24,7 +24,7 @@
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/Vulkan/VulkanImage.h"
 #include "Common/GPU/Vulkan/VulkanLoader.h"
-#include "Common/GPU/Vulkan/VulkanMemory.h"
+#include "Common/GPU/Vulkan/VulkanDescSet.h"
 #include "Common/GPU/thin3d.h"
 
 extern const VkComponentMapping VULKAN_4444_SWIZZLE;
@@ -72,9 +72,7 @@ private:
 	VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
 
 	struct FrameData {
-		FrameData() : descPool("VulkanComputeShaderManager", true) {
-			descPool.Setup([] { });
-		}
+		FrameData() : descPool("VulkanComputeShaderManager", true) {}
 
 		VulkanDescSetPool descPool;
 		bool descPoolUsed = false;
@@ -85,7 +83,7 @@ private:
 		VkShaderModule module;
 	};
 	
-	DenseHashMap<PipelineKey, VkPipeline, (VkPipeline)VK_NULL_HANDLE> pipelines_;
+	DenseHashMap<PipelineKey, VkPipeline> pipelines_;
 };
 
 

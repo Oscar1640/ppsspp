@@ -67,6 +67,8 @@ if(CMAKE_SYSTEM_PROCESSOR)
 		set(MIPS_DEVICE ON)
 	elseif(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^riscv64")
 		set(RISCV64_DEVICE ON)
+	elseif(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^loongarch64")
+		set(LOONGARCH64_DEVICE ON)
 	else()
 		message("Unknown CMAKE_SYSTEM_PROCESSOR: ${CMAKE_SYSTEM_PROCESSOR}")
 	endif()
@@ -139,6 +141,7 @@ option(ARMV7 "Set to ON if targeting an ARMv7 processor" ${ARMV7_DEVICE})
 option(ARM "Set to ON if targeting an ARM processor" ${ARM_DEVICE})
 option(MIPS "Set to ON if targeting a MIPS processor" ${MIPS_DEVICE})
 option(RISCV64 "Set to ON if targeting a RISCV64 processor" ${RISCV64_DEVICE})
+option(LOONGARCH64 "Set to ON if targeting a LOONGARCH64 processor" ${LOONGARCH64_DEVICE})
 option(X86 "Set to ON if targeting an X86 processor" ${X86_DEVICE})
 option(X86_64 "Set to ON if targeting an X86_64 processor" ${X86_64_DEVICE})
 # :: Environments
@@ -146,7 +149,7 @@ option(USING_EGL "Set to ON if target environment uses EGL" ${USING_EGL})
 option(USING_FBDEV "Set to ON if target environment uses fbdev (eg. Pandora)" ${USING_FBDEV})
 option(USING_GLES2 "Set to ON if target device uses OpenGL ES 2.0" ${USING_GLES2})
 option(USING_X11_VULKAN "Set to OFF if target environment doesn't use X11 for Vulkan" ON)
-option(USE_WAYLAND_WSI "Enable or disable Wayland WSI support for Vulkan" ${USE_WAYLAND_WSI})
+option(USE_WAYLAND_WSI "Enable or disable Wayland WSI support for Vulkan" ON)
 option(USE_VULKAN_DISPLAY_KHR "Enable or disable full screen display of Vulkan" ${USE_VULKAN_DISPLAY_KHR})
 # :: Frontends
 option(USING_QT_UI "Set to ON if you wish to use the Qt frontend wrapper" ${USING_QT_UI})
@@ -182,14 +185,12 @@ if(UNIX AND NOT (APPLE OR ANDROID) AND VULKAN)
 	endif()
 
 	# add_definitions(-DVK_USE_PLATFORM_XCB_KHR)
-	if(USE_WAYLAND_WSI)
-		find_package(Wayland)
-		if(NOT WAYLAND_FOUND)
-			message(STATUS "Could not find Wayland libraries, disabling Wayland WSI support for Vulkan.")
-		else()
-			include_directories(${WAYLAND_INCLUDE_DIR})
-			add_definitions(-DVK_USE_PLATFORM_WAYLAND_KHR)
-		endif()
+	find_package(Wayland)
+	if(NOT WAYLAND_FOUND)
+		message(STATUS "Could not find Wayland libraries, disabling Wayland WSI support for Vulkan.")
+	elseif(USE_WAYLAND_WSI)
+		include_directories(${WAYLAND_INCLUDE_DIR})
+		add_definitions(-DVK_USE_PLATFORM_WAYLAND_KHR)
 	endif()
 
 	if(USE_VULKAN_DISPLAY_KHR)
@@ -217,6 +218,16 @@ if(ANDROID AND NOT LIBRETRO)
 else()
 	set(CoreLibName Core)
 	set(CoreLinkType STATIC)
+endif()
+
+if(NOT ANDROID AND NOT WIN32 AND (NOT APPLE OR IOS))
+	set(HTTPS_NOT_AVAILABLE ON)
+endif()
+
+# Made this flag negative because it's hopefully quite temporary and didn't
+# want to have to update all build systems.
+if(HTTPS_NOT_AVAILABLE)
+	add_definitions(-DHTTPS_NOT_AVAILABLE)
 endif()
 
 # Work around for some misfeature of the current glslang build system
@@ -248,11 +259,22 @@ endif()
 
 if(NOT LIBRETRO AND NOT IOS AND NOT MACOSX)
 	find_package(SDL2)
+	find_package(SDL2_ttf)
+	find_package(Fontconfig)
+
+	# TODO: this can be removed once CI supports newer SDL2_ttf
+	if (NOT SDL2_ttf_FOUND)
+		find_package(PkgConfig)
+		if(PkgConfig_FOUND)
+			pkg_check_modules(SDL2_ttf_PKGCONFIG IMPORTED_TARGET SDL2_ttf)
+		endif()
+	endif()
 endif()
 
 if(MACOSX AND NOT IOS)
 	if(USE_SYSTEM_LIBSDL2)
 		find_package(SDL2)
+		find_package(SDL2_ttf)
 	else()
 		find_library(SDL2Fwk SDL2 REQUIRED PATHS SDL/macOS)
 		message(STATUS "found SDL2Fwk=${SDL2Fwk}")
@@ -305,6 +327,9 @@ if(MIPS)
 endif()
 if(RISCV64)
 	message("Generating for RISCV64, ${CMAKE_BUILD_TYPE}")
+endif()
+if(LOONGARCH64)
+	message("Generating for LOONGARCH64, ${CMAKE_BUILD_TYPE}")
 endif()
 if(X86)
 	message("Generating for x86, ${CMAKE_BUILD_TYPE}")
@@ -381,6 +406,8 @@ if(NOT MSVC)
 		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -parallel -fopenmp")
 	endif()
 
+	add_definitions(-fno-math-errno)
+
 	if(X86 OR X86_64)
 		# enable sse2 code generation
 		add_definitions(-msse2)
@@ -406,8 +433,13 @@ if(NOT MSVC)
 			add_definitions(-Wno-psabi)
 		endif()
 		add_definitions(-D_XOPEN_SOURCE=700)
-		add_definitions(-D_XOPEN_SOURCE_EXTENDED -D__BSD_VISIBLE=1 -D_BSD_SOURCE)
-		add_definitions(-D_LARGEFILE64_SOURCE=1 -D_FILE_OFFSET_BITS=64)
+		add_definitions(-D_XOPEN_SOURCE_EXTENDED -D__BSD_VISIBLE=1 -D_BSD_SOURCE -D_DEFAULT_SOURCE)
+		if(CMAKE_SYSTEM_NAME MATCHES "Linux|SunOS" OR MINGW)
+			add_definitions(-D_LARGEFILE64_SOURCE=1 -D_FILE_OFFSET_BITS=64)
+		endif()
+		if(${CMAKE_SYSTEM_NAME} STREQUAL "NetBSD")
+			add_definitions(-D_NETBSD_SOURCE)
+		endif()
 	elseif(ANDROID)
 		add_definitions(-fsigned-char)
 	endif()
@@ -512,6 +544,14 @@ set(CommonRISCV64
 )
 source_group(RISCV64 FILES ${CommonRISCV64})
 
+set(CommonLOONGARCH64
+	${CommonJIT}
+	Common/LoongArchCPUDetect.cpp
+	Core/MIPS/fake/FakeJit.cpp
+	Core/MIPS/fake/FakeJit.h
+)
+source_group(LOONGARCH64 FILES ${CommonLOONGARCH64})
+
 if(WIN32)
 	set(CommonD3D
 		Common/GPU/D3D9/D3D9ShaderCompiler.cpp
@@ -550,6 +590,7 @@ add_library(Common STATIC
 	${CommonARM64}
 	${CommonMIPS}
 	${CommonRISCV64}
+	${CommonLOONGARCH64}
 	${CommonD3D}
 	${CommonVR}
 	Common/Serialize/Serializer.cpp
@@ -671,6 +712,8 @@ add_library(Common STATIC
 	Common/GPU/Vulkan/VulkanDebug.h
 	Common/GPU/Vulkan/VulkanContext.cpp
 	Common/GPU/Vulkan/VulkanContext.h
+	Common/GPU/Vulkan/VulkanDescSet.cpp
+	Common/GPU/Vulkan/VulkanDescSet.h
 	Common/GPU/Vulkan/VulkanFramebuffer.cpp
 	Common/GPU/Vulkan/VulkanFramebuffer.h
 	Common/GPU/Vulkan/VulkanImage.cpp
@@ -710,6 +753,10 @@ add_library(Common STATIC
 	Common/Net/HTTPClient.h
 	Common/Net/HTTPHeaders.cpp
 	Common/Net/HTTPHeaders.h
+	Common/Net/HTTPNaettRequest.cpp
+	Common/Net/HTTPNaettRequest.h
+	Common/Net/HTTPRequest.cpp
+	Common/Net/HTTPRequest.h
 	Common/Net/HTTPServer.cpp
 	Common/Net/HTTPServer.h
 	Common/Net/NetBuffer.cpp
@@ -734,6 +781,8 @@ add_library(Common STATIC
 	Common/Render/Text/draw_text.h
 	Common/Render/Text/draw_text_android.cpp
 	Common/Render/Text/draw_text_android.h
+	Common/Render/Text/draw_text_sdl.cpp
+	Common/Render/Text/draw_text_sdl.h
 	Common/Render/Text/draw_text_win.cpp
 	Common/Render/Text/draw_text_win.h
 	Common/Render/Text/draw_text_uwp.cpp
@@ -852,7 +901,11 @@ if(USE_FFMPEG)
 					set(PLATFORM_ARCH "android/x86")
 				endif()
 			elseif(IOS)
-				set(PLATFORM_ARCH "ios/universal")
+				if(IOS_PLATFORM STREQUAL "TVOS")
+					set(PLATFORM_ARCH "tvos/arm64")
+				else()
+					set(PLATFORM_ARCH "ios/universal")
+				endif()
 			elseif(MACOSX)
 				set(PLATFORM_ARCH "macosx/universal")
 			elseif(LINUX)
@@ -866,6 +919,8 @@ if(USE_FFMPEG)
 					set(PLATFORM_ARCH "linux/mips32")
 				elseif(RISCV64)
 					set(PLATFORM_ARCH "linux/riscv64")
+				elseif(LOONGARCH64)
+					set(PLATFORM_ARCH "linux/loongarch64")
 				elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
 					set(PLATFORM_ARCH "linux/x86_64")
 				elseif(X86)
@@ -1164,15 +1219,6 @@ set(nativeExtra)
 set(nativeExtraLibs)
 
 if(ANDROID)
-	set(nativeExtra ${nativeExtra}
-		Common/GL/GLInterface/EGLAndroid.cpp
-		Common/GL/GLInterface/EGLAndroid.h
-		Common/GL/GLInterface/EGL.cpp
-		Common/GL/GLInterface/EGL.h
-		Common/GL/GLInterface/GLInterface.cpp
-		Common/GL/GLInterfaceBase.h
-	)
-
 	set(NativeAppSource ${NativeAppSource}
 		android/jni/app-android.cpp
 		android/jni/AndroidJavaGLContext.cpp
@@ -1303,6 +1349,22 @@ else()
 			SDL/SDLVulkanGraphicsContext.cpp
 		)
 	endif()
+	if(SDL2_ttf_FOUND OR
+		(SDL2_ttf_PKGCONFIG_FOUND AND
+		 SDL2_ttf_PKGCONFIG_VERSION VERSION_GREATER_EQUAL "2.0.18"))
+		add_definitions(-DUSE_SDL2_TTF)
+		if(FONTCONFIG_FOUND)
+			add_definitions(-DUSE_SDL2_TTF_FONTCONFIG)
+			set(nativeExtraLibs ${nativeExtraLibs} Fontconfig::Fontconfig)
+		endif()
+	elseif(SDL2_ttf_PKGCONFIG_FOUND)
+		message(WARNING "Found SDL2_ttf <2.0.18 - this is too old, falling back to atlas")
+	endif()
+	if(SDL2_ttf_FOUND)
+		set(nativeExtraLibs ${nativeExtraLibs} SDL2_ttf::SDL2_ttf)
+	elseif(SDL2_ttf_PKGCONFIG_FOUND)
+		set(nativeExtraLibs ${nativeExtraLibs} PkgConfig::SDL2_ttf_PKGCONFIG)
+	endif()
 	if(APPLE)
 		set(nativeExtra ${nativeExtra} 
 		SDL/SDLMain.h 
@@ -1364,6 +1426,8 @@ list(APPEND NativeAppSource
 	UI/BackgroundAudio.cpp
 	UI/ChatScreen.h
 	UI/ChatScreen.cpp
+	UI/DebugOverlay.cpp
+	UI/DebugOverlay.h
 	UI/DevScreens.cpp
 	UI/DevScreens.h
 	UI/DisplayLayoutScreen.cpp
@@ -1455,7 +1519,7 @@ if(LINUX AND NOT ANDROID)
 endif()
 
 set(ATOMIC_LIB)
-if(ANDROID OR (LINUX AND ARM_DEVICE) OR (LINUX AND RISCV64))
+if(ANDROID OR (LINUX AND ARM_DEVICE) OR (LINUX AND RISCV64) OR (LINUX AND LOONGARCH64))
 	set(ATOMIC_LIB atomic)
 endif()
 
@@ -1512,6 +1576,8 @@ set(CoreExtra)
 set(CoreExtraLibs)
 
 set(CoreExtra ${CoreExtra}
+	Core/MIPS/IR/IRAnalysis.cpp
+	Core/MIPS/IR/IRAnalysis.h
 	Core/MIPS/IR/IRCompALU.cpp
 	Core/MIPS/IR/IRCompBranch.cpp
 	Core/MIPS/IR/IRCompFPU.cpp
@@ -1525,6 +1591,8 @@ set(CoreExtra ${CoreExtra}
 	Core/MIPS/IR/IRInterpreter.h
 	Core/MIPS/IR/IRJit.cpp
 	Core/MIPS/IR/IRJit.h
+	Core/MIPS/IR/IRNativeCommon.cpp
+	Core/MIPS/IR/IRNativeCommon.h
 	Core/MIPS/IR/IRPassSimplify.cpp
 	Core/MIPS/IR/IRPassSimplify.h
 	Core/MIPS/IR/IRRegCache.cpp
@@ -1564,6 +1632,17 @@ list(APPEND CoreExtra
 	Core/MIPS/ARM64/Arm64RegCache.h
 	Core/MIPS/ARM64/Arm64RegCacheFPU.cpp
 	Core/MIPS/ARM64/Arm64RegCacheFPU.h
+	Core/MIPS/ARM64/Arm64IRAsm.cpp
+	Core/MIPS/ARM64/Arm64IRCompALU.cpp
+	Core/MIPS/ARM64/Arm64IRCompBranch.cpp
+	Core/MIPS/ARM64/Arm64IRCompFPU.cpp
+	Core/MIPS/ARM64/Arm64IRCompLoadStore.cpp
+	Core/MIPS/ARM64/Arm64IRCompSystem.cpp
+	Core/MIPS/ARM64/Arm64IRCompVec.cpp
+	Core/MIPS/ARM64/Arm64IRJit.cpp
+	Core/MIPS/ARM64/Arm64IRJit.h
+	Core/MIPS/ARM64/Arm64IRRegCache.cpp
+	Core/MIPS/ARM64/Arm64IRRegCache.h
 	GPU/Common/VertexDecoderArm64.cpp
 	Core/Util/DisArm64.cpp
 )
@@ -1584,6 +1663,17 @@ list(APPEND CoreExtra
 	Core/MIPS/x86/RegCache.h
 	Core/MIPS/x86/RegCacheFPU.cpp
 	Core/MIPS/x86/RegCacheFPU.h
+	Core/MIPS/x86/X64IRAsm.cpp
+	Core/MIPS/x86/X64IRCompALU.cpp
+	Core/MIPS/x86/X64IRCompBranch.cpp
+	Core/MIPS/x86/X64IRCompFPU.cpp
+	Core/MIPS/x86/X64IRCompLoadStore.cpp
+	Core/MIPS/x86/X64IRCompSystem.cpp
+	Core/MIPS/x86/X64IRCompVec.cpp
+	Core/MIPS/x86/X64IRJit.cpp
+	Core/MIPS/x86/X64IRJit.h
+	Core/MIPS/x86/X64IRRegCache.cpp
+	Core/MIPS/x86/X64IRRegCache.h
 	GPU/Common/VertexDecoderX86.cpp
 	GPU/Software/DrawPixelX86.cpp
 	GPU/Software/SamplerX86.cpp
@@ -1595,6 +1685,17 @@ list(APPEND CoreExtra
 )
 
 list(APPEND CoreExtra
+	Core/MIPS/RiscV/RiscVAsm.cpp
+	Core/MIPS/RiscV/RiscVCompALU.cpp
+	Core/MIPS/RiscV/RiscVCompBranch.cpp
+	Core/MIPS/RiscV/RiscVCompFPU.cpp
+	Core/MIPS/RiscV/RiscVCompLoadStore.cpp
+	Core/MIPS/RiscV/RiscVCompSystem.cpp
+	Core/MIPS/RiscV/RiscVCompVec.cpp
+	Core/MIPS/RiscV/RiscVJit.cpp
+	Core/MIPS/RiscV/RiscVJit.h
+	Core/MIPS/RiscV/RiscVRegCache.cpp
+	Core/MIPS/RiscV/RiscVRegCache.h
 	GPU/Common/VertexDecoderRiscV.cpp
 )
 
@@ -1815,6 +1916,8 @@ add_library(${CoreLibName} ${CoreLinkType}
 	Core/CoreTiming.h
 	Core/CwCheat.cpp
 	Core/CwCheat.h
+	Core/FrameTiming.cpp
+	Core/FrameTiming.h
 	Core/HDRemaster.cpp
 	Core/HDRemaster.h
 	Core/Instance.cpp
@@ -2220,8 +2323,14 @@ else()
 	include_directories(ext/zstd/lib)
 endif()
 
-target_link_libraries(${CoreLibName} Common native kirk cityhash sfmt19937 xbrz xxhash rcheevos ${GlslangLibs}
+include_directories(ext/libchdr/include)
+
+target_link_libraries(${CoreLibName} Common native chdr kirk cityhash sfmt19937 xbrz xxhash rcheevos ${GlslangLibs}
 	${CoreExtraLibs} ${OPENGL_LIBRARIES} ${X11_LIBRARIES} ${CMAKE_DL_LIBS})
+
+if(NOT HTTPS_NOT_AVAILABLE)
+	target_link_libraries(${CoreLibName} naett)
+endif()
 
 target_compile_features(${CoreLibName} PUBLIC cxx_std_17)
 
@@ -2373,6 +2482,8 @@ set(WindowsFiles
 	Windows/Debugger/Debugger_VFPUDlg.h
 	Windows/Debugger/WatchItemWindow.cpp
 	Windows/Debugger/WatchItemWindow.h
+	Windows/Debugger/EditSymbolsWindow.cpp
+	Windows/Debugger/EditSymbolsWindow.h
 	Windows/GEDebugger/CtrlDisplayListView.cpp
 	Windows/GEDebugger/SimpleGLWindow.cpp
 	Windows/GEDebugger/TabState.cpp

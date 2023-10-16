@@ -322,15 +322,12 @@ class OpenGLTexture;
 
 class OpenGLContext : public DrawContext {
 public:
-	OpenGLContext();
+	OpenGLContext(bool canChangeSwapInterval);
 	~OpenGLContext();
 
 	void SetTargetSize(int w, int h) override {
 		DrawContext::SetTargetSize(w, h);
 		renderManager_.Resize(w, h);
-	}
-	void SetDebugFlags(DebugFlags flags) override {
-		debugFlags_ = flags;
 	}
 
 	const DeviceCaps &GetDeviceCaps() const override {
@@ -350,11 +347,6 @@ public:
 		renderManager_.SetErrorCallback(callback, userdata);
 	}
 
-	PresentationMode GetPresentationMode() const override {
-		// TODO: Fix. Not yet used.
-		return PresentationMode::FIFO;
-	}
-
 	DepthStencilState *CreateDepthStencilState(const DepthStencilStateDesc &desc) override;
 	BlendState *CreateBlendState(const BlendStateDesc &desc) override;
 	SamplerState *CreateSamplerState(const SamplerStateDesc &desc) override;
@@ -367,8 +359,9 @@ public:
 	Buffer *CreateBuffer(size_t size, uint32_t usageFlags) override;
 	Framebuffer *CreateFramebuffer(const FramebufferDesc &desc) override;
 
-	void BeginFrame() override;
+	void BeginFrame(DebugFlags debugFlags) override;
 	void EndFrame() override;
+	void Present(PresentMode mode, int vblanks) override;
 
 	int GetFrameCount() override {
 		return frameCount_;
@@ -470,6 +463,7 @@ public:
 				case GPUVendor::VENDOR_BROADCOM: return "VENDOR_BROADCOM";
 				case GPUVendor::VENDOR_VIVANTE: return "VENDOR_VIVANTE";
 				case GPUVendor::VENDOR_APPLE: return "VENDOR_APPLE";
+				case GPUVendor::VENDOR_MESA: return "VENDOR_MESA";
 				case GPUVendor::VENDOR_UNKNOWN:
 				default:
 					return "VENDOR_UNKNOWN";
@@ -490,6 +484,10 @@ public:
 
 	void SetInvalidationCallback(InvalidationCallback callback) override {
 		renderManager_.SetInvalidationCallback(callback);
+	}
+
+	std::string GetGpuProfileString() const override {
+		return renderManager_.GetGpuProfileString();
 	}
 
 private:
@@ -523,8 +521,6 @@ private:
 		GLPushBuffer *push;
 	};
 	FrameData frameData_[GLRenderManager::MAX_INFLIGHT_FRAMES]{};
-
-	DebugFlags debugFlags_ = DebugFlags::NONE;
 };
 
 static constexpr int MakeIntelSimpleVer(int v1, int v2, int v3) {
@@ -547,7 +543,7 @@ static bool HasIntelDualSrcBug(const int versions[4]) {
 	}
 }
 
-OpenGLContext::OpenGLContext() {
+OpenGLContext::OpenGLContext(bool canChangeSwapInterval) : renderManager_(frameTimeHistory_) {
 	if (gl_extensions.IsGLES) {
 		if (gl_extensions.OES_packed_depth_stencil || gl_extensions.OES_depth24) {
 			caps_.preferredDepthBufferFormat = DataFormat::D24_S8;
@@ -571,6 +567,7 @@ OpenGLContext::OpenGLContext() {
 		caps_.textureDepthSupported = true;
 	}
 
+	caps_.setMaxFrameLatencySupported = true;
 	caps_.dualSourceBlend = gl_extensions.ARB_blend_func_extended || gl_extensions.EXT_blend_func_extended;
 	caps_.anisoSupported = gl_extensions.EXT_texture_filter_anisotropic;
 	caps_.framebufferCopySupported = gl_extensions.OES_copy_image || gl_extensions.NV_copy_image || gl_extensions.EXT_copy_image || gl_extensions.ARB_copy_image;
@@ -619,6 +616,7 @@ OpenGLContext::OpenGLContext() {
 	case GPU_VENDOR_IMGTEC: caps_.vendor = GPUVendor::VENDOR_IMGTEC; break;
 	case GPU_VENDOR_VIVANTE: caps_.vendor = GPUVendor::VENDOR_VIVANTE; break;
 	case GPU_VENDOR_APPLE: caps_.vendor = GPUVendor::VENDOR_APPLE; break;
+	case GPU_VENDOR_MESA: caps_.vendor = GPUVendor::VENDOR_MESA; break;
 	case GPU_VENDOR_UNKNOWN:
 	default:
 		caps_.vendor = GPUVendor::VENDOR_UNKNOWN;
@@ -777,6 +775,16 @@ OpenGLContext::OpenGLContext() {
 		}
 	}
 
+	if (canChangeSwapInterval) {
+		caps_.presentInstantModeChange = true;
+		caps_.presentMaxInterval = 4;
+		caps_.presentModesSupported = PresentMode::FIFO | PresentMode::IMMEDIATE;
+	} else {
+		caps_.presentInstantModeChange = false;
+		caps_.presentModesSupported = PresentMode::FIFO;
+		caps_.presentMaxInterval = 1;
+	}
+
 	renderManager_.SetDeviceCaps(caps_);
 }
 
@@ -788,8 +796,8 @@ OpenGLContext::~OpenGLContext() {
 	}
 }
 
-void OpenGLContext::BeginFrame() {
-	renderManager_.BeginFrame(debugFlags_ & DebugFlags::PROFILE_TIMESTAMPS);
+void OpenGLContext::BeginFrame(DebugFlags debugFlags) {
+	renderManager_.BeginFrame(debugFlags & DebugFlags::PROFILE_TIMESTAMPS);
 	FrameData &frameData = frameData_[renderManager_.GetCurFrame()];
 	renderManager_.BeginPushBuffer(frameData.push);
 }
@@ -798,8 +806,11 @@ void OpenGLContext::EndFrame() {
 	FrameData &frameData = frameData_[renderManager_.GetCurFrame()];
 	renderManager_.EndPushBuffer(frameData.push);  // upload the data!
 	renderManager_.Finish();
-
 	Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
+}
+
+void OpenGLContext::Present(PresentMode presentMode, int vblanks) {
+	renderManager_.Present();
 	frameCount_++;
 }
 
@@ -923,7 +934,7 @@ void OpenGLTexture::UpdateTextureLevels(GLRenderManager *render, const uint8_t *
 OpenGLTexture::~OpenGLTexture() {
 	if (tex_) {
 		render_->DeleteTexture(tex_);
-		tex_ = 0;
+		tex_ = nullptr;
 		generatedMips_ = false;
 	}
 }
@@ -1410,8 +1421,8 @@ void OpenGLContext::Clear(int mask, uint32_t colorval, float depthVal, int stenc
 	renderManager_.Clear(colorval, depthVal, stencilVal, glMask, 0xF, 0, 0, targetWidth_, targetHeight_);
 }
 
-DrawContext *T3DCreateGLContext() {
-	return new OpenGLContext();
+DrawContext *T3DCreateGLContext(bool canChangeSwapInterval) {
+	return new OpenGLContext(canChangeSwapInterval);
 }
 
 OpenGLInputLayout::~OpenGLInputLayout() {

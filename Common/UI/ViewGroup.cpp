@@ -824,55 +824,57 @@ void AnchorLayout::MeasureViews(const UIContext &dc, MeasureSpec horiz, MeasureS
 	}
 }
 
+static void ApplyAnchorLayoutParams(float measuredWidth, float measuredHeight, const Bounds &container, const AnchorLayoutParams *params, Bounds *vBounds) {
+	vBounds->w = measuredWidth;
+	vBounds->h = measuredHeight;
+
+	// Clamp width/height to our own
+	if (vBounds->w > container.w) vBounds->w = container.w;
+	if (vBounds->h > container.h) vBounds->h = container.h;
+
+	float left = 0, top = 0, right = 0, bottom = 0;
+	bool center = false;
+	if (params) {
+		left = params->left;
+		top = params->top;
+		right = params->right;
+		bottom = params->bottom;
+		center = params->center;
+	}
+
+	if (left > NONE) {
+		vBounds->x = container.x + left;
+		if (center)
+			vBounds->x -= vBounds->w * 0.5f;
+	} else if (right > NONE) {
+		vBounds->x = container.x2() - right - vBounds->w;
+		if (center) {
+			vBounds->x += vBounds->w * 0.5f;
+		}
+	} else {
+		// Both left and right are NONE. Center.
+		vBounds->x = (container.w - vBounds->w) / 2.0f + container.x;
+	}
+
+	if (top > NONE) {
+		vBounds->y = container.y + top;
+		if (center)
+			vBounds->y -= vBounds->h * 0.5f;
+	} else if (bottom > NONE) {
+		vBounds->y = container.y2() - bottom - vBounds->h;
+		if (center)
+			vBounds->y += vBounds->h * 0.5f;
+	} else {
+		// Both top and bottom are NONE. Center.
+		vBounds->y = (container.h - vBounds->h) / 2.0f + container.y;
+	}
+}
+
 void AnchorLayout::Layout() {
 	for (size_t i = 0; i < views_.size(); i++) {
 		const AnchorLayoutParams *params = views_[i]->GetLayoutParams()->As<AnchorLayoutParams>();
-
 		Bounds vBounds;
-		vBounds.w = views_[i]->GetMeasuredWidth();
-		vBounds.h = views_[i]->GetMeasuredHeight();
-
-		// Clamp width/height to our own
-		if (vBounds.w > bounds_.w) vBounds.w = bounds_.w;
-		if (vBounds.h > bounds_.h) vBounds.h = bounds_.h;
-
-		float left = 0, top = 0, right = 0, bottom = 0;
-		bool center = false;
-		if (params) {
-			left = params->left;
-			top = params->top;
-			right = params->right;
-			bottom = params->bottom;
-			center = params->center;
-		}
-
-		if (left > NONE) {
-			vBounds.x = bounds_.x + left;
-			if (center)
-				vBounds.x -= vBounds.w * 0.5f;
-		} else if (right > NONE) {
-			vBounds.x = bounds_.x2() - right - vBounds.w;
-			if (center) {
-				vBounds.x += vBounds.w * 0.5f;
-			}
-		} else {
-			// Both left and right are NONE. Center.
-			vBounds.x = (bounds_.w - vBounds.w) / 2.0f + bounds_.x;
-		}
-
-		if (top > NONE) {
-			vBounds.y = bounds_.y + top;
-			if (center)
-				vBounds.y -= vBounds.h * 0.5f;
-		} else if (bottom > NONE) {
-			vBounds.y = bounds_.y2() - bottom - vBounds.h;
-			if (center)
-				vBounds.y += vBounds.h * 0.5f;
-		} else {
-			// Both top and bottom are NONE. Center.
-			vBounds.y = (bounds_.h - vBounds.h) / 2.0f + bounds_.y;
-		}
-
+		ApplyAnchorLayoutParams(views_[i]->GetMeasuredWidth(), views_[i]->GetMeasuredHeight(), bounds_, params, &vBounds);
 		views_[i]->SetBounds(vBounds);
 		views_[i]->Layout();
 	}
@@ -1178,6 +1180,26 @@ StickyChoice *ChoiceStrip::Choice(int index) {
 	if ((size_t)index < views_.size())
 		return static_cast<StickyChoice *>(views_[index]);
 	return nullptr;
+}
+
+CollapsibleSection::CollapsibleSection(const std::string &title, LayoutParams *layoutParams) : LinearLayout(ORIENT_VERTICAL, layoutParams) {
+	SetSpacing(0.0f);
+
+	heading_ = new CollapsibleHeader(&open_, title);
+	views_.push_back(heading_);
+	heading_->OnClick.Add([=](UI::EventParams &) {
+		// Change the visibility of all children except the first one.
+		// Later maybe try something more ambitious.
+		for (size_t i = 1; i < views_.size(); i++) {
+			views_[i]->SetVisibility(open_ ? V_VISIBLE : V_GONE);
+		}
+		return UI::EVENT_DONE;
+	});
+}
+
+void CollapsibleSection::Update() {
+	ViewGroup::Update();
+	heading_->SetHasSubitems(views_.size() > 1);
 }
 
 }  // namespace UI

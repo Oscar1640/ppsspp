@@ -30,20 +30,9 @@
 extern const char *PPSSPP_GIT_VERSION;
 const int MAX_CONFIG_VOLUME = 8;
 
-enum ChatPositions {
-	BOTTOM_LEFT = 0,
-	BOTTOM_CENTER = 1,
-	BOTOM_RIGHT = 2,
-	TOP_LEFT = 3,
-	TOP_CENTER = 4,
-	TOP_RIGHT = 5,
-	CENTER_LEFT = 6,
-	CENTER_RIGHT = 7,
-};
-
 namespace http {
-	class Download;
-	class Downloader;
+	class Request;
+	class RequestManager;
 }
 
 struct UrlEncoder;
@@ -108,7 +97,8 @@ public:
 	bool bPreloadFunctions;
 	uint32_t uJitDisableFlags;
 
-	bool bVulkanMultithreading;
+	bool bDisableHTTPS;
+
 	bool bSeparateSASThread;
 	int iIOTimingMethod;
 	int iIOManualDelay;
@@ -192,7 +182,6 @@ public:
 	float fUITint;
 	float fUISaturation;
 
-	bool bVertexCache;
 	bool bTextureBackoffCache;
 	bool bVertexDecoderJit;
 	bool bFullScreen;
@@ -232,6 +221,8 @@ public:
 	int iSplineBezierQuality; // 0 = low , 1 = Intermediate , 2 = High
 	bool bHardwareTessellation;
 	bool bShaderCache;  // Hidden ini-only setting, useful for debugging shader compile times.
+	bool bUberShaderVertex;
+	bool bUberShaderFragment;
 
 	std::vector<std::string> vPostShaderNames; // Off for chain end (only Off for no shader)
 	std::map<std::string, float> mPostShaderSetting;
@@ -246,6 +237,7 @@ public:
 	bool bGfxDebugOutput;
 	int iInflightFrames;
 	bool bRenderDuplicateFrames;
+	bool bRenderMultiThreading;
 
 	// Sound
 	bool bEnableSound;
@@ -271,10 +263,6 @@ public:
 
 	// These aren't saved, just for instant debugging.
 	bool bLogFrameDrops;
-	bool bShowDebugStats;
-	bool bShowAudioDebug;
-	bool bShowControlDebug;
-	bool bShowGpuProfile;
 
 	// Analog stick tilting
 	// This is the held base angle (from the horizon), that we compute the tilt relative from.
@@ -316,6 +304,8 @@ public:
 	float fSwipeSensitivity;
 	float fSwipeSmoothing;
 	int iDoubleTapGesture;
+	bool bAnalogGesture;
+	float fAnalogGestureSensibility;
 
 	// Disable diagonals
 	bool bDisableDpadDiagonals;
@@ -331,6 +321,9 @@ public:
 
 	// Floating analog stick (recenters on thumb on press).
 	bool bAutoCenterTouchAnalog;
+
+	// Sticky D-pad (can't glide off it)
+	bool bStickyTouchDPad;
 
 	//space between PSP buttons
 	//the PSP button's center (triangle, circle, square, cross)
@@ -396,6 +389,7 @@ public:
 	float fMouseSmoothing;
 
 	bool bSystemControls;
+	int iRapidFireInterval;
 
 	// Use the hardware scaler to scale up the image to save fillrate. Similar to Windows' window size, really.
 	int iAndroidHwScale;  // 0 = device resolution. 1 = 480x272 (extended to correct aspect), 2 = 960x544 etc.
@@ -488,16 +482,18 @@ public:
 	bool bDisplayStatusBar;
 	bool bShowBottomTabTitles;
 	bool bShowDeveloperMenu;
-	bool bShowAllocatorDebug;
+
 	// Double edged sword: much easier debugging, but not accurate.
 	bool bSkipDeadbeefFilling;
+
 	bool bFuncHashMap;
 	std::string sSkipFuncHashMap;
 	bool bDebugMemInfoDetailed;
-	bool bDrawFrameGraph;
 
 	// Volatile development settings
-	bool bShowFrameProfiler;
+	// Overlays
+	int iDebugOverlay;
+
 	bool bSimpleFrameStats;
 	bool bGpuLogProfiler; // Controls the Vulkan logging profiler (profiles textures uploads etc).
 
@@ -509,6 +505,18 @@ public:
 	bool bAchievementsUnofficial;
 	bool bAchievementsSoundEffects;
 	bool bAchievementsLogBadMemReads;
+
+	// Positioning of the various notifications
+	int iAchievementsLeaderboardTrackerPos;
+	int iAchievementsLeaderboardStartedOrFailedPos;
+	int iAchievementsLeaderboardSubmittedPos;
+	int iAchievementsProgressPos;
+	int iAchievementsChallengePos;
+	int iAchievementsUnlockedPos;
+
+	// Customizations
+	std::string sAchievementsUnlockAudioFile;
+	std::string sAchievementsLeaderboardSubmitAudioFile;
 
 	// Achivements login info. Note that password is NOT stored, only a login token.
 	// Still, we may wanna store it more securely than in PPSSPP.ini, especially on Android.
@@ -554,7 +562,7 @@ public:
 	void RemoveRecent(const std::string &file);
 	void CleanRecent();
 
-	static void DownloadCompletedCallback(http::Download &download);
+	static void DownloadCompletedCallback(http::Request &download);
 	void DismissUpgrade();
 
 	void ResetControlLayout();
@@ -580,6 +588,10 @@ public:
 	void SetAppendedConfigIni(const Path &path);
 	void UpdateAfterSettingAutoFrameSkip();
 	void NotifyUpdatedCpuCore();
+
+	// Applies the Auto setting if set. Returns an enum value from PSP_SYSTEMPARAM_LANGUAGE_*.
+	int GetPSPLanguage();
+
 protected:
 	void LoadStandardControllerIni();
 	void LoadLangValuesMapping();
@@ -606,6 +618,6 @@ private:
 std::string CreateRandMAC();
 
 // TODO: Find a better place for this.
-extern http::Downloader g_DownloadManager;
+extern http::RequestManager g_DownloadManager;
 extern Config g_Config;
 

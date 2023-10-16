@@ -67,8 +67,6 @@ enum {
 	DEC_U16_4,
 };
 
-int DecFmtSize(u8 fmt);
-
 struct DecVtxFormat {
 	u8 w0fmt; u8 w0off;  // first 4 weights
 	u8 w1fmt; u8 w1off;  // second 4 weights
@@ -76,12 +74,14 @@ struct DecVtxFormat {
 	u8 c0fmt; u8 c0off;  // First color
 	u8 c1fmt; u8 c1off;
 	u8 nrmfmt; u8 nrmoff;
-	u8 posfmt; u8 posoff;
+	u8 posoff;  // Output position format is always DEC_FLOAT_3.
 	u8 stride;
 
 	uint32_t id;
 	void ComputeID();
 	void InitializeFromID(uint32_t id);
+
+	static u8 PosFmt() { return DEC_FLOAT_3; }
 };
 
 void GetIndexBounds(const void *inds, int count, u32 vertType, u16 *indexLowerBound, u16 *indexUpperBound);
@@ -436,6 +436,7 @@ public:
 	// Mutable decoder state
 	mutable u8 *decoded_ = nullptr;
 	mutable const u8 *ptr_ = nullptr;
+	mutable const UVScale *prescaleUV_ = nullptr;
 	JittedVertexDecoder jitted_ = 0;
 	int32_t jittedSize_ = 0;
 
@@ -472,6 +473,9 @@ public:
 	u8 biggest;  // in practice, alignment.
 
 	friend class VertexDecoderJitCache;
+
+private:
+	void CompareToJit(const u8 *startPtr, u8 *decodedptr, int count, const UVScale *uvScaleOffset) const;
 };
 
 

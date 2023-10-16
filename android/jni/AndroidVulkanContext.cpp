@@ -13,25 +13,32 @@
 #include "Core/ConfigValues.h"
 #include "Core/System.h"
 
+
+#ifdef _DEBUG
+static const bool g_Validate = true;
+#else
+static const bool g_Validate = false;
+#endif
+
+// TODO: Share this between backends.
+static uint32_t FlagsFromConfig() {
+	uint32_t flags;
+	if (g_Config.bVSync) {
+		flags = VULKAN_FLAG_PRESENT_FIFO;
+	} else {
+		flags = VULKAN_FLAG_PRESENT_MAILBOX | VULKAN_FLAG_PRESENT_IMMEDIATE;
+	}
+	if (g_Validate) {
+		flags |= VULKAN_FLAG_VALIDATE;
+	}
+	return flags;
+}
+
 AndroidVulkanContext::AndroidVulkanContext() {}
 
 AndroidVulkanContext::~AndroidVulkanContext() {
 	delete g_Vulkan;
 	g_Vulkan = nullptr;
-}
-
-static uint32_t FlagsFromConfig() {
-	uint32_t flags;
-
-	if (g_Config.bVSync) {
-		flags = VULKAN_FLAG_PRESENT_FIFO;
-	} else {
-		flags = VULKAN_FLAG_PRESENT_MAILBOX | VULKAN_FLAG_PRESENT_FIFO_RELAXED;
-	}
-#ifdef _DEBUG
-	flags |= VULKAN_FLAG_VALIDATE;
-#endif
-	return flags;
 }
 
 bool AndroidVulkanContext::InitAPI() {
@@ -82,7 +89,7 @@ bool AndroidVulkanContext::InitAPI() {
 
 	g_Vulkan->ChooseDevice(physicalDevice);
 
-	INFO_LOG(G3D, "Creating Vulkan device");
+	INFO_LOG(G3D, "Creating Vulkan device (flags: %08x)", info.flags);
 	if (g_Vulkan->CreateDevice() != VK_SUCCESS) {
 		INFO_LOG(G3D, "Failed to create vulkan device: %s", g_Vulkan->InitError().c_str());
 		System_Toast("No Vulkan driver found. Using OpenGL instead.");
@@ -113,7 +120,11 @@ bool AndroidVulkanContext::InitFromRenderThread(ANativeWindow *wnd, int desiredB
 
 	bool success = true;
 	if (g_Vulkan->InitSwapchain()) {
-		draw_ = Draw::T3DCreateVulkanContext(g_Vulkan);
+		bool useMultiThreading = g_Config.bRenderMultiThreading;
+		if (g_Config.iInflightFrames == 1) {
+			useMultiThreading = false;
+		}
+		draw_ = Draw::T3DCreateVulkanContext(g_Vulkan, useMultiThreading);
 		SetGPUBackend(GPUBackend::VULKAN);
 		success = draw_->CreatePresets();  // Doesn't fail, we ship the compiler.
 		_assert_msg_(success, "Failed to compile preset shaders");
@@ -157,9 +168,6 @@ void AndroidVulkanContext::Shutdown() {
 	INFO_LOG(G3D, "AndroidVulkanContext::Shutdown completed");
 }
 
-void AndroidVulkanContext::SwapBuffers() {
-}
-
 void AndroidVulkanContext::Resize() {
 	INFO_LOG(G3D, "AndroidVulkanContext::Resize begin (oldsize: %dx%d)", g_Vulkan->GetBackbufferWidth(), g_Vulkan->GetBackbufferHeight());
 
@@ -173,7 +181,4 @@ void AndroidVulkanContext::Resize() {
 	g_Vulkan->InitSwapchain();
 	draw_->HandleEvent(Draw::Event::GOT_BACKBUFFER, g_Vulkan->GetBackbufferWidth(), g_Vulkan->GetBackbufferHeight());
 	INFO_LOG(G3D, "AndroidVulkanContext::Resize end (final size: %dx%d)", g_Vulkan->GetBackbufferWidth(), g_Vulkan->GetBackbufferHeight());
-}
-
-void AndroidVulkanContext::SwapInterval(int interval) {
 }

@@ -22,6 +22,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Data/Collections/Hashmaps.h"
 
+#include "GPU/Math3D.h"
 #include "GPU/GPUState.h"
 #include "GPU/Common/GPUStateUtils.h"
 #include "GPU/Common/GPUDebugInterface.h"
@@ -68,6 +69,13 @@ public:
 	virtual void SendDataToShader(const SimpleVertex *const *points, int size_u, int size_v, u32 vertType, const Spline::Weight2D &weights) = 0;
 };
 
+// Culling plane.
+struct Plane {
+	float x, y, z, w;
+	void Set(float _x, float _y, float _z, float _w) { x = _x; y = _y; z = _z; w = _w; }
+	float Test(const float f[3]) const { return x * f[0] + y * f[1] + z * f[2] + w; }
+};
+
 class DrawEngineCommon {
 public:
 	DrawEngineCommon();
@@ -88,15 +96,23 @@ public:
 	// This would seem to be unnecessary now, but is still required for splines/beziers to work in the software backend since SubmitPrim
 	// is different. Should probably refactor that.
 	// Note that vertTypeID should be computed using GetVertTypeID().
-	virtual void DispatchSubmitPrim(const void *verts, const void *inds, GEPrimitiveType prim, int vertexCount, u32 vertTypeID, int cullMode, int *bytesRead) {
-		SubmitPrim(verts, inds, prim, vertexCount, vertTypeID, cullMode, bytesRead);
+	virtual void DispatchSubmitPrim(const void *verts, const void *inds, GEPrimitiveType prim, int vertexCount, u32 vertTypeID, bool clockwise, int *bytesRead) {
+		SubmitPrim(verts, inds, prim, vertexCount, vertTypeID, clockwise, bytesRead);
 	}
 
 	virtual void DispatchSubmitImm(GEPrimitiveType prim, TransformedVertex *buffer, int vertexCount, int cullMode, bool continuation);
 
 	bool TestBoundingBox(const void *control_points, const void *inds, int vertexCount, u32 vertType);
 
-	void SubmitPrim(const void *verts, const void *inds, GEPrimitiveType prim, int vertexCount, u32 vertTypeID, int cullMode, int *bytesRead);
+	void FlushSkin() {
+		bool applySkin = (lastVType_ & GE_VTYPE_WEIGHT_MASK) && decOptions_.applySkinInDecode;
+		if (applySkin) {
+			DecodeVerts(decoded_);
+		}
+	}
+
+	int ExtendNonIndexedPrim(const uint32_t *cmd, const uint32_t *stall, u32 vertTypeID, bool clockwise, int *bytesRead, bool isTriangle);
+	bool SubmitPrim(const void *verts, const void *inds, GEPrimitiveType prim, int vertexCount, u32 vertTypeID, bool clockwise, int *bytesRead);
 	template<class Surface>
 	void SubmitCurve(const void *control_points, const void *indices, Surface &surface, u32 vertType, int *bytesRead, const char *scope);
 	void ClearSplineBezierWeights();
@@ -122,7 +138,7 @@ public:
 		return false;
 	}
 	int GetNumDrawCalls() const {
-		return numDrawCalls_;
+		return numDrawVerts_;
 	}
 
 	VertexDecoder *GetVertexDecoder(u32 vtype);
@@ -131,19 +147,19 @@ public:
 
 protected:
 	virtual bool UpdateUseHWTessellation(bool enabled) const { return enabled; }
+	void UpdatePlanes();
 
-	int ComputeNumVertsToDecode() const;
 	void DecodeVerts(u8 *dest);
+	void DecodeInds();
+
+	int MaxIndex() const {
+		return decodedVerts_;
+	}
 
 	// Preprocessing for spline/bezier
 	u32 NormalizeVertices(u8 *outPtr, u8 *bufPtr, const u8 *inPtr, int lowerBound, int upperBound, u32 vertType, int *vertexSize = nullptr);
 
-	// Utility for vertex caching
-	u32 ComputeMiniHash();
-	uint64_t ComputeHash();
-
-	// Vertex decoding
-	void DecodeVertsStep(u8 *dest, int &i, int &decodedVerts, const UVScale *uvScale);
+	int ComputeNumVertsToDecode() const;
 
 	void ApplyFramebufferRead(FBOTexState *fboTexState);
 
@@ -175,6 +191,28 @@ protected:
 		}
 	}
 
+	inline void ResetAfterDrawInline() {
+		gpuStats.numFlushes++;
+		gpuStats.numDrawCalls += numDrawInds_;
+		gpuStats.numVertexDecodes += numDrawVerts_;
+		gpuStats.numVertsSubmitted += vertexCountInDrawCalls_;
+
+		indexGen.Reset();
+		decodedVerts_ = 0;
+		numDrawVerts_ = 0;
+		numDrawInds_ = 0;
+		vertexCountInDrawCalls_ = 0;
+		decodeIndsCounter_ = 0;
+		decodeVertsCounter_ = 0;
+		gstate_c.vertexFullAlpha = true;
+
+		// Now seems as good a time as any to reset the min/max coords, which we may examine later.
+		gstate_c.vertBounds.minU = 512;
+		gstate_c.vertBounds.minV = 512;
+		gstate_c.vertBounds.maxU = 0;
+		gstate_c.vertBounds.maxV = 0;
+	}
+
 	uint32_t ComputeDrawcallsHash() const;
 
 	bool useHWTransform_ = false;
@@ -192,7 +230,7 @@ protected:
 
 	// Cached vertex decoders
 	u32 lastVType_ = -1;  // corresponds to dec_.  Could really just pick it out of dec_...
-	DenseHashMap<u32, VertexDecoder *, nullptr> decoderMap_;
+	DenseHashMap<u32, VertexDecoder *> decoderMap_;
 	VertexDecoder *dec_ = nullptr;
 	VertexDecoderJitCache *decJitCache_ = nullptr;
 	VertexDecoderOptions decOptions_{};
@@ -201,25 +239,36 @@ protected:
 	TransformedVertex *transformedExpanded_ = nullptr;
 
 	// Defer all vertex decoding to a "Flush" (except when software skinning)
-	struct DeferredDrawCall {
+	struct DeferredVerts {
 		const void *verts;
-		const void *inds;
 		u32 vertexCount;
-		u8 indexType;
-		s8 prim;
-		u8 cullMode;
 		u16 indexLowerBound;
 		u16 indexUpperBound;
 		UVScale uvScale;
 	};
 
-	enum { MAX_DEFERRED_DRAW_CALLS = 128 };
-	DeferredDrawCall drawCalls_[MAX_DEFERRED_DRAW_CALLS];
-	int numDrawCalls_ = 0;
+	struct DeferredInds {
+		const void *inds;
+		u32 vertexCount;
+		u8 vertDecodeIndex;  // index into the drawVerts_ array to look up the vertexOffset.
+		u8 indexType;
+		s8 prim;
+		bool clockwise;
+		u16 offset;
+	};
+
+	enum { MAX_DEFERRED_DRAW_VERTS = 128 };  // If you change this to more than 256, change type of DeferredInds::vertDecodeIndex.
+	enum { MAX_DEFERRED_DRAW_INDS = 512 };  // Monster Hunter spams indexed calls that we end up merging.
+	DeferredVerts drawVerts_[MAX_DEFERRED_DRAW_VERTS];
+	uint32_t drawVertexOffsets_[MAX_DEFERRED_DRAW_VERTS];
+	DeferredInds drawInds_[MAX_DEFERRED_DRAW_INDS];
+
+	int numDrawVerts_ = 0;
+	int numDrawInds_ = 0;
 	int vertexCountInDrawCalls_ = 0;
 
-	int decimationCounter_ = 0;
-	int decodeCounter_ = 0;
+	int decodeVertsCounter_ = 0;
+	int decodeIndsCounter_ = 0;
 
 	// Vertex collector state
 	IndexGenerator indexGen;
@@ -236,4 +285,9 @@ protected:
 
 	// Hardware tessellation
 	TessellationDataTransfer *tessDataTransfer;
+
+	// Culling
+	Plane planes_[6];
+	Vec2f minOffset_;
+	Vec2f maxOffset_;
 };

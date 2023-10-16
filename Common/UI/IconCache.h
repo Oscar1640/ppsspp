@@ -36,7 +36,7 @@ public:
 
 	// It's okay to call these from any thread.
 	bool MarkPending(const std::string &key);  // returns false if already pending or loaded
-	void Cancel(const std::string &key);
+	void CancelPending(const std::string &key);
 	bool InsertIcon(const std::string &key, IconFormat format, std::string &&pngData);
 	bool GetDimensions(const std::string &key, int *width, int *height);
 	bool Contains(const std::string &key);
@@ -50,16 +50,6 @@ public:
 	void ClearData();
 
 	IconCacheStats GetStats();
-
-	// for testing
-	std::string GetFirstIconName() const {
-		if (!cache_.empty()) {
-			return cache_.begin()->first;
-		} else if (!pending_.empty()) {
-			return *pending_.begin();
-		}
-		return "";
-	}
 
 private:
 	void Decimate(int64_t maxSize);

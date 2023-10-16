@@ -20,6 +20,8 @@ LOCAL_C_INCLUDES := \
   $(LOCAL_PATH)/../../ext/armips \
   $(LOCAL_PATH)/../../ext/armips/ext/filesystem/include \
   $(LOCAL_PATH)/../../ext/armips/ext/tinyformat \
+  $(LOCAL_PATH)/../../ext/libchdr/deps/lzma-22.01/include \
+  $(LOCAL_PATH)/../../ext/libchdr/include \
   $(LOCAL_PATH)
 
 LOCAL_STATIC_LIBRARIES := libzip glslang-build miniupnp-build
@@ -52,16 +54,6 @@ ifeq ($(TARGET_ARCH_ABI),armeabi)
   LOCAL_C_INCLUDES += $(LOCAL_PATH)/../../ffmpeg/android/armv6/include
 
   LOCAL_CFLAGS := $(LOCAL_CFLAGS) -D_ARCH_32 -march=armv6
-endif
-ifeq ($(TARGET_ARCH_ABI),x86)
-  LOCAL_LDLIBS += $(LOCAL_PATH)/../../ffmpeg/android/x86/lib/libavformat.a
-  LOCAL_LDLIBS += $(LOCAL_PATH)/../../ffmpeg/android/x86/lib/libavcodec.a
-  LOCAL_LDLIBS += $(LOCAL_PATH)/../../ffmpeg/android/x86/lib/libswresample.a
-  LOCAL_LDLIBS += $(LOCAL_PATH)/../../ffmpeg/android/x86/lib/libswscale.a
-  LOCAL_LDLIBS += $(LOCAL_PATH)/../../ffmpeg/android/x86/lib/libavutil.a
-  LOCAL_C_INCLUDES += $(LOCAL_PATH)/../../ffmpeg/android/x86/include
-
-  LOCAL_CFLAGS := $(LOCAL_CFLAGS) -D_ARCH_32 -D_M_IX86 -fomit-frame-pointer -mtune=atom -mfpmath=sse -mssse3 -mstackrealign
 endif
 
 ifeq ($(TARGET_ARCH_ABI),x86_64)

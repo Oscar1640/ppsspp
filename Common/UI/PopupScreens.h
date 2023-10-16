@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Common/System/Request.h"
+
 #include "Common/Data/Text/I18n.h"
 #include "Common/UI/UIScreen.h"
 #include "Common/UI/UI.h"
@@ -53,6 +55,9 @@ class MessagePopupScreen : public PopupScreen {
 public:
 	MessagePopupScreen(std::string title, std::string message, std::string button1, std::string button2, std::function<void(bool)> callback)
 		: PopupScreen(title, button1, button2), message_(message), callback_(callback) {}
+
+	const char *tag() const override { return "MessagePopupScreen"; }
+
 	UI::Event OnChoice;
 
 protected:
@@ -192,7 +197,7 @@ public:
 	void GetContentDimensionsBySpec(const UIContext &dc, MeasureSpec horiz, MeasureSpec vert, float &w, float &h) const override;
 
 	void SetPasswordDisplay() {
-		password_ = true;
+		passwordDisplay_ = true;
 	}
 
 protected:
@@ -200,7 +205,7 @@ protected:
 
 	float CalculateValueScale(const UIContext &dc, const std::string &valueText, float availWidth) const;
 
-	bool password_ = false;
+	bool passwordDisplay_ = false;
 };
 
 // Reads and writes value to determine the current selection.
@@ -405,6 +410,22 @@ private:
 	int *iValue_ = nullptr;
 	I18NCat category_ = I18NCat::CATEGORY_COUNT;
 	std::string(*translateCallback_)(const char *value) = nullptr;
+};
+
+enum class FileChooserFileType {
+	WAVE_FILE,
+};
+
+class FileChooserChoice : public AbstractChoiceWithValueDisplay {
+public:
+	FileChooserChoice(std::string *value, const std::string &title, BrowseFileType fileType, LayoutParams *layoutParams = nullptr);
+	std::string ValueText() const override;
+
+	Event OnChange;
+
+private:
+	std::string *value_;
+	BrowseFileType fileType_;
 };
 
 }  // namespace UI

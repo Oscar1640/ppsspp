@@ -38,9 +38,6 @@ public:
 
 protected:
 	void CallbackRestoreDefaults(bool yes);
-	void CallbackRenderingBackend(bool yes);
-	void CallbackRenderingDevice(bool yes);
-	void CallbackInflightFrames(bool yes);
 	void CallbackMemstickFolder(bool yes);
 	void dialogFinished(const Screen *dialog, DialogResult result) override;
 
@@ -80,16 +77,12 @@ private:
 	UI::EventReturn OnControlMapping(UI::EventParams &e);
 	UI::EventReturn OnCalibrateAnalogs(UI::EventParams &e);
 	UI::EventReturn OnTouchControlLayout(UI::EventParams &e);
-	UI::EventReturn OnTiltTypeChange(UI::EventParams &e);
 	UI::EventReturn OnTiltCustomize(UI::EventParams &e);
 
 	// Global settings handlers
 	UI::EventReturn OnAutoFrameskip(UI::EventParams &e);
 	UI::EventReturn OnTextureShader(UI::EventParams &e);
 	UI::EventReturn OnTextureShaderChange(UI::EventParams &e);
-	UI::EventReturn OnDeveloperTools(UI::EventParams &e);
-	UI::EventReturn OnOtherSettings(UI::EventParams &e);
-	UI::EventReturn OnRemoteISO(UI::EventParams &e);
 	UI::EventReturn OnChangeQuickChat0(UI::EventParams &e);
 	UI::EventReturn OnChangeQuickChat1(UI::EventParams &e);
 	UI::EventReturn OnChangeQuickChat2(UI::EventParams &e);
@@ -97,14 +90,11 @@ private:
 	UI::EventReturn OnChangeQuickChat4(UI::EventParams &e);
 	UI::EventReturn OnChangeNickname(UI::EventParams &e);
 	UI::EventReturn OnChangeproAdhocServerAddress(UI::EventParams &e);
-	UI::EventReturn OnChangeMacAddress(UI::EventParams &e);
 	UI::EventReturn OnChangeBackground(UI::EventParams &e);
 	UI::EventReturn OnFullscreenChange(UI::EventParams &e);
 	UI::EventReturn OnFullscreenMultiChange(UI::EventParams &e);
 	UI::EventReturn OnResolutionChange(UI::EventParams &e);
-	UI::EventReturn OnHwScaleChange(UI::EventParams &e);
 	UI::EventReturn OnRestoreDefaultSettings(UI::EventParams &e);
-	UI::EventReturn OnRenderingMode(UI::EventParams &e);
 	UI::EventReturn OnRenderingBackend(UI::EventParams &e);
 	UI::EventReturn OnRenderingDevice(UI::EventParams &e);
 	UI::EventReturn OnInflightFramesChoice(UI::EventParams &e);
@@ -122,9 +112,6 @@ private:
 	UI::EventReturn OnSustainedPerformanceModeChange(UI::EventParams &e);
 
 	UI::EventReturn OnAdhocGuides(UI::EventParams &e);
-
-	UI::EventReturn OnSavedataManager(UI::EventParams &e);
-	UI::EventReturn OnSysInfo(UI::EventParams &e);
 
 	// Temporaries to convert setting types, cache enabled, etc.
 	int iAlternateSpeedPercent1_ = 0;
@@ -175,21 +162,6 @@ private:
 		MAYBE,
 	};
 	HasIni hasTexturesIni_ = HasIni::MAYBE;
-};
-
-class OtherSettingsScreen : public UIDialogScreenWithGameBackground {
-public:
-	OtherSettingsScreen(const Path& gamePath) : UIDialogScreenWithGameBackground(gamePath) {}
-	void onFinish(DialogResult result) override;
-
-	const char* tag() const override { return "OtherSettingsScreen"; }
-
-protected:
-	void CreateViews() override;
-
-private:
-	UI::EventReturn OnDisableWinBorders(UI::EventParams& e);
-	bool QualityDepth_;
 };
 
 class HostnameSelectScreen : public PopupScreen {

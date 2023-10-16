@@ -304,6 +304,8 @@ void __UtilityShutdown() {
 	npSigninDialog->Shutdown(true);
 
 	if (accessThread) {
+		// Don't need to free it during shutdown, may have already been freed.
+		accessThread->Forget();
 		delete accessThread;
 		accessThread = nullptr;
 		accessThreadState = "shutdown";
@@ -792,7 +794,7 @@ static int sceUtilityGamedataInstallUpdate(int animSpeed) {
 }
 
 static int sceUtilityGamedataInstallGetStatus() {
-	if (!currentDialogActive || currentDialogType != UtilityDialogType::GAMEDATAINSTALL) {
+	if (currentDialogType != UtilityDialogType::GAMEDATAINSTALL) {
 		// This is called incorrectly all the time by some games. So let's not bother warning.
 		hleEatCycles(200);
 		return hleLogDebug(SCEUTILITY, SCE_ERROR_UTILITY_WRONG_TYPE, "wrong dialog type");
@@ -898,7 +900,7 @@ static u32 sceUtilityGetSystemParamInt(u32 id, u32 destaddr)
 		param = g_Config.bDayLightSavings?PSP_SYSTEMPARAM_DAYLIGHTSAVINGS_SAVING:PSP_SYSTEMPARAM_DAYLIGHTSAVINGS_STD;
 		break;
 	case PSP_SYSTEMPARAM_ID_INT_LANGUAGE:
-		param = g_Config.iLanguage;
+		param = g_Config.GetPSPLanguage();
 		if (PSP_CoreParameter().compat.flags().EnglishOrJapaneseOnly) {
 			if (param != PSP_SYSTEMPARAM_LANGUAGE_ENGLISH && param != PSP_SYSTEMPARAM_LANGUAGE_JAPANESE) {
 				param = PSP_SYSTEMPARAM_LANGUAGE_ENGLISH;

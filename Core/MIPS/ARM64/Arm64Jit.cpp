@@ -16,6 +16,7 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include "ppsspp_config.h"
+
 #if PPSSPP_ARCH(ARM64)
 
 #include "Common/Profiler/Profiler.h"
@@ -159,6 +160,15 @@ void Arm64Jit::FlushAll() {
 }
 
 void Arm64Jit::FlushPrefixV() {
+	if (js.startDefaultPrefix && !js.blockWrotePrefixes && js.HasNoPrefix()) {
+		// They started default, we never modified in memory, and they're default now.
+		// No reason to modify memory.  This is common at end of blocks.  Just clear dirty.
+		js.prefixSFlag = (JitState::PrefixState)(js.prefixSFlag & ~JitState::PREFIX_DIRTY);
+		js.prefixTFlag = (JitState::PrefixState)(js.prefixTFlag & ~JitState::PREFIX_DIRTY);
+		js.prefixDFlag = (JitState::PrefixState)(js.prefixDFlag & ~JitState::PREFIX_DIRTY);
+		return;
+	}
+
 	if ((js.prefixSFlag & JitState::PREFIX_DIRTY) != 0) {
 		gpr.SetRegImm(SCRATCH1, js.prefixS);
 		STR(INDEX_UNSIGNED, SCRATCH1, CTXREG, offsetof(MIPSState, vfpuCtrl[VFPU_CTRL_SPREFIX]));
@@ -176,6 +186,9 @@ void Arm64Jit::FlushPrefixV() {
 		STR(INDEX_UNSIGNED, SCRATCH1, CTXREG, offsetof(MIPSState, vfpuCtrl[VFPU_CTRL_DPREFIX]));
 		js.prefixDFlag = (JitState::PrefixState) (js.prefixDFlag & ~JitState::PREFIX_DIRTY);
 	}
+
+	// If we got here, we must've written prefixes to memory in this block.
+	js.blockWrotePrefixes = true;
 }
 
 void Arm64Jit::ClearCache() {
@@ -240,8 +253,8 @@ void Arm64Jit::Compile(u32 em_address) {
 	int block_num = blocks.AllocateBlock(em_address);
 	JitBlock *b = blocks.GetBlock(block_num);
 	DoJit(em_address, b);
+	_assert_msg_(b->originalAddress == em_address, "original %08x != em_address %08x (block %d)", b->originalAddress, em_address, b->blockNum);
 	blocks.FinalizeBlock(block_num, jo.enableBlocklink);
-
 	EndWrite();
 
 	// Don't forget to zap the newly written instructions in the instruction cache!
@@ -289,8 +302,8 @@ MIPSOpcode Arm64Jit::GetOffsetInstruction(int offset) {
 
 const u8 *Arm64Jit::DoJit(u32 em_address, JitBlock *b) {
 	js.cancel = false;
-	js.blockStart = mips_->pc;
-	js.compilerPC = mips_->pc;
+	js.blockStart = em_address;
+	js.compilerPC = em_address;
 	js.lastContinuedPC = 0;
 	js.initialBlockSize = 0;
 	js.nextExit = 0;
@@ -298,6 +311,7 @@ const u8 *Arm64Jit::DoJit(u32 em_address, JitBlock *b) {
 	js.curBlock = b;
 	js.compiling = true;
 	js.inDelaySlot = false;
+	js.blockWrotePrefixes = false;
 	js.PrefixStart();
 
 	// We add a downcount flag check before the block, used when entering from a linked block.
@@ -548,7 +562,8 @@ void Arm64Jit::Comp_ReplacementFunc(MIPSOpcode op)
 
 	const ReplacementTableEntry *entry = GetReplacementFunc(index);
 	if (!entry) {
-		ERROR_LOG(HLE, "Invalid replacement op %08x", op.encoding);
+		ERROR_LOG_REPORT_ONCE(replFunc, HLE, "Invalid replacement op %08x at %08x", op.encoding, js.compilerPC);
+		// TODO: What should we do here? We're way off in the weeds probably.
 		return;
 	}
 
@@ -629,6 +644,10 @@ void Arm64Jit::Comp_Generic(MIPSOpcode op) {
 		// If it does eat them, it'll happen in MIPSCompileOp().
 		if ((info & OUT_EAT_PREFIX) == 0)
 			js.PrefixUnknown();
+
+		// Even if DISABLE'd, we want to set this flag so we overwrite.
+		if ((info & OUT_VFPU_PREFIX) != 0)
+			js.blockWrotePrefixes = true;
 	}
 }
 
@@ -706,8 +725,11 @@ void Arm64Jit::UpdateRoundingMode(u32 fcr31) {
 // though, as we need to have the SUBS flag set in the end. So with block linking in the mix,
 // I don't think this gives us that much benefit.
 void Arm64Jit::WriteExit(u32 destination, int exit_num) {
-	// TODO: Check destination is valid and trigger exception.
-	WriteDownCount(); 
+	// NOTE: Can't blindly check for bad destination addresses here, sometimes exits with bad destinations are written intentionally (like breaks).
+	_assert_msg_(exit_num < MAX_JIT_BLOCK_EXITS, "Expected a valid exit_num. dest=%08x", destination);
+
+	// NOTE: Can't blindly check for bad destination addresses here, sometimes exits with bad destinations are written intentionally (like breaks).
+	WriteDownCount();
 	//If nobody has taken care of this yet (this can be removed when all branches are done)
 	JitBlock *b = js.curBlock;
 	b->exitAddress[exit_num] = destination;

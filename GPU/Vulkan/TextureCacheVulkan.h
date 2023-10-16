@@ -33,7 +33,6 @@ class DrawEngineVulkan;
 
 class VulkanContext;
 class VulkanTexture;
-class VulkanPushBuffer;
 
 class SamplerCache {
 public:
@@ -49,7 +48,7 @@ public:
 
 private:
 	VulkanContext *vulkan_;
-	DenseHashMap<SamplerCacheKey, VkSampler, (VkSampler)VK_NULL_HANDLE> cache_;
+	DenseHashMap<SamplerCacheKey, VkSampler> cache_;
 };
 
 class TextureCacheVulkan : public TextureCacheCommon {

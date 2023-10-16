@@ -241,7 +241,7 @@ namespace MainWindow
 				g_Config.iInternalResolution = 0;
 		}
 
-		System_PostUIMessage("gpu_renderResized", "");
+		System_PostUIMessage(UIMessage::GPU_RENDER_RESIZED);
 	}
 
 	void CorrectCursor() {
@@ -282,14 +282,11 @@ namespace MainWindow
 		SavePosition();
 		Core_NotifyWindowHidden(false);
 		if (!g_Config.bPauseWhenMinimized) {
-			System_PostUIMessage("window minimized", "false");
+			System_PostUIMessage(UIMessage::WINDOW_MINIMIZED, "false");
 		}
 
-		int width = 0, height = 0;
-		RECT rc;
-		GetClientRect(hwndMain, &rc);
-		width = rc.right - rc.left;
-		height = rc.bottom - rc.top;
+		int width, height;
+		W32Util::GetWindowRes(hwndMain, &width, &height);
 
 		// Moves the internal display window to match the inner size of the main window.
 		MoveWindow(hwndDisplay, 0, 0, width, height, TRUE);
@@ -305,8 +302,8 @@ namespace MainWindow
 		DEBUG_LOG(SYSTEM, "Pixel width/height: %dx%d", PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
 
 		if (UpdateScreenScale(width, height)) {
-			System_PostUIMessage("gpu_displayResized", "");
-			System_PostUIMessage("gpu_renderResized", "");
+			System_PostUIMessage(UIMessage::GPU_DISPLAY_RESIZED);
+			System_PostUIMessage(UIMessage::GPU_RENDER_RESIZED);
 		}
 
 		// Don't save the window state if fullscreen.
@@ -896,12 +893,12 @@ namespace MainWindow
 				}
 
 				if (wParam == WA_ACTIVE || wParam == WA_CLICKACTIVE) {
-					System_PostUIMessage("got_focus", "");
+					System_PostUIMessage(UIMessage::GOT_FOCUS);
 					hasFocus = true;
 					trapMouse = true;
 				}
 				if (wParam == WA_INACTIVE) {
-					System_PostUIMessage("lost_focus", "");
+					System_PostUIMessage(UIMessage::LOST_FOCUS);
 					WindowsRawInput::LoseFocus();
 					InputDevice::LoseFocus();
 					hasFocus = false;
@@ -948,7 +945,7 @@ namespace MainWindow
 			case SIZE_MINIMIZED:
 				Core_NotifyWindowHidden(true);
 				if (!g_Config.bPauseWhenMinimized) {
-					System_PostUIMessage("window minimized", "true");
+					System_PostUIMessage(UIMessage::WINDOW_MINIMIZED, "true");
 				}
 				InputDevice::LoseFocus();
 				break;
@@ -1072,7 +1069,7 @@ namespace MainWindow
 					TCHAR filename[512];
 					if (DragQueryFile(hdrop, 0, filename, 512) != 0) {
 						const std::string utf8_filename = ReplaceAll(ConvertWStringToUTF8(filename), "\\", "/");
-						System_PostUIMessage("boot", utf8_filename.c_str());
+						System_PostUIMessage(UIMessage::REQUEST_GAME_BOOT, utf8_filename);
 						Core_EnableStepping(false);
 					}
 				}

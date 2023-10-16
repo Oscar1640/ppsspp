@@ -24,11 +24,11 @@
 #include "Common/Data/Text/I18n.h"
 #include "Common/StringUtils.h"
 
-void TakeScreenshot();
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+extern bool g_TakeScreenshot;
 
 #define MENU_ITEM(variableName, localizedTitleName, SEL, ConfigurationValueName, Tag) \
 NSMenuItem *variableName = [[NSMenuItem alloc] initWithTitle:localizedTitleName action:SEL keyEquivalent:@""]; \
@@ -217,7 +217,7 @@ void OSXOpenURL(const char *url) {
                     item.state = [self controlStateForBool:g_Config.bIgnoreBadMemAccess];
                     break;
                 case 12:
-                    item.state = [self controlStateForBool:g_Config.bShowDebugStats];
+                    item.state = [self controlStateForBool:(DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS];
                     break;
                 default:
                     item.enabled = state == UISTATE_INGAME ? YES : NO;
@@ -405,7 +405,7 @@ void OSXOpenURL(const char *url) {
     copyBaseAddr.target = self;
     copyBaseAddr.tag = 11;
 
-    MENU_ITEM(showDebugStatsAction, DESKTOPUI_LOCALIZED("Show Debug Statistics"), @selector(toggleShowDebugStats:), g_Config.bShowDebugStats, 12)
+    MENU_ITEM(showDebugStatsAction, DESKTOPUI_LOCALIZED("Show Debug Statistics"), @selector(toggleShowDebugStats:), ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS), 12)
 
     [parent addItem:loadSymbolMapAction];
     [parent addItem:saveMapFileAction];
@@ -442,17 +442,17 @@ void OSXOpenURL(const char *url) {
 }
 
 -(void)pauseAction: (NSMenuItem *)item {
-	System_PostUIMessage("pause", "");
+	System_PostUIMessage(UIMessage::REQUEST_GAME_PAUSE);
 }
 
 -(void)resetAction: (NSMenuItem *)item {
-    System_PostUIMessage("reset", "");
+    System_PostUIMessage(UIMessage::REQUEST_GAME_RESET);
 	Core_EnableStepping(false);
 }
 
 -(void)chatAction: (NSMenuItem *)item {
     if (GetUIState() == UISTATE_INGAME) {
-        System_PostUIMessage("chat screen", "");
+        System_PostUIMessage(UIMessage::SHOW_CHAT_SCREEN);
     }
 }
 
@@ -488,7 +488,7 @@ void OSXOpenURL(const char *url) {
 }
 
 -(void)takeScreenshot {
-    TakeScreenshot();
+    g_TakeScreenshot = true;
 }
 
 -(void)resetSymbolTable {
@@ -541,8 +541,17 @@ TOGGLE_METHOD(AutoFrameSkip, g_Config.bAutoFrameSkip, g_Config.UpdateAfterSettin
 TOGGLE_METHOD(SoftwareRendering, g_Config.bSoftwareRendering)
 TOGGLE_METHOD(FullScreen, g_Config.bFullScreen, System_MakeRequest(SystemRequestType::TOGGLE_FULLSCREEN_STATE, 0, g_Config.UseFullScreen() ? "1" : "0", "", 3))
 // TOGGLE_METHOD(VSync, g_Config.bVSync)
-TOGGLE_METHOD(ShowDebugStats, g_Config.bShowDebugStats, System_PostUIMessage("clear jit", ""))
 #undef TOGGLE_METHOD
+
+-(void)toggleShowDebugStats: (NSMenuItem *)item { \
+    if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS) {
+        g_Config.iDebugOverlay = (int)DebugOverlay::OFF;
+    } else {
+        g_Config.iDebugOverlay = (int)DebugOverlay::DEBUG_STATS;
+    }
+    System_PostUIMessage(UIMessage::REQUEST_CLEAR_JIT);
+    item.state = [self controlStateForBool: (DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS]; \
+}
 
 -(void)setToggleShowCounterItem: (NSMenuItem *)item {
     [self addOrRemoveInteger:(int)(item.tag - 100) to:&g_Config.iShowStatusFlags];
@@ -622,14 +631,14 @@ TOGGLE_METHOD(ShowDebugStats, g_Config.bShowDebugStats, System_PostUIMessage("cl
 }
 
 -(void)openRecentItem: (NSMenuItem *)item {
-    System_PostUIMessage("boot", g_Config.RecentIsos()[item.tag].c_str());
+    System_PostUIMessage(UIMessage::REQUEST_GAME_BOOT, g_Config.RecentIsos()[item.tag].c_str());
 }
 
 -(void)openSystemFileBrowser {
     int g = 0;
     DarwinDirectoryPanelCallback callback = [g] (bool succ, Path thePathChosen) {
         if (succ)
-            System_PostUIMessage("boot", thePathChosen.c_str());
+            System_PostUIMessage(UIMessage::REQUEST_GAME_BOOT, thePathChosen.c_str());
     };
     
     DarwinFileSystemServices services;

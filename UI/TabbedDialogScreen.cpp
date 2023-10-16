@@ -87,13 +87,13 @@ void TabbedUIDialogScreenWithGameBackground::CreateViews() {
 
 			searchSettings->Add(new ItemHeader(se->T("Find settings")));
 			searchSettings->Add(new PopupTextInputChoice(&searchFilter_, se->T("Filter"), "", 64, screenManager()))->OnChange.Add([=](UI::EventParams &e) {
-				System_PostUIMessage("gameSettings_search", StripSpaces(searchFilter_).c_str());
+				System_PostUIMessage(UIMessage::GAMESETTINGS_SEARCH, StripSpaces(searchFilter_));
 				return UI::EVENT_DONE;
 			});
 
 			clearSearchChoice_ = searchSettings->Add(new Choice(se->T("Clear filter")));
 			clearSearchChoice_->OnClick.Add([=](UI::EventParams &e) {
-				System_PostUIMessage("gameSettings_search", "");
+				System_PostUIMessage(UIMessage::GAMESETTINGS_SEARCH, "");
 				return UI::EVENT_DONE;
 			});
 
@@ -104,9 +104,9 @@ void TabbedUIDialogScreenWithGameBackground::CreateViews() {
 	}
 }
 
-void TabbedUIDialogScreenWithGameBackground::sendMessage(const char *message, const char *value) {
+void TabbedUIDialogScreenWithGameBackground::sendMessage(UIMessage message, const char *value) {
 	UIDialogScreenWithGameBackground::sendMessage(message, value);
-	if (!strcmp(message, "gameSettings_search")) {
+	if (message == UIMessage::GAMESETTINGS_SEARCH) {
 		std::string filter = value ? value : "";
 		searchFilter_.resize(filter.size());
 		std::transform(filter.begin(), filter.end(), searchFilter_.begin(), tolower);
@@ -130,7 +130,7 @@ void TabbedUIDialogScreenWithGameBackground::ApplySearchFilter() {
 
 		// Show an indicator that a filter is applied.
 		settingTabFilterNotices_[t]->SetVisibility(tabMatches ? UI::V_GONE : UI::V_VISIBLE);
-		settingTabFilterNotices_[t]->SetText(ReplaceAll(se->T("Filtering settings by '%1'"), "%1", searchFilter_));
+		settingTabFilterNotices_[t]->SetText(ApplySafeSubstitutions(se->T("Filtering settings by '%1'"), searchFilter_));
 
 		UI::View *lastHeading = nullptr;
 		for (int i = 1; i < tabContents->GetNumSubviews(); ++i) {
@@ -152,7 +152,7 @@ void TabbedUIDialogScreenWithGameBackground::ApplySearchFilter() {
 		matches = matches || tabMatches;
 	}
 
-	noSearchResults_->SetText(ReplaceAll(se->T("No settings matched '%1'"), "%1", searchFilter_));
+	noSearchResults_->SetText(ApplySafeSubstitutions(se->T("No settings matched '%1'"), searchFilter_));
 	noSearchResults_->SetVisibility(matches ? UI::V_GONE : UI::V_VISIBLE);
 	clearSearchChoice_->SetVisibility(searchFilter_.empty() ? UI::V_GONE : UI::V_VISIBLE);
 }

@@ -26,16 +26,10 @@ public:
 
 	void Shutdown() override;
 
-	void SwapBuffers() override {
-		// We don't do it this way.
-	}
-
 	void Resize() override;
 
 	void Poll() override;
 
-	void SwapInterval(int interval) override {
-	}
 	void *GetAPIContext() override {
 		return vulkan_;
 	}

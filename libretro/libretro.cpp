@@ -239,22 +239,22 @@ class PrintfLogger : public LogListener
       {
          switch (message.level)
          {
-            case LogTypes::LVERBOSE:
-            case LogTypes::LDEBUG:
+            case LogLevel::LVERBOSE:
+            case LogLevel::LDEBUG:
                log_(RETRO_LOG_DEBUG, "[%s] %s",
                      message.log, message.msg.c_str());
                break;
 
-            case LogTypes::LERROR:
+            case LogLevel::LERROR:
                log_(RETRO_LOG_ERROR, "[%s] %s",
                      message.log, message.msg.c_str());
                break;
-            case LogTypes::LNOTICE:
-            case LogTypes::LWARNING:
+            case LogLevel::LNOTICE:
+            case LogLevel::LWARNING:
                log_(RETRO_LOG_WARN, "[%s] %s",
                      message.log, message.msg.c_str());
                break;
-            case LogTypes::LINFO:
+            case LogLevel::LINFO:
             default:
                log_(RETRO_LOG_INFO, "[%s] %s",
                      message.log, message.msg.c_str());
@@ -474,13 +474,14 @@ static void check_variables(CoreParameter &coreParam)
          g_Config.iLanguage = PSP_SYSTEMPARAM_LANGUAGE_CHINESE_SIMPLIFIED;
    }
 
+#ifndef __EMSCRIPTEN__
    var.key = "ppsspp_cpu_core";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
       if (!strcmp(var.value, "JIT"))
          g_Config.iCpuCore = (int)CPUCore::JIT;
       else if (!strcmp(var.value, "IR JIT"))
-         g_Config.iCpuCore = (int)CPUCore::IR_JIT;
+         g_Config.iCpuCore = (int)CPUCore::IR_INTERPRETER;
       else if (!strcmp(var.value, "Interpreter"))
          g_Config.iCpuCore = (int)CPUCore::INTERPRETER;
    }
@@ -489,8 +490,11 @@ static void check_variables(CoreParameter &coreParam)
        // Just gonna force it to the IR interpreter on startup.
        // We don't hide the option, but we make sure it's off on bootup. In case someone wants
        // to experiment in future iOS versions or something...
-       g_Config.iCpuCore = (int)CPUCore::IR_JIT;
+       g_Config.iCpuCore = (int)CPUCore::IR_INTERPRETER;
    }
+#else
+   g_Config.iCpuCore = (int)CPUCore::INTERPRETER;
+#endif
 
    var.key = "ppsspp_fast_memory";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -700,15 +704,6 @@ static void check_variables(CoreParameter &coreParam)
          g_Config.bSoftwareSkinning = false;
       else
          g_Config.bSoftwareSkinning = true;
-   }
-
-   var.key = "ppsspp_vertex_cache";
-   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-   {
-      if (!strcmp(var.value, "disabled"))
-         g_Config.bVertexCache = false;
-      else
-         g_Config.bVertexCache = true;
    }
 
    var.key = "ppsspp_lazy_texture_caching";
@@ -1077,7 +1072,7 @@ void retro_init(void)
       logman->RemoveListener(logman->GetDebuggerListener());
       logman->ChangeFileLog(nullptr);
       logman->AddListener(printfLogger);
-      logman->SetAllLogLevels(LogTypes::LINFO);
+      logman->SetAllLogLevels(LogLevel::LINFO);
    }
 
    g_Config.Load("", "");
@@ -1163,7 +1158,7 @@ namespace Libretro
    {
       ctx->SetRenderTarget();
       if (ctx->GetDrawContext())
-         ctx->GetDrawContext()->BeginFrame();
+         ctx->GetDrawContext()->BeginFrame(Draw::DebugFlags::NONE);
 
       gpu->BeginHostFrame();
 
@@ -1172,8 +1167,10 @@ namespace Libretro
 
       gpu->EndHostFrame();
 
-      if (ctx->GetDrawContext())
+      if (ctx->GetDrawContext()) {
          ctx->GetDrawContext()->EndFrame();
+         ctx->GetDrawContext()->Present(Draw::PresentMode::FIFO, 1);
+      }
    }
 
    static void EmuThreadFunc()
@@ -1703,9 +1700,8 @@ void System_Notify(SystemNotification notification) {
    }
 }
 bool System_MakeRequest(SystemRequestType type, int requestId, const std::string &param1, const std::string &param2, int param3) { return false; }
-void System_PostUIMessage(const std::string &message, const std::string &param) {}
-void NativeUpdate() {}
-void NativeRender(GraphicsContext *graphicsContext) {}
+void System_PostUIMessage(UIMessage message, const std::string &param) {}
+void NativeFrame(GraphicsContext *graphicsContext) {}
 void NativeResized() {}
 
 void System_Toast(const char *str) {}
@@ -1748,7 +1744,7 @@ void System_InputBoxGetString(const std::string &title, const std::string &defau
 #endif
 
 // TODO: To avoid having to define these here, these should probably be turned into system "requests".
-void NativeSaveSecret(const char *nameOfSecret, const std::string &data) {}
+bool NativeSaveSecret(const char *nameOfSecret, const std::string &data) { return false; }
 std::string NativeLoadSecret(const char *nameOfSecret) {
    return "";
 }

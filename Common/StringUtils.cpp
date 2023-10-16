@@ -239,18 +239,15 @@ std::string StringFromFormat(const char* format, ...)
 	return temp;
 }
 
-std::string StringFromInt(int value)
-{
+std::string StringFromInt(int value) {
 	char temp[16];
 	snprintf(temp, sizeof(temp), "%d", value);
 	return temp;
 }
 
 // Turns "  hej " into "hej". Also handles tabs.
-std::string StripSpaces(const std::string &str)
-{
+std::string StripSpaces(const std::string &str) {
 	const size_t s = str.find_first_not_of(" \t\r\n");
-
 	if (str.npos != s)
 		return str.substr(s, str.find_last_not_of(" \t\r\n") - s + 1);
 	else
@@ -262,6 +259,25 @@ std::string StripSpaces(const std::string &str)
 // ends, as done by StripSpaces above, for example.
 std::string StripQuotes(const std::string& s)
 {
+	if (s.size() && '\"' == s[0] && '\"' == *s.rbegin())
+		return s.substr(1, s.size() - 2);
+	else
+		return s;
+}
+
+// Turns "  hej " into "hej". Also handles tabs.
+std::string_view StripSpaces(std::string_view str) {
+	const size_t s = str.find_first_not_of(" \t\r\n");
+	if (str.npos != s)
+		return str.substr(s, str.find_last_not_of(" \t\r\n") - s + 1);
+	else
+		return "";
+}
+
+// "\"hello\"" is turned to "hello"
+// This one assumes that the string has already been space stripped in both
+// ends, as done by StripSpaces above, for example.
+std::string_view StripQuotes(std::string_view s) {
 	if (s.size() && '\"' == s[0] && '\"' == *s.rbegin())
 		return s.substr(1, s.size() - 2);
 	else
@@ -364,6 +380,68 @@ std::string UnescapeMenuString(const char *input, char *shortcutChar) {
 				escapeFound = true;
 			}
 			escaping = false;
+		}
+	}
+	return output;
+}
+
+std::string ApplySafeSubstitutions(const char *format, std::string_view string1, std::string_view string2, std::string_view string3, std::string_view string4) {
+	size_t formatLen = strlen(format);
+	std::string output;
+	output.reserve(formatLen + 20);
+	for (size_t i = 0; i < formatLen; i++) {
+		char c = format[i];
+		if (c != '%') {
+			output.push_back(c);
+			continue;
+		}
+		if (i >= formatLen - 1) {
+			break;
+		}
+		switch (format[i + 1]) {
+		case '1':
+			output += string1; i++;
+			break;
+		case '2':
+			output += string2; i++;
+			break;
+		case '3':
+			output += string3; i++;
+			break;
+		case '4':
+			output += string4; i++;
+			break;
+		}
+	}
+	return output;
+}
+
+std::string ApplySafeSubstitutions(const char *format, int i1, int i2, int i3, int i4) {
+	size_t formatLen = strlen(format);
+	std::string output;
+	output.reserve(formatLen + 20);
+	for (size_t i = 0; i < formatLen; i++) {
+		char c = format[i];
+		if (c != '%') {
+			output.push_back(c);
+			continue;
+		}
+		if (i >= formatLen - 1) {
+			break;
+		}
+		switch (format[i + 1]) {
+		case '1':
+			output += StringFromInt(i1); i++;
+			break;
+		case '2':
+			output += StringFromInt(i2); i++;
+			break;
+		case '3':
+			output += StringFromInt(i3); i++;
+			break;
+		case '4':
+			output += StringFromInt(i4); i++;
+			break;
 		}
 	}
 	return output;

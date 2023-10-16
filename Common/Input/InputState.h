@@ -31,11 +31,12 @@ enum InputDeviceID {
 	DEVICE_ID_XINPUT_1 = 21,
 	DEVICE_ID_XINPUT_2 = 22,
 	DEVICE_ID_XINPUT_3 = 23,
-	DEVICE_ID_ACCELEROMETER = 30,
+	DEVICE_ID_ACCELEROMETER = 30,  // no longer used
 	DEVICE_ID_XR_HMD = 39,
 	DEVICE_ID_XR_CONTROLLER_LEFT = 40,
 	DEVICE_ID_XR_CONTROLLER_RIGHT = 41,
 	DEVICE_ID_TOUCH = 42,
+	DEVICE_ID_COUNT,
 };
 
 inline InputDeviceID operator +(InputDeviceID deviceID, int addend) {
@@ -120,6 +121,9 @@ public:
 		if (deviceId != other.deviceId && deviceId != DEVICE_ID_ANY && other.deviceId != DEVICE_ID_ANY) return false;
 		if (keyCode != other.keyCode) return false;
 		return true;
+	}
+	bool operator != (const InputMapping &other) const {
+		return !(*this == other);
 	}
 
 	void FormatDebug(char *buffer, size_t bufSize) const;

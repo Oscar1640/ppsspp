@@ -66,6 +66,7 @@ inline unsigned int toFloat24(float f) {
 	return i >> 8;
 }
 
+// The ToString function lives in GPUCommonHW.cpp.
 struct GPUStatistics {
 	void Reset() {
 		ResetFrame();
@@ -74,20 +75,18 @@ struct GPUStatistics {
 
 	void ResetFrame() {
 		numDrawCalls = 0;
+		numVertexDecodes = 0;
 		numDrawSyncs = 0;
 		numListSyncs = 0;
-		numCachedDrawCalls = 0;
 		numVertsSubmitted = 0;
-		numCachedVertsDrawn = 0;
 		numUncachedVertsDrawn = 0;
-		numTrackedVertexArrays = 0;
 		numTextureInvalidations = 0;
 		numTextureInvalidationsByFramebuffer = 0;
 		numTexturesHashed = 0;
-		numTextureSwitches = 0;
 		numTextureDataBytesHashed = 0;
-		numShaderSwitches = 0;
 		numFlushes = 0;
+		numBBOXJumps = 0;
+		numPlaneUpdates = 0;
 		numTexturesDecoded = 0;
 		numFramebufferEvaluations = 0;
 		numBlockingReadbacks = 0;
@@ -100,7 +99,7 @@ struct GPUStatistics {
 		numColorCopies = 0;
 		numCopiesForShaderBlend = 0;
 		numCopiesForSelfTex = 0;
-		numDrawPixels = 0;
+		numBlockTransfers = 0;
 		numReplacerTrackedTex = 0;
 		numCachedReplacedTextures = 0;
 		msProcessingDisplayLists = 0;
@@ -110,20 +109,18 @@ struct GPUStatistics {
 
 	// Per frame statistics
 	int numDrawCalls;
+	int numVertexDecodes;
 	int numDrawSyncs;
 	int numListSyncs;
-	int numCachedDrawCalls;
 	int numFlushes;
+	int numBBOXJumps;
+	int numPlaneUpdates;
 	int numVertsSubmitted;
-	int numCachedVertsDrawn;
 	int numUncachedVertsDrawn;
-	int numTrackedVertexArrays;
 	int numTextureInvalidations;
 	int numTextureInvalidationsByFramebuffer;
 	int numTexturesHashed;
 	int numTextureDataBytesHashed;
-	int numTextureSwitches;
-	int numShaderSwitches;
 	int numTexturesDecoded;
 	int numFramebufferEvaluations;
 	int numBlockingReadbacks;
@@ -136,7 +133,7 @@ struct GPUStatistics {
 	int numColorCopies;
 	int numCopiesForShaderBlend;
 	int numCopiesForSelfTex;
-	int numDrawPixels;
+	int numBlockTransfers;
 	int numReplacerTrackedTex;
 	int numCachedReplacedTextures;
 	double msProcessingDisplayLists;

@@ -4,11 +4,45 @@ SRC := ../..
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/Locals.mk
 
+LOCAL_CFLAGS += -D_7ZIP_ST -D__SWITCH__
+
+LZMA_FILES := \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Alloc.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Bcj2.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Bcj2Enc.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Bra.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Bra86.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/CpuArch.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Delta.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/LzFind.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/LzFindOpt.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/LzmaDec.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/LzmaEnc.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Lzma86Dec.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Lzma86Enc.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/LzmaLib.c \
+	$(SRC)/ext/libchdr/deps/lzma-22.01/src/Sort.c
+
+CHDR_FILES := \
+	${LZMA_FILES} \
+	$(SRC)/ext/libchdr/src/libchdr_bitstream.c \
+	$(SRC)/ext/libchdr/src/libchdr_cdrom.c \
+	$(SRC)/ext/libchdr/src/libchdr_chd.c \
+	$(SRC)/ext/libchdr/src/libchdr_flac.c \
+	$(SRC)/ext/libchdr/src/libchdr_huffman.c
+
+LOCAL_MODULE := libchdr
+LOCAL_SRC_FILES := $(CHDR_FILES)
+include $(BUILD_STATIC_LIBRARY)
+
+include $(CLEAR_VARS)
+include $(LOCAL_PATH)/Locals.mk
+
 LOCAL_C_INCLUDES += \
   $(LOCAL_PATH)/../../ext/cpu_features/include \
   $(LOCAL_PATH)/../../ext/rcheevos/include
 
-LOCAL_CFLAGS += -DSTACK_LINE_READER_BUFFER_SIZE=1024 -DHAVE_DLFCN_H -DRC_DISABLE_LUA
+LOCAL_CFLAGS += -DSTACK_LINE_READER_BUFFER_SIZE=1024 -DHAVE_DLFCN_H -DRC_DISABLE_LUA -D_7ZIP_ST
 
 # http://software.intel.com/en-us/articles/getting-started-on-optimizing-ndk-project-for-multiple-cpu-architectures
 
@@ -50,11 +84,6 @@ NATIVE_FILES :=\
   $(SRC)/Common/GPU/OpenGL/GLQueueRunner.cpp \
   $(SRC)/Common/GPU/OpenGL/DataFormatGL.cpp
 
-EGL_FILES := \
-  $(SRC)/Common/GL/GLInterface/EGL.cpp \
-  $(SRC)/Common/GL/GLInterface/EGLAndroid.cpp \
-  $(SRC)/Common/GL/GLInterface/GLInterface.cpp
-
 VULKAN_FILES := \
   $(SRC)/Common/GPU/Vulkan/thin3d_vulkan.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanQueueRunner.cpp \
@@ -66,6 +95,7 @@ VULKAN_FILES := \
   $(SRC)/Common/GPU/Vulkan/VulkanImage.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanFramebuffer.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanMemory.cpp \
+  $(SRC)/Common/GPU/Vulkan/VulkanDescSet.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanProfiler.cpp \
   $(SRC)/Common/GPU/Vulkan/VulkanBarrier.cpp
 
@@ -79,7 +109,10 @@ SPIRV_CROSS_FILES := \
   $(SRC)/ext/SPIRV-Cross/spirv_glsl.cpp \
   $(SRC)/ext/SPIRV-Cross/spirv_parser.cpp \
   $(SRC)/ext/SPIRV-Cross/spirv_cross_parsed_ir.cpp
- 
+
+NAETT_FILES := \
+  ${SRC}/ext/naett/naett.c
+
 RCHEEVOS_FILES := \
   ${SRC}/ext/rcheevos/src/rapi/rc_api_common.c \
   ${SRC}/ext/rcheevos/src/rapi/rc_api_editor.c \
@@ -87,7 +120,6 @@ RCHEEVOS_FILES := \
   ${SRC}/ext/rcheevos/src/rapi/rc_api_runtime.c \
   ${SRC}/ext/rcheevos/src/rapi/rc_api_user.c \
   ${SRC}/ext/rcheevos/src/rcheevos/alloc.c \
-  ${SRC}/ext/rcheevos/src/rcheevos/compat.c \
   ${SRC}/ext/rcheevos/src/rcheevos/condition.c \
   ${SRC}/ext/rcheevos/src/rcheevos/condset.c \
   ${SRC}/ext/rcheevos/src/rcheevos/consoleinfo.c \
@@ -95,7 +127,9 @@ RCHEEVOS_FILES := \
   ${SRC}/ext/rcheevos/src/rcheevos/lboard.c \
   ${SRC}/ext/rcheevos/src/rcheevos/memref.c \
   ${SRC}/ext/rcheevos/src/rcheevos/operand.c \
-  ${SRC}/ext/rcheevos/src/rcheevos/rc_client.c \
+  ${SRC}/ext/rcheevos/src/rc_client.c \
+  ${SRC}/ext/rcheevos/src/rc_util.c \
+  ${SRC}/ext/rcheevos/src/rc_compat.c \
   ${SRC}/ext/rcheevos/src/rcheevos/rc_validate.c \
   ${SRC}/ext/rcheevos/src/rcheevos/richpresence.c \
   ${SRC}/ext/rcheevos/src/rcheevos/runtime.c \
@@ -172,12 +206,12 @@ EXT_FILES := \
 
 EXEC_AND_LIB_FILES := \
   $(ARCH_FILES) \
-  $(EGL_FILES) \
   $(VULKAN_FILES) \
   $(VR_FILES) \
   $(VMA_FILES) \
   $(SPIRV_CROSS_FILES) \
   $(RCHEEVOS_FILES) \
+  $(NAETT_FILES) \
   $(EXT_FILES) \
   $(NATIVE_FILES) \
   $(SRC)/Common/Buffer.cpp \
@@ -238,6 +272,8 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Common/Math/lin/matrix4x4.cpp.arm \
   $(SRC)/Common/Net/HTTPClient.cpp \
   $(SRC)/Common/Net/HTTPHeaders.cpp \
+  $(SRC)/Common/Net/HTTPRequest.cpp \
+  $(SRC)/Common/Net/HTTPNaettRequest.cpp \
   $(SRC)/Common/Net/HTTPServer.cpp \
   $(SRC)/Common/Net/NetBuffer.cpp \
   $(SRC)/Common/Net/Resolve.cpp \
@@ -288,9 +324,9 @@ include $(BUILD_STATIC_LIBRARY)
 # Next up, Core, GPU, and other core parts shared by headless.
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/Locals.mk
-LOCAL_WHOLE_STATIC_LIBRARIES += ppsspp_common
+LOCAL_WHOLE_STATIC_LIBRARIES += ppsspp_common libchdr
 
-ifeq ($(TARGET_ARCH_ABI),x86)
+ifeq ($(TARGET_ARCH_ABI),x86_64)
 ARCH_FILES := \
   $(SRC)/Core/MIPS/x86/CompALU.cpp \
   $(SRC)/Core/MIPS/x86/CompBranch.cpp \
@@ -303,22 +339,15 @@ ARCH_FILES := \
   $(SRC)/Core/MIPS/x86/JitSafeMem.cpp \
   $(SRC)/Core/MIPS/x86/RegCache.cpp \
   $(SRC)/Core/MIPS/x86/RegCacheFPU.cpp \
-  $(SRC)/GPU/Common/VertexDecoderX86.cpp \
-  $(SRC)/GPU/Software/DrawPixelX86.cpp \
-  $(SRC)/GPU/Software/SamplerX86.cpp
-else ifeq ($(TARGET_ARCH_ABI),x86_64)
-ARCH_FILES := \
-  $(SRC)/Core/MIPS/x86/CompALU.cpp \
-  $(SRC)/Core/MIPS/x86/CompBranch.cpp \
-  $(SRC)/Core/MIPS/x86/CompFPU.cpp \
-  $(SRC)/Core/MIPS/x86/CompLoadStore.cpp \
-  $(SRC)/Core/MIPS/x86/CompVFPU.cpp \
-  $(SRC)/Core/MIPS/x86/CompReplace.cpp \
-  $(SRC)/Core/MIPS/x86/Asm.cpp \
-  $(SRC)/Core/MIPS/x86/Jit.cpp \
-  $(SRC)/Core/MIPS/x86/JitSafeMem.cpp \
-  $(SRC)/Core/MIPS/x86/RegCache.cpp \
-  $(SRC)/Core/MIPS/x86/RegCacheFPU.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRAsm.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRCompALU.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRCompBranch.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRCompFPU.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRCompLoadStore.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRCompSystem.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRCompVec.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRJit.cpp \
+  $(SRC)/Core/MIPS/x86/X64IRRegCache.cpp \
   $(SRC)/GPU/Common/VertexDecoderX86.cpp \
   $(SRC)/GPU/Software/DrawPixelX86.cpp \
   $(SRC)/GPU/Software/SamplerX86.cpp
@@ -350,12 +379,21 @@ ARCH_FILES := \
   $(SRC)/Core/MIPS/ARM64/Arm64Jit.cpp \
   $(SRC)/Core/MIPS/ARM64/Arm64RegCache.cpp \
   $(SRC)/Core/MIPS/ARM64/Arm64RegCacheFPU.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRAsm.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRCompALU.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRCompBranch.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRCompFPU.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRCompLoadStore.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRCompSystem.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRCompVec.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRJit.cpp \
+  $(SRC)/Core/MIPS/ARM64/Arm64IRRegCache.cpp \
   $(SRC)/Core/Util/DisArm64.cpp \
   $(SRC)/GPU/Common/VertexDecoderArm64.cpp \
   Arm64EmitterTest.cpp
 endif
 
-VULKAN_FILES := \
+GPU_VULKAN_FILES := \
   $(SRC)/GPU/Vulkan/DrawEngineVulkan.cpp \
   $(SRC)/GPU/Vulkan/FramebufferManagerVulkan.cpp \
   $(SRC)/GPU/Vulkan/GPU_Vulkan.cpp \
@@ -368,7 +406,7 @@ VULKAN_FILES := \
 
 EXEC_AND_LIB_FILES := \
   $(ARCH_FILES) \
-  $(VULKAN_FILES) \
+  $(GPU_VULKAN_FILES) \
   $(SRC)/ext/xxhash.c \
   TestRunner.cpp \
   $(SRC)/Core/MIPS/MIPS.cpp.arm \
@@ -384,6 +422,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/MIPS/MIPSVFPUFallbacks.cpp.arm \
   $(SRC)/Core/MIPS/MIPSCodeUtils.cpp.arm \
   $(SRC)/Core/MIPS/MIPSDebugInterface.cpp \
+  $(SRC)/Core/MIPS/IR/IRAnalysis.cpp \
   $(SRC)/Core/MIPS/IR/IRFrontend.cpp \
   $(SRC)/Core/MIPS/IR/IRJit.cpp \
   $(SRC)/Core/MIPS/IR/IRCompALU.cpp \
@@ -393,6 +432,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/MIPS/IR/IRCompVFPU.cpp \
   $(SRC)/Core/MIPS/IR/IRInst.cpp \
   $(SRC)/Core/MIPS/IR/IRInterpreter.cpp \
+  $(SRC)/Core/MIPS/IR/IRNativeCommon.cpp \
   $(SRC)/Core/MIPS/IR/IRPassSimplify.cpp \
   $(SRC)/Core/MIPS/IR/IRRegCache.cpp \
   $(SRC)/GPU/Math3D.cpp \
@@ -477,6 +517,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/ConfigSettings.cpp \
   $(SRC)/Core/CoreTiming.cpp \
   $(SRC)/Core/CwCheat.cpp \
+  $(SRC)/Core/FrameTiming.cpp \
   $(SRC)/Core/HDRemaster.cpp \
   $(SRC)/Core/Instance.cpp \
   $(SRC)/Core/KeyMap.cpp \
@@ -756,6 +797,7 @@ LOCAL_SRC_FILES := \
   $(SRC)/UI/BackgroundAudio.cpp \
   $(SRC)/UI/DiscordIntegration.cpp \
   $(SRC)/UI/ChatScreen.cpp \
+  $(SRC)/UI/DebugOverlay.cpp \
   $(SRC)/UI/DevScreens.cpp \
   $(SRC)/UI/DisplayLayoutScreen.cpp \
   $(SRC)/UI/EmuScreen.cpp \

@@ -46,14 +46,17 @@ public:
 	void preRender() override;
 	void postRender() override;
 	void dialogFinished(const Screen *dialog, DialogResult result) override;
-	void sendMessage(const char *msg, const char *value) override;
+	void sendMessage(UIMessage message, const char *value) override;
 	void resized() override;
 
 	// Note: Unlike your average boring UIScreen, here we override the Unsync* functions
 	// to get minimal latency and full control. We forward to UIScreen when needed.
-	void UnsyncTouch(const TouchInput &touch) override;
+	bool UnsyncTouch(const TouchInput &touch) override;
 	bool UnsyncKey(const KeyInput &key) override;
-	void UnsyncAxis(const AxisInput &axis) override;
+	void UnsyncAxis(const AxisInput *axes, size_t count) override;
+
+	// We also need to do some special handling of queued UI events to handle closing the chat window.
+	bool key(const KeyInput &key) override;
 
 private:
 	void CreateViews() override;
@@ -73,7 +76,7 @@ private:
 	void onVKeyAnalog(int virtualKeyCode, float value);
 
 	void autoLoad();
-	void checkPowerDown();
+	bool checkPowerDown();
 
 	UI::Event OnDevMenu;
 	UI::Event OnChatMenu;

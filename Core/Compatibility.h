@@ -113,6 +113,8 @@ struct CompatFlags {
 	bool DaxterRotatedAnalogStick;
 	bool ForceMaxDepthResolution;
 	bool SOCOMClut8Replacement;
+	bool Fontltn12Hack;
+	bool LoadCLUTFromCurrentFrameOnly;
 };
 
 struct VRCompat {

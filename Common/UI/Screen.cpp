@@ -48,12 +48,13 @@ void ScreenManager::update() {
 		switchToNext();
 	}
 
+	if (overlayScreen_) {
+		// NOTE: This is not a full UIScreen update, to avoid double global event processing.
+		overlayScreen_->update();
+	}
 	if (stack_.size()) {
 		stack_.back().screen->update();
 	}
-
-	// NOTE: We should not update the OverlayScreen. In fact, we must never update more than one
-	// UIScreen in here, because we might end up double-processing the stuff in Root.cpp.
 
 	g_iconCache.FrameUpdate();
 }
@@ -90,8 +91,15 @@ void ScreenManager::touch(const TouchInput &touch) {
 			layer.screen->UnsyncTouch(screen->transformTouch(touch));
 		}
 	} else if (!stack_.empty()) {
-		Screen *screen = stack_.back().screen;
-		stack_.back().screen->UnsyncTouch(screen->transformTouch(touch));
+		// Let the overlay know about touch-downs, to be able to dismiss popups.
+		bool skip = false;
+		if (overlayScreen_ && (touch.flags & TOUCH_DOWN)) {
+			skip = overlayScreen_->UnsyncTouch(overlayScreen_->transformTouch(touch));
+		}
+		if (!skip) {
+			Screen *screen = stack_.back().screen;
+			stack_.back().screen->UnsyncTouch(screen->transformTouch(touch));
+		}
 	}
 }
 
@@ -109,27 +117,11 @@ bool ScreenManager::key(const KeyInput &key) {
 	return result;
 }
 
-void ScreenManager::axis(const AxisInput &axis) {
+void ScreenManager::axis(const AxisInput *axes, size_t count) {
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
-
-	// Ignore duplicate values to prevent axis values overwriting each other.
-	uint64_t key = ((uint64_t)axis.axisId << 32) | axis.deviceId;
-	// Center value far from zero just to ensure we send the first zero.
-	// PSP games can't see higher resolution than this.
-	int value = 128 + ceilf(axis.value * 127.5f + 127.5f);
-	if (lastAxis_[key] == value) {
+	if (stack_.empty())
 		return;
-	}
-	lastAxis_[key] = value;
-
-	// Send center axis to every screen layer.
-	if (axis.value == 0) {
-		for (auto &layer : stack_) {
-			layer.screen->UnsyncAxis(axis);
-		}
-	} else if (!stack_.empty()) {
-		stack_.back().screen->UnsyncAxis(axis);
-	}
+	stack_.back().screen->UnsyncAxis(axes, count);
 }
 
 void ScreenManager::deviceLost() {
@@ -156,40 +148,48 @@ void ScreenManager::resized() {
 void ScreenManager::render() {
 	if (!stack_.empty()) {
 		switch (stack_.back().flags) {
-		case LAYER_SIDEMENU:
 		case LAYER_TRANSPARENT:
 			if (stack_.size() == 1) {
 				ERROR_LOG(SYSTEM, "Can't have sidemenu over nothing");
 				break;
 			} else {
-				auto iter = stack_.end();
+				auto last = stack_.end();
+				auto iter = last;
 				iter--;
-				iter--;
-				Layer backback = *iter;
-
-				_assert_(backback.screen);
+				while (iter->flags == LAYER_TRANSPARENT) {
+					iter--;
+				}
+				auto first = iter;
+				_assert_(iter->screen);
 
 				// TODO: Make really sure that this "mismatched" pre/post only happens
 				// when screens are "compatible" (both are UIScreens, for example).
-				backback.screen->preRender();
-				backback.screen->render();
+				first->screen->preRender();
+				while (iter < last) {
+					iter->screen->render();
+					iter++;
+				}
 				stack_.back().screen->render();
-				if (postRenderCb_)
-					postRenderCb_(getUIContext(), postRenderUserdata_);
 				if (overlayScreen_) {
 					overlayScreen_->render();
 				}
-				backback.screen->postRender();
+				if (postRenderCb_) {
+					// Really can't render anything after this! Will crash the screenshot mechanism if we do.
+					postRenderCb_(getUIContext(), postRenderUserdata_);
+				}
+				first->screen->postRender();
 				break;
 			}
 		default:
 			_assert_(stack_.back().screen);
 			stack_.back().screen->preRender();
 			stack_.back().screen->render();
-			if (postRenderCb_)
-				postRenderCb_(getUIContext(), postRenderUserdata_);
 			if (overlayScreen_) {
 				overlayScreen_->render();
+			}
+			if (postRenderCb_) {
+				// Really can't render anything after this! Will crash the screenshot mechanism if we do.
+				postRenderCb_(getUIContext(), postRenderUserdata_);
 			}
 			stack_.back().screen->postRender();
 			break;
@@ -210,10 +210,10 @@ void ScreenManager::getFocusPosition(float &x, float &y, float &z) {
 	z = stack_.size();
 }
 
-void ScreenManager::sendMessage(const char *msg, const char *value) {
-	if (!strcmp(msg, "recreateviews"))
+void ScreenManager::sendMessage(UIMessage message, const char *value) {
+	if (message == UIMessage::RECREATE_VIEWS) {
 		RecreateAllViews();
-	if (!strcmp(msg, "lost_focus")) {
+	} else if (message == UIMessage::LOST_FOCUS) {
 		TouchInput input{};
 		input.x = -50000.0f;
 		input.y = -50000.0f;
@@ -222,8 +222,9 @@ void ScreenManager::sendMessage(const char *msg, const char *value) {
 		input.id = 0;
 		touch(input);
 	}
+
 	if (!stack_.empty())
-		stack_.back().screen->sendMessage(msg, value);
+		stack_.back().screen->sendMessage(message, value);
 }
 
 Screen *ScreenManager::topScreen() const {
@@ -280,6 +281,7 @@ void ScreenManager::pop() {
 }
 
 void ScreenManager::RecreateAllViews() {
+	std::lock_guard<std::recursive_mutex> guard(inputLock_);
 	for (auto it = stack_.begin(); it != stack_.end(); ++it) {
 		it->screen->RecreateViews();
 	}

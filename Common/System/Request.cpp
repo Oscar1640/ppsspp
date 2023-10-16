@@ -1,3 +1,5 @@
+#include "ppsspp_config.h"
+
 #include <cstring>
 
 #include "Common/System/Request.h"
@@ -5,6 +7,17 @@
 #include "Common/Log.h"
 #include "Common/File/Path.h"
 #include "Common/TimeUtil.h"
+
+#if PPSSPP_PLATFORM(ANDROID)
+
+// Maybe not the most natural place for this, but not sure what would be. It needs to be in the Common project
+// unless we want to make another System_ function to retrieve it.
+
+#include <jni.h>
+
+JavaVM *gJvm = nullptr;
+
+#endif
 
 RequestManager g_requestManager;
 
@@ -27,7 +40,7 @@ bool RequestManager::MakeSystemRequest(SystemRequestType type, RequestCallback c
 		callbackMap_[requestId] = { callback, failedCallback };
 	}
 
-	DEBUG_LOG(SYSTEM, "Making system request %s: id %d", RequestTypeAsString(type), requestId);
+	VERBOSE_LOG(SYSTEM, "Making system request %s: id %d", RequestTypeAsString(type), requestId);
 	if (!System_MakeRequest(type, requestId, param1, param2, param3)) {
 		if (callback || failedCallback) {
 			std::lock_guard<std::mutex> guard(callbackMutex_);
@@ -101,4 +114,8 @@ void RequestManager::Clear() {
 
 void System_CreateGameShortcut(const Path &path, const std::string &title) {
 	g_requestManager.MakeSystemRequest(SystemRequestType::CREATE_GAME_SHORTCUT, nullptr, nullptr, path.ToString(), title, 0);
+}
+
+void System_ShowFileInFolder(const Path &path) {
+	g_requestManager.MakeSystemRequest(SystemRequestType::SHOW_FILE_IN_FOLDER, nullptr, nullptr, path.ToString(), "", 0);
 }

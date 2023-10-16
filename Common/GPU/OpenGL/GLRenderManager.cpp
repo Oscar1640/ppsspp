@@ -37,7 +37,7 @@ GLRTexture::~GLRTexture() {
 	}
 }
 
-GLRenderManager::GLRenderManager() {
+GLRenderManager::GLRenderManager(HistoryBuffer<FrameTimeData, FRAME_TIME_HISTORY_LENGTH> &frameTimeHistory) : frameTimeHistory_(frameTimeHistory) {
 	// size_t sz = sizeof(GLRRenderData);
 	// _dbg_assert_(sz == 88);
 }
@@ -147,6 +147,7 @@ bool GLRenderManager::ThreadFrame() {
 		// We got a task! We can now have pushMutex_ unlocked, allowing the host to
 		// push more work when it feels like it, and just start working.
 		if (task->runType == GLRRunType::EXIT) {
+			delete task;
 			// Oh, host wanted out. Let's leave, and also let's notify the host.
 			// This is unlike Vulkan too which can just block on the thread existing.
 			std::unique_lock<std::mutex> lock(syncMutex_);
@@ -183,7 +184,7 @@ void GLRenderManager::StopThread() {
 }
 
 std::string GLRenderManager::GetGpuProfileString() const {
-	int curFrame = GetCurFrame();
+	int curFrame = curFrame_;
 	const GLQueueProfileContext &profile = frameData_[curFrame].profile;
 
 	float cputime_ms = 1000.0f * (profile.cpuEndTime - profile.cpuStartTime);
@@ -349,12 +350,18 @@ void GLRenderManager::BeginFrame(bool enableProfiling) {
 
 	int curFrame = GetCurFrame();
 
+	FrameTimeData &frameTimeData = frameTimeHistory_.Add(frameIdGen_);
+	frameTimeData.frameBegin = time_now_d();
+	frameTimeData.afterFenceWait = frameTimeData.frameBegin;
+
 	GLFrameData &frameData = frameData_[curFrame];
+	frameData.frameId = frameIdGen_;
 	frameData.profile.enabled = enableProfiling;
 
+	frameIdGen_++;
 	{
-		VLOG("PUSH: BeginFrame (curFrame = %d, readyForFence = %d, time=%0.3f)", curFrame, (int)frameData.readyForFence, time_now_d());
 		std::unique_lock<std::mutex> lock(frameData.fenceMutex);
+		VLOG("PUSH: BeginFrame (curFrame = %d, readyForFence = %d, time=%0.3f)", curFrame, (int)frameData.readyForFence, time_now_d());
 		while (!frameData.readyForFence) {
 			frameData.fenceCondVar.wait(lock);
 		}
@@ -371,24 +378,12 @@ void GLRenderManager::BeginFrame(bool enableProfiling) {
 void GLRenderManager::Finish() {
 	curRenderStep_ = nullptr;  // EndCurRenderStep is this simple here.
 
-	int curFrame = GetCurFrame();
+	int curFrame = curFrame_;
 	GLFrameData &frameData = frameData_[curFrame];
 
+	frameTimeHistory_[frameData.frameId].firstSubmit = time_now_d();
+
 	frameData_[curFrame].deleter.Take(deleter_);
-
-	VLOG("PUSH: Finish, pushing task. curFrame = %d", curFrame);
-	GLRRenderThreadTask *task = new GLRRenderThreadTask(GLRRunType::PRESENT);
-	task->frame = curFrame;
-
-	{
-		std::unique_lock<std::mutex> lock(pushMutex_);
-		renderThreadQueue_.push(task);
-		renderThreadQueue_.back()->initSteps = std::move(initSteps_);
-		renderThreadQueue_.back()->steps = std::move(steps_);
-		initSteps_.clear();
-		steps_.clear();
-		pushCondVar_.notify_one();
-	}
 
 	if (frameData.profile.enabled) {
 		profilePassesString_ = std::move(frameData.profile.passesString);
@@ -407,16 +402,75 @@ void GLRenderManager::Finish() {
 		frameData.profile.passesString.clear();
 	}
 
-	curFrame_++;
-	if (curFrame_ >= inflightFrames_)
-		curFrame_ = 0;
+	VLOG("PUSH: Finish, pushing task. curFrame = %d", curFrame);
+	GLRRenderThreadTask *task = new GLRRenderThreadTask(GLRRunType::SUBMIT);
+	task->frame = curFrame;
+	{
+		std::unique_lock<std::mutex> lock(pushMutex_);
+		renderThreadQueue_.push(task);
+		renderThreadQueue_.back()->initSteps = std::move(initSteps_);
+		renderThreadQueue_.back()->steps = std::move(steps_);
+		initSteps_.clear();
+		steps_.clear();
+		pushCondVar_.notify_one();
+	}
+}
+
+void GLRenderManager::Present() {
+	GLRRenderThreadTask *presentTask = new GLRRenderThreadTask(GLRRunType::PRESENT);
+	presentTask->frame = curFrame_;
+	{
+		std::unique_lock<std::mutex> lock(pushMutex_);
+		renderThreadQueue_.push(presentTask);
+		pushCondVar_.notify_one();
+	}
+
+	int newCurFrame = curFrame_ + 1;
+	if (newCurFrame >= inflightFrames_) {
+		newCurFrame = 0;
+	}
+	curFrame_ = newCurFrame;
 
 	insideFrame_ = false;
 }
 
 // Render thread. Returns true if the caller should handle a swap.
 bool GLRenderManager::Run(GLRRenderThreadTask &task) {
+	_dbg_assert_(task.frame >= 0);
+
 	GLFrameData &frameData = frameData_[task.frame];
+
+	if (task.runType == GLRRunType::PRESENT) {
+		bool swapRequest = false;
+		if (!frameData.skipSwap) {
+			frameTimeHistory_[frameData.frameId].queuePresent = time_now_d();
+			if (swapIntervalChanged_) {
+				swapIntervalChanged_ = false;
+				if (swapIntervalFunction_) {
+					swapIntervalFunction_(swapInterval_);
+				}
+			}
+			// This is the swapchain framebuffer flip.
+			if (swapFunction_) {
+				VLOG("  PULL: SwapFunction()");
+				swapFunction_();
+			}
+			swapRequest = true;
+		} else {
+			frameData.skipSwap = false;
+		}
+		frameData.hasBegun = false;
+
+		VLOG("  PULL: Frame %d.readyForFence = true", task.frame);
+
+		{
+			std::lock_guard<std::mutex> lock(frameData.fenceMutex);
+			frameData.readyForFence = true;
+			frameData.fenceCondVar.notify_one();
+			// At this point, we're done with this framedata (for now).
+		}
+		return swapRequest;
+	}
 
 	if (!frameData.hasBegun) {
 		frameData.hasBegun = true;
@@ -461,43 +515,8 @@ bool GLRenderManager::Run(GLRRenderThreadTask &task) {
 		}
 	}
 
-	bool swapRequest = false;
-
 	switch (task.runType) {
-	case GLRRunType::PRESENT:
-		if (!frameData.skipSwap) {
-			if (swapIntervalChanged_) {
-				swapIntervalChanged_ = false;
-				if (swapIntervalFunction_) {
-					swapIntervalFunction_(swapInterval_);
-				}
-			}
-			// This is the swapchain framebuffer flip.
-			if (swapFunction_) {
-				VLOG("  PULL: SwapFunction()");
-				swapFunction_();
-				if (!retainControl_) {
-					// get out of here.
-					swapRequest = true;
-				}
-			} else {
-				VLOG("  PULL: SwapRequested");
-				swapRequest = true;
-			}
-		} else {
-			frameData.skipSwap = false;
-		}
-		frameData.hasBegun = false;
-
-		VLOG("  PULL: Frame %d.readyForFence = true", task.frame);
-
-		{
-			std::lock_guard<std::mutex> lock(frameData.fenceMutex);
-			frameData.readyForFence = true;
-			frameData.fenceCondVar.notify_one();
-			// At this point, we're done with this framedata (for now).
-		}
-
+	case GLRRunType::SUBMIT:
 		break;
 
 	case GLRRunType::SYNC:
@@ -506,7 +525,7 @@ bool GLRenderManager::Run(GLRRenderThreadTask &task) {
 		// glFinish is not actually necessary here, and won't be unless we start using
 		// glBufferStorage. Then we need to use fences.
 		{
-			std::unique_lock<std::mutex> lock(syncMutex_);
+			std::lock_guard<std::mutex> lock(syncMutex_);
 			syncDone_ = true;
 			syncCondVar_.notify_one();
 		}
@@ -516,7 +535,7 @@ bool GLRenderManager::Run(GLRRenderThreadTask &task) {
 		_assert_(false);
 	}
 	VLOG("  PULL: ::Run(): Done running tasks");
-	return swapRequest;
+	return false;
 }
 
 void GLRenderManager::FlushSync() {

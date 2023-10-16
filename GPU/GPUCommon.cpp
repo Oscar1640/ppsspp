@@ -67,13 +67,11 @@ GPUCommon::GPUCommon(GraphicsContext *gfxCtx, Draw::DrawContext *draw) :
 	gstate_c.Reset();
 	gpuStats.Reset();
 
-	UpdateVsyncInterval(true);
 	PPGeSetDrawContext(draw);
 	ResetMatrices();
 }
 
 void GPUCommon::BeginHostFrame() {
-	UpdateVsyncInterval(displayResized_);
 	ReapplyGfxState();
 
 	// TODO: Assume config may have changed - maybe move to resize.
@@ -113,38 +111,6 @@ void GPUCommon::Reinitialize() {
 		textureCache_->Clear(true);
 	if (framebufferManager_)
 		framebufferManager_->DestroyAllFBOs();
-}
-
-void GPUCommon::UpdateVsyncInterval(bool force) {
-#if !(PPSSPP_PLATFORM(ANDROID) || defined(USING_QT_UI) || PPSSPP_PLATFORM(UWP) || PPSSPP_PLATFORM(IOS))
-	int desiredVSyncInterval = g_Config.bVSync ? 1 : 0;
-	if (PSP_CoreParameter().fastForward) {
-		desiredVSyncInterval = 0;
-	}
-	if (PSP_CoreParameter().fpsLimit != FPSLimit::NORMAL) {
-		int limit;
-		if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM1)
-			limit = g_Config.iFpsLimit1;
-		else if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM2)
-			limit = g_Config.iFpsLimit2;
-		else
-			limit = PSP_CoreParameter().analogFpsLimit;
-
-		// For an alternative speed that is a clean factor of 60, the user probably still wants vsync.
-		if (limit == 0 || (limit >= 0 && limit != 15 && limit != 30 && limit != 60)) {
-			desiredVSyncInterval = 0;
-		}
-	}
-
-	if (desiredVSyncInterval != lastVsync_ || force) {
-		// Disabled EXT_swap_control_tear for now, it never seems to settle at the correct timing
-		// so it just keeps tearing. Not what I hoped for... (gl_extensions.EXT_swap_control_tear)
-		// See http://developer.download.nvidia.com/opengl/specs/WGL_EXT_swap_control_tear.txt
-		if (gfxCtx_)
-			gfxCtx_->SwapInterval(desiredVSyncInterval);
-		lastVsync_ = desiredVSyncInterval;
-	}
-#endif
 }
 
 int GPUCommon::EstimatePerVertexCost() {
@@ -937,6 +903,7 @@ void GPUCommon::Execute_BJump(u32 op, u32 diff) {
 	if (!currentList->bboxResult) {
 		// bounding box jump.
 		const u32 target = gstate_c.getRelativeAddress(op & 0x00FFFFFC);
+		gpuStats.numBBOXJumps++;
 		if (Memory::IsValidAddress(target)) {
 			UpdatePC(currentList->pc, target - 4);
 			currentList->pc = target - 4; // pc will be increased after we return, counteract that
@@ -1704,6 +1671,7 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 	int bpp = gstate.getTransferBpp();
 
 	DEBUG_LOG(G3D, "Block transfer: %08x/%x -> %08x/%x, %ix%ix%i (%i,%i)->(%i,%i)", srcBasePtr, srcStride, dstBasePtr, dstStride, width, height, bpp, srcX, srcY, dstX, dstY);
+	gpuStats.numBlockTransfers++;
 
 	// For VRAM, we wrap around when outside valid memory (mirrors still work.)
 	if ((srcBasePtr & 0x04800000) == 0x04800000)
@@ -1743,9 +1711,7 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 			memcpy(dstp, srcp, bytesToCopy);
 
 			if (MemBlockInfoDetailed(bytesToCopy)) {
-				tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUBlockTransfer/", src, bytesToCopy);
-				NotifyMemInfo(MemBlockFlags::READ, src, bytesToCopy, tag, tagSize);
-				NotifyMemInfo(MemBlockFlags::WRITE, dst, bytesToCopy, tag, tagSize);
+				NotifyMemInfoCopy(dst, src, bytesToCopy, "GPUBlockTransfer/");
 			}
 		} else if ((srcDstOverlap || srcWraps || dstWraps) && (srcValid || srcWraps) && (dstValid || dstWraps)) {
 			// This path means we have either src/dst overlap, OR one or both of src and dst wrap.
@@ -1901,12 +1867,11 @@ bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags
 			// We use matching values in PerformReadbackToMemory/PerformWriteColorFromMemory.
 			// Since they're identical we don't need to copy.
 			if (dest != src) {
+				if (Memory::IsValidRange(dest, size) && Memory::IsValidRange(src, size)) {
+					memcpy(Memory::GetPointerWriteUnchecked(dest), Memory::GetPointerUnchecked(src), size);
+				}
 				if (MemBlockInfoDetailed(size)) {
-					char tag[128];
-					size_t tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUMemcpy/", src, size);
-					Memory::Memcpy(dest, src, size, tag, tagSize);
-				} else {
-					Memory::Memcpy(dest, src, size, "GPUMemcpy");
+					NotifyMemInfoCopy(dest, src, size, "GPUMemcpy/");
 				}
 			}
 		}
@@ -1915,10 +1880,7 @@ bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags
 	}
 
 	if (MemBlockInfoDetailed(size)) {
-		char tag[128];
-		size_t tagSize = FormatMemWriteTagAt(tag, sizeof(tag), "GPUMemcpy/", src, size);
-		NotifyMemInfo(MemBlockFlags::READ, src, size, tag, tagSize);
-		NotifyMemInfo(MemBlockFlags::WRITE, dest, size, tag, tagSize);
+		NotifyMemInfoCopy(dest, src, size, "GPUMemcpy/");
 	}
 	InvalidateCache(dest, size, GPU_INVALIDATE_HINT);
 	if (!(flags & GPUCopyFlag::DEBUG_NOTIFIED))
@@ -1993,7 +1955,7 @@ bool GPUCommon::DescribeCodePtr(const u8 *ptr, std::string &name) {
 
 void GPUCommon::UpdateUVScaleOffset() {
 #ifdef _M_SSE
-	__m128i values = _mm_slli_epi32(_mm_load_si128((const __m128i *) & gstate.texscaleu), 8);
+	__m128i values = _mm_slli_epi32(_mm_load_si128((const __m128i *)&gstate.texscaleu), 8);
 	_mm_storeu_si128((__m128i *)&gstate_c.uv, values);
 #elif PPSSPP_ARCH(ARM_NEON)
 	const uint32x4_t values = vshlq_n_u32(vld1q_u32((const u32 *)&gstate.texscaleu), 8);

@@ -47,6 +47,7 @@
 #include "Common/Thread/ThreadUtil.h"
 #include "Common/GPU/Vulkan/VulkanLoader.h"
 #include "Common/VR/PPSSPPVR.h"
+#include "Common/System/OSD.h"
 #include "Core/Config.h"
 #include "Core/ConfigSettings.h"
 #include "Core/ConfigValues.h"
@@ -57,7 +58,7 @@
 #include "GPU/Common/FramebufferManagerCommon.h"
 
 // TODO: Find a better place for this.
-http::Downloader g_DownloadManager;
+http::RequestManager g_DownloadManager;
 
 Config g_Config;
 
@@ -129,17 +130,26 @@ std::string CreateRandMAC() {
 }
 
 static int DefaultCpuCore() {
-#if PPSSPP_ARCH(ARM) || PPSSPP_ARCH(ARM64) || PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64)
+#if PPSSPP_ARCH(ARM) || PPSSPP_ARCH(ARM64) || PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64) || PPSSPP_ARCH(RISCV64)
 	if (System_GetPropertyBool(SYSPROP_CAN_JIT))
 		return (int)CPUCore::JIT;
-	return (int)CPUCore::IR_JIT;
+	return (int)CPUCore::IR_INTERPRETER;
 #else
-	return (int)CPUCore::IR_JIT;
+	return (int)CPUCore::IR_INTERPRETER;
 #endif
 }
 
 static bool DefaultCodeGen() {
-#if PPSSPP_ARCH(ARM) || PPSSPP_ARCH(ARM64) || PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64)
+#if PPSSPP_ARCH(ARM) || PPSSPP_ARCH(ARM64) || PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64) || PPSSPP_ARCH(RISCV64)
+	return true;
+#else
+	return false;
+#endif
+}
+
+static bool DefaultVSync() {
+#if PPSSPP_PLATFORM(ANDROID) || PPSSPP_PLATFORM(UWP)
+	// Previously we didn't allow turning off vsync/FIFO on Android. Let's set the default accordingly.
 	return true;
 #else
 	return false;
@@ -177,11 +187,13 @@ static const ConfigSetting generalSettings[] = {
 	ConfigSetting("DiscordPresence", &g_Config.bDiscordPresence, true, CfgFlag::DEFAULT),  // Or maybe it makes sense to have it per-game? Race conditions abound...
 	ConfigSetting("UISound", &g_Config.bUISound, false, CfgFlag::DEFAULT),
 
+	ConfigSetting("DisableHTTPS", &g_Config.bDisableHTTPS, false, CfgFlag::DONT_SAVE),
 	ConfigSetting("AutoLoadSaveState", &g_Config.iAutoLoadSaveState, 0, CfgFlag::PER_GAME),
 	ConfigSetting("EnableCheats", &g_Config.bEnableCheats, false, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("CwCheatRefreshRate", &g_Config.iCwCheatRefreshRate, 77, CfgFlag::PER_GAME),
 	ConfigSetting("CwCheatScrollPosition", &g_Config.fCwCheatScrollPosition, 0.0f, CfgFlag::PER_GAME),
 	ConfigSetting("GameListScrollPosition", &g_Config.fGameListScrollPosition, 0.0f, CfgFlag::DEFAULT),
+	ConfigSetting("DebugOverlay", &g_Config.iDebugOverlay, 0, CfgFlag::DONT_SAVE),
 
 	ConfigSetting("ScreenshotsAsPNG", &g_Config.bScreenshotsAsPNG, false, CfgFlag::PER_GAME),
 	ConfigSetting("UseFFV1", &g_Config.bUseFFV1, false, CfgFlag::DEFAULT),
@@ -269,11 +281,11 @@ static bool DefaultSasThread() {
 }
 
 static const ConfigSetting achievementSettings[] = {
+	// Core settings
 	ConfigSetting("AchievementsEnable", &g_Config.bAchievementsEnable, true, CfgFlag::DEFAULT),
 	ConfigSetting("AchievementsChallengeMode", &g_Config.bAchievementsChallengeMode, false, CfgFlag::DEFAULT),
 	ConfigSetting("AchievementsEncoreMode", &g_Config.bAchievementsEncoreMode, false, CfgFlag::DEFAULT),
 	ConfigSetting("AchievementsUnofficial", &g_Config.bAchievementsUnofficial, false, CfgFlag::DEFAULT),
-	ConfigSetting("AchievementsSoundEffects", &g_Config.bAchievementsSoundEffects, true, CfgFlag::DEFAULT),
 	ConfigSetting("AchievementsLogBadMemReads", &g_Config.bAchievementsLogBadMemReads, false, CfgFlag::DEFAULT),
 
 	// Achievements login info. Note that password is NOT stored, only a login token.
@@ -281,6 +293,18 @@ static const ConfigSetting achievementSettings[] = {
 	// from the ini if manually entered (useful when testing various builds on Android).
 	ConfigSetting("AchievementsToken", &g_Config.sAchievementsToken, "", CfgFlag::DONT_SAVE),
 	ConfigSetting("AchievementsUserName", &g_Config.sAchievementsUserName, "", CfgFlag::DEFAULT),
+
+	// Customizations
+	ConfigSetting("AchievementsSoundEffects", &g_Config.bAchievementsSoundEffects, true, CfgFlag::DEFAULT),
+	ConfigSetting("AchievementsUnlockAudioFile", &g_Config.sAchievementsUnlockAudioFile, "", CfgFlag::DEFAULT),
+	ConfigSetting("AchievementsLeaderboardSubmitAudioFile", &g_Config.sAchievementsLeaderboardSubmitAudioFile, "", CfgFlag::DEFAULT),
+
+	ConfigSetting("AchievementsLeaderboardTrackerPos", &g_Config.iAchievementsLeaderboardTrackerPos, (int)ScreenEdgePosition::TOP_LEFT, CfgFlag::DEFAULT),
+	ConfigSetting("AchievementsLeaderboardStartedOrFailedPos", &g_Config.iAchievementsLeaderboardStartedOrFailedPos, (int)ScreenEdgePosition::TOP_LEFT, CfgFlag::DEFAULT),
+	ConfigSetting("AchievementsLeaderboardSubmittedPos", &g_Config.iAchievementsLeaderboardSubmittedPos, (int)ScreenEdgePosition::TOP_LEFT, CfgFlag::DEFAULT),
+	ConfigSetting("AchievementsProgressPos", &g_Config.iAchievementsProgressPos, (int)ScreenEdgePosition::TOP_LEFT, CfgFlag::DEFAULT),
+	ConfigSetting("AchievementsChallengePos", &g_Config.iAchievementsChallengePos, (int)ScreenEdgePosition::TOP_LEFT, CfgFlag::DEFAULT),
+	ConfigSetting("AchievementsUnlockedPos", &g_Config.iAchievementsUnlockedPos, (int)ScreenEdgePosition::TOP_CENTER, CfgFlag::DEFAULT),
 };
 
 static const ConfigSetting cpuSettings[] = {
@@ -375,6 +399,12 @@ static int DefaultGPUBackend() {
 	// unreliable to default to (with some exceptions, of course).
 #if PPSSPP_ARCH(64BIT)
 	if (System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 27) {
+		return (int)GPUBackend::VULKAN;
+	}
+#else
+	// There are some newer devices that benefit from Vulkan as default, but are 32-bit. Example: Redmi 9A.
+	// Let's only allow the very newest generation though.
+	if (System_GetPropertyInt(SYSPROP_SYSTEMVERSION) >= 30) {
 		return (int)GPUBackend::VULKAN;
 	}
 #endif
@@ -564,7 +594,6 @@ static const ConfigSetting graphicsSettings[] = {
 	ConfigSetting("AnisotropyLevel", &g_Config.iAnisotropyLevel, 4, CfgFlag::PER_GAME),
 	ConfigSetting("MultiSampleLevel", &g_Config.iMultiSampleLevel, 0, CfgFlag::PER_GAME),  // Number of samples is 1 << iMultiSampleLevel
 
-	ConfigSetting("VertexDecCache", &g_Config.bVertexCache, false, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("TextureBackoffCache", &g_Config.bTextureBackoffCache, false, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("VertexDecJit", &g_Config.bVertexDecoderJit, &DefaultCodeGen, CfgFlag::DONT_SAVE | CfgFlag::REPORT),
 
@@ -593,7 +622,7 @@ static const ConfigSetting graphicsSettings[] = {
 	ConfigSetting("TexScalingType", &g_Config.iTexScalingType, 0, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("TexDeposterize", &g_Config.bTexDeposterize, false, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("TexHardwareScaling", &g_Config.bTexHardwareScaling, false, CfgFlag::PER_GAME | CfgFlag::REPORT),
-	ConfigSetting("VSyncInterval", &g_Config.bVSync, false, CfgFlag::PER_GAME),
+	ConfigSetting("VSync", &g_Config.bVSync, &DefaultVSync, CfgFlag::PER_GAME),
 	ConfigSetting("BloomHack", &g_Config.iBloomHack, 2, CfgFlag::PER_GAME | CfgFlag::REPORT),
 
 	// Not really a graphics setting...
@@ -610,8 +639,13 @@ static const ConfigSetting graphicsSettings[] = {
 	ConfigSetting("InflightFrames", &g_Config.iInflightFrames, 3, CfgFlag::DEFAULT),
 	ConfigSetting("RenderDuplicateFrames", &g_Config.bRenderDuplicateFrames, false, CfgFlag::PER_GAME),
 
+	ConfigSetting("MultiThreading", &g_Config.bRenderMultiThreading, true, CfgFlag::DEFAULT),
+
 	ConfigSetting("ShaderCache", &g_Config.bShaderCache, true, CfgFlag::DONT_SAVE),  // Doesn't save. Ini-only.
 	ConfigSetting("GpuLogProfiler", &g_Config.bGpuLogProfiler, false, CfgFlag::DEFAULT),
+
+	ConfigSetting("UberShaderVertex", &g_Config.bUberShaderVertex, true, CfgFlag::DEFAULT),
+	ConfigSetting("UberShaderFragment", &g_Config.bUberShaderFragment, true, CfgFlag::DEFAULT),
 };
 
 static const ConfigSetting soundSettings[] = {
@@ -776,6 +810,10 @@ static const ConfigSetting controlSettings[] = {
 	ConfigSetting("MouseSmoothing", &g_Config.fMouseSmoothing, 0.9f, CfgFlag::PER_GAME),
 
 	ConfigSetting("SystemControls", &g_Config.bSystemControls, true, CfgFlag::DEFAULT),
+	ConfigSetting("RapidFileInterval", &g_Config.iRapidFireInterval, 5, CfgFlag::DEFAULT),
+
+	ConfigSetting("AnalogGesture", &g_Config.bAnalogGesture, false, CfgFlag::PER_GAME),
+	ConfigSetting("AnalogGestureSensibility", &g_Config.fAnalogGestureSensibility, 1.0f, CfgFlag::PER_GAME),
 };
 
 static const ConfigSetting networkSettings[] = {
@@ -789,8 +827,8 @@ static const ConfigSetting networkSettings[] = {
 	ConfigSetting("UPnPUseOriginalPort", &g_Config.bUPnPUseOriginalPort, false, CfgFlag::PER_GAME),
 
 	ConfigSetting("EnableNetworkChat", &g_Config.bEnableNetworkChat, false, CfgFlag::PER_GAME),
-	ConfigSetting("ChatButtonPosition",&g_Config.iChatButtonPosition,BOTTOM_LEFT, CfgFlag::PER_GAME),
-	ConfigSetting("ChatScreenPosition",&g_Config.iChatScreenPosition,BOTTOM_LEFT, CfgFlag::PER_GAME),
+	ConfigSetting("ChatButtonPosition", &g_Config.iChatButtonPosition, (int)ScreenEdgePosition::BOTTOM_LEFT, CfgFlag::PER_GAME),
+	ConfigSetting("ChatScreenPosition", &g_Config.iChatScreenPosition, (int)ScreenEdgePosition::BOTTOM_LEFT, CfgFlag::PER_GAME),
 	ConfigSetting("EnableQuickChat", &g_Config.bEnableQuickChat, true, CfgFlag::PER_GAME),
 	ConfigSetting("QuickChat1", &g_Config.sQuickChat0, "Quick Chat 1", CfgFlag::PER_GAME),
 	ConfigSetting("QuickChat2", &g_Config.sQuickChat1, "Quick Chat 2", CfgFlag::PER_GAME),
@@ -799,25 +837,12 @@ static const ConfigSetting networkSettings[] = {
 	ConfigSetting("QuickChat5", &g_Config.sQuickChat4, "Quick Chat 5", CfgFlag::PER_GAME),
 };
 
-static int DefaultSystemParamLanguage() {
-	int defaultLang = PSP_SYSTEMPARAM_LANGUAGE_ENGLISH;
-	if (g_Config.bFirstRun) {
-		// TODO: Be smart about same language, different country
-		auto &langValuesMapping = g_Config.GetLangValuesMapping();
-		auto iter = langValuesMapping.find(g_Config.sLanguageIni);
-		if (iter != langValuesMapping.end()) {
-			defaultLang = iter->second.second;
-		}
-	}
-	return defaultLang;
-}
-
 static const ConfigSetting systemParamSettings[] = {
 	ConfigSetting("PSPModel", &g_Config.iPSPModel, PSP_MODEL_SLIM, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("PSPFirmwareVersion", &g_Config.iFirmwareVersion, PSP_DEFAULT_FIRMWARE, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("NickName", &g_Config.sNickName, "PPSSPP", CfgFlag::PER_GAME),
 	ConfigSetting("MacAddress", &g_Config.sMACAddress, "", CfgFlag::PER_GAME),
-	ConfigSetting("Language", &g_Config.iLanguage, &DefaultSystemParamLanguage, CfgFlag::PER_GAME | CfgFlag::REPORT),
+	ConfigSetting("GameLanguage", &g_Config.iLanguage, -1, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("ParamTimeFormat", &g_Config.iTimeFormat, PSP_SYSTEMPARAM_TIME_FORMAT_24HR, CfgFlag::PER_GAME),
 	ConfigSetting("ParamDateFormat", &g_Config.iDateFormat, PSP_SYSTEMPARAM_DATE_FORMAT_YYYYMMDD, CfgFlag::PER_GAME),
 	ConfigSetting("TimeZone", &g_Config.iTimeZone, 0, CfgFlag::PER_GAME),
@@ -825,7 +850,7 @@ static const ConfigSetting systemParamSettings[] = {
 	ConfigSetting("ButtonPreference", &g_Config.iButtonPreference, PSP_SYSTEMPARAM_BUTTON_CROSS, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("LockParentalLevel", &g_Config.iLockParentalLevel, 0, CfgFlag::PER_GAME),
 	ConfigSetting("WlanAdhocChannel", &g_Config.iWlanAdhocChannel, PSP_SYSTEMPARAM_ADHOC_CHANNEL_AUTOMATIC, CfgFlag::PER_GAME),
-#if defined(USING_WIN_UI) || defined(USING_QT_UI) || PPSSPP_PLATFORM(ANDROID)
+#if defined(USING_WIN_UI) || defined(USING_QT_UI) || PPSSPP_PLATFORM(ANDROID) || PPSSPP_PLATFORM(SWITCH)
 	ConfigSetting("BypassOSKWithKeyboard", &g_Config.bBypassOSKWithKeyboard, false, CfgFlag::PER_GAME),
 #endif
 #if defined(USING_WIN_UI)
@@ -857,13 +882,10 @@ static const ConfigSetting debuggerSettings[] = {
 	ConfigSetting("DisplayStatusBar", &g_Config.bDisplayStatusBar, true, CfgFlag::DEFAULT),
 	ConfigSetting("ShowBottomTabTitles",&g_Config.bShowBottomTabTitles, true, CfgFlag::DEFAULT),
 	ConfigSetting("ShowDeveloperMenu", &g_Config.bShowDeveloperMenu, false, CfgFlag::DEFAULT),
-	ConfigSetting("ShowAllocatorDebug", &g_Config.bShowAllocatorDebug, false, CfgFlag::DONT_SAVE),
-	ConfigSetting("ShowGpuProfile", &g_Config.bShowGpuProfile, false, CfgFlag::DONT_SAVE),
 	ConfigSetting("SkipDeadbeefFilling", &g_Config.bSkipDeadbeefFilling, false, CfgFlag::DEFAULT),
 	ConfigSetting("FuncHashMap", &g_Config.bFuncHashMap, false, CfgFlag::DEFAULT),
 	ConfigSetting("SkipFuncHashMap", &g_Config.sSkipFuncHashMap, "", CfgFlag::DEFAULT),
 	ConfigSetting("MemInfoDetailed", &g_Config.bDebugMemInfoDetailed, false, CfgFlag::DEFAULT),
-	ConfigSetting("DrawFrameGraph", &g_Config.bDrawFrameGraph, false, CfgFlag::DEFAULT),
 };
 
 static const ConfigSetting jitSettings[] = {
@@ -1057,10 +1079,14 @@ void Config::UpdateAfterSettingAutoFrameSkip() {
 }
 
 void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
+	double startTime = time_now_d();
+
 	if (!bUpdatedInstanceCounter) {
 		InitInstanceCounter();
 		bUpdatedInstanceCounter = true;
 	}
+
+	g_DownloadManager.SetUserAgent(StringFromFormat("PPSSPP/%s", PPSSPP_GIT_VERSION));
 
 	UpdateIniLocation(iniFileName, controllerIniFilename);
 
@@ -1177,8 +1203,7 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 	if (iRunCount % 10 == 0 && bCheckForNewVersion) {
 		const char *versionUrl = "http://www.ppsspp.org/version.json";
 		const char *acceptMime = "application/json, text/*; q=0.9, */*; q=0.8";
-		auto dl = g_DownloadManager.StartDownloadWithCallback(versionUrl, Path(), &DownloadCompletedCallback, acceptMime);
-		dl->SetHidden(true);
+		g_DownloadManager.StartDownloadWithCallback(versionUrl, Path(), http::ProgressBarMode::NONE, &DownloadCompletedCallback, "version", acceptMime);
 	}
 
 	INFO_LOG(LOADER, "Loading controller config: %s", controllerIniFilename_.c_str());
@@ -1195,17 +1220,13 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 
 	CleanRecent();
 
-#if PPSSPP_PLATFORM(ANDROID)
-	// The on path here is untested, since we don't expose it.
-	g_Config.bVSync = false;
-#endif
-
 	PostLoadCleanup(false);
 
-	INFO_LOG(LOADER, "Config loaded: '%s'", iniFilename_.c_str());
+	INFO_LOG(LOADER, "Config loaded: '%s' (%0.1f ms)", iniFilename_.c_str(), (time_now_d() - startTime) * 1000.0);
 }
 
 bool Config::Save(const char *saveReason) {
+	double startTime = time_now_d();
 	if (!IsFirstInstance()) {
 		// TODO: Should we allow saving config if started from a different directory?
 		// How do we tell?
@@ -1223,7 +1244,7 @@ bool Config::Save(const char *saveReason) {
 		CleanRecent();
 		IniFile iniFile;
 		if (!iniFile.Load(iniFilename_)) {
-			ERROR_LOG(LOADER, "Error saving config - can't read ini '%s'", iniFilename_.c_str());
+			WARN_LOG(LOADER, "Likely saving config for first time - couldn't read ini '%s'", iniFilename_.c_str());
 		}
 
 		// Need to do this somewhere...
@@ -1284,7 +1305,7 @@ bool Config::Save(const char *saveReason) {
 			ERROR_LOG(LOADER, "Error saving config (%s)- can't write ini '%s'", saveReason, iniFilename_.c_str());
 			return false;
 		}
-		INFO_LOG(LOADER, "Config saved (%s): '%s'", saveReason, iniFilename_.c_str());
+		INFO_LOG(LOADER, "Config saved (%s): '%s' (%0.1f ms)", saveReason, iniFilename_.c_str(), (time_now_d() - startTime) * 1000.0);
 
 		if (!bGameSpecific) //otherwise we already did this in saveGameConfig()
 		{
@@ -1310,9 +1331,9 @@ bool Config::Save(const char *saveReason) {
 
 void Config::PostLoadCleanup(bool gameSpecific) {
 	// Override ppsspp.ini JIT value to prevent crashing
-	jitForcedOff = DefaultCpuCore() != (int)CPUCore::JIT && g_Config.iCpuCore == (int)CPUCore::JIT;
+	jitForcedOff = DefaultCpuCore() != (int)CPUCore::JIT && (g_Config.iCpuCore == (int)CPUCore::JIT || g_Config.iCpuCore == (int)CPUCore::JIT_IR);
 	if (jitForcedOff) {
-		g_Config.iCpuCore = (int)CPUCore::IR_JIT;
+		g_Config.iCpuCore = (int)CPUCore::IR_INTERPRETER;
 	}
 
 	// This caps the exponent 4 (so 16x.)
@@ -1342,7 +1363,7 @@ void Config::PostLoadCleanup(bool gameSpecific) {
 void Config::PreSaveCleanup(bool gameSpecific) {
 	if (jitForcedOff) {
 		// If we forced jit off and it's still set to IR, change it back to jit.
-		if (g_Config.iCpuCore == (int)CPUCore::IR_JIT)
+		if (g_Config.iCpuCore == (int)CPUCore::IR_INTERPRETER)
 			g_Config.iCpuCore = (int)CPUCore::JIT;
 	}
 }
@@ -1351,12 +1372,12 @@ void Config::PostSaveCleanup(bool gameSpecific) {
 	if (jitForcedOff) {
 		// Force JIT off again just in case Config::Save() is called without exiting PPSSPP.
 		if (g_Config.iCpuCore == (int)CPUCore::JIT)
-			g_Config.iCpuCore = (int)CPUCore::IR_JIT;
+			g_Config.iCpuCore = (int)CPUCore::IR_INTERPRETER;
 	}
 }
 
 void Config::NotifyUpdatedCpuCore() {
-	if (jitForcedOff && g_Config.iCpuCore == (int)CPUCore::IR_JIT) {
+	if (jitForcedOff && g_Config.iCpuCore == (int)CPUCore::IR_INTERPRETER) {
 		// No longer forced off, the user set it to IR jit.
 		jitForcedOff = false;
 	}
@@ -1367,7 +1388,7 @@ void Config::NotifyUpdatedCpuCore() {
 #define PPSSPP_GIT_VERSION "v0.0.1-gaaaaaaaaa"
 #endif
 
-void Config::DownloadCompletedCallback(http::Download &download) {
+void Config::DownloadCompletedCallback(http::Request &download) {
 	if (download.ResultCode() != 200) {
 		ERROR_LOG(LOADER, "Failed to download %s: %d", download.url().c_str(), download.ResultCode());
 		return;
@@ -1774,4 +1795,19 @@ void Config::GetReportingInfo(UrlEncoder &data) {
 
 bool Config::IsPortrait() const {
 	return (iInternalScreenRotation == ROTATION_LOCKED_VERTICAL || iInternalScreenRotation == ROTATION_LOCKED_VERTICAL180) && !bSkipBufferEffects;
+}
+
+int Config::GetPSPLanguage() {
+	if (g_Config.iLanguage == -1) {
+		const auto &langValuesMapping = GetLangValuesMapping();
+		auto iter = langValuesMapping.find(g_Config.sLanguageIni);
+		if (iter != langValuesMapping.end()) {
+			return iter->second.second;
+		} else {
+			// Fallback to English
+			return PSP_SYSTEMPARAM_LANGUAGE_ENGLISH;
+		}
+	} else {
+		return g_Config.iLanguage;
+	}
 }

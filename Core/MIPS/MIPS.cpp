@@ -122,7 +122,7 @@ MIPSState::MIPSState() {
 	// * 4x4 Matrices are contiguous in RAM, making them, too, fast-loadable in NEON
 
 	// Disadvantages:
-	// * Extra indirection, can be confusing and slower (interpreter only)
+	// * Extra indirection, can be confusing and slower (interpreter only, however we can often skip the table by rerranging formulas)
 	// * Flushing and reloading row registers is now slower
 
 	int i = 0;
@@ -211,9 +211,9 @@ void MIPSState::Init() {
 	downcount = 0;
 
 	std::lock_guard<std::recursive_mutex> guard(MIPSComp::jitLock);
-	if (PSP_CoreParameter().cpuCore == CPUCore::JIT) {
-		MIPSComp::jit = MIPSComp::CreateNativeJit(this);
-	} else if (PSP_CoreParameter().cpuCore == CPUCore::IR_JIT) {
+	if (PSP_CoreParameter().cpuCore == CPUCore::JIT || PSP_CoreParameter().cpuCore == CPUCore::JIT_IR) {
+		MIPSComp::jit = MIPSComp::CreateNativeJit(this, PSP_CoreParameter().cpuCore == CPUCore::JIT_IR);
+	} else if (PSP_CoreParameter().cpuCore == CPUCore::IR_INTERPRETER) {
 		MIPSComp::jit = new MIPSComp::IRJit(this);
 	} else {
 		MIPSComp::jit = nullptr;
@@ -235,17 +235,18 @@ void MIPSState::UpdateCore(CPUCore desired) {
 
 	switch (PSP_CoreParameter().cpuCore) {
 	case CPUCore::JIT:
-		INFO_LOG(CPU, "Switching to JIT");
+	case CPUCore::JIT_IR:
+		INFO_LOG(CPU, "Switching to JIT%s", PSP_CoreParameter().cpuCore == CPUCore::JIT_IR ? " IR" : "");
 		if (oldjit) {
 			std::lock_guard<std::recursive_mutex> guard(MIPSComp::jitLock);
 			MIPSComp::jit = nullptr;
 			delete oldjit;
 		}
-		newjit = MIPSComp::CreateNativeJit(this);
+		newjit = MIPSComp::CreateNativeJit(this, PSP_CoreParameter().cpuCore == CPUCore::JIT_IR);
 		break;
 
-	case CPUCore::IR_JIT:
-		INFO_LOG(CPU, "Switching to IRJIT");
+	case CPUCore::IR_INTERPRETER:
+		INFO_LOG(CPU, "Switching to IR interpreter");
 		if (oldjit) {
 			std::lock_guard<std::recursive_mutex> guard(MIPSComp::jitLock);
 			MIPSComp::jit = nullptr;
@@ -332,7 +333,8 @@ void MIPSState::SingleStep() {
 int MIPSState::RunLoopUntil(u64 globalTicks) {
 	switch (PSP_CoreParameter().cpuCore) {
 	case CPUCore::JIT:
-	case CPUCore::IR_JIT:
+	case CPUCore::JIT_IR:
+	case CPUCore::IR_INTERPRETER:
 		while (inDelaySlot) {
 			// We must get out of the delay slot before going into jit.
 			SingleStep();

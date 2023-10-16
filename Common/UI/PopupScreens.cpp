@@ -122,12 +122,18 @@ void PopupMultiChoice::UpdateText() {
 	if (index < 0 || index >= numChoices_) {
 		valueText_ = "(invalid choice)";  // Shouldn't happen. Should be no need to translate this.
 	} else {
-		valueText_ = T(category_, choices_[index]);
+		if (choices_[index]) {
+			valueText_ = T(category_, choices_[index]);
+		} else {
+			valueText_ = "";
+		}
 	}
 }
 
 void PopupMultiChoice::ChoiceCallback(int num) {
 	if (num != -1) {
+		_assert_(value_ != nullptr);
+
 		*value_ = num + minVal_;
 		UpdateText();
 
@@ -263,7 +269,7 @@ std::string PopupSliderChoiceFloat::ValueText() const {
 	temp[0] = '\0';
 	if (zeroLabel_.size() && *value_ == 0.0f) {
 		truncate_cpy(temp, zeroLabel_.c_str());
-	} else if (IsValidNumberFormatString(fmt_.c_str())) {
+	} else if (IsValidNumberFormatString(fmt_)) {
 		snprintf(temp, sizeof(temp), fmt_.c_str(), *value_);
 	} else {
 		snprintf(temp, sizeof(temp), "%0.2f", *value_);
@@ -597,7 +603,7 @@ void AbstractChoiceWithValueDisplay::Draw(UIContext &dc) {
 
 	std::string valueText = ValueText();
 
-	if (password_) {
+	if (passwordDisplay_) {
 		// Replace all characters with stars.
 		memset(&valueText[0], '*', valueText.size());
 	}
@@ -652,6 +658,30 @@ std::string ChoiceWithValueDisplay::ValueText() const {
 	}
 
 	return valueText.str();
+}
+
+FileChooserChoice::FileChooserChoice(std::string *value, const std::string &text, BrowseFileType fileType, LayoutParams *layoutParams)
+	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), fileType_(fileType) {
+	OnClick.Add([=](UI::EventParams &) {
+		System_BrowseForFile(text_, fileType, [=](const std::string &returnValue, int) {
+			if (*value_ != returnValue) {
+				*value = returnValue;
+				UI::EventParams e{};
+				e.s = *value;
+				OnChange.Trigger(e);
+			}
+		});
+		return UI::EVENT_DONE;
+	});
+}
+
+std::string FileChooserChoice::ValueText() const {
+	if (value_->empty()) {
+		auto di = GetI18NCategory(I18NCat::DIALOG);
+		return di->T("Default");
+	}
+	Path path(*value_);
+	return path.GetFilename();
 }
 
 }  // namespace

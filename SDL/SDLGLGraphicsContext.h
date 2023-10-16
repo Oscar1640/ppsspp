@@ -16,15 +16,8 @@ public:
 	// Returns 0 on success.
 	int Init(SDL_Window *&window, int x, int y, int w, int h, int mode, std::string *error_message);
 
-	void Shutdown() override;
+	void Shutdown() override {}
 	void ShutdownFromRenderThread() override;
-
-	void SwapBuffers() override {
-		// Do nothing, the render thread takes care of this.
-	}
-
-	// Gets forwarded to the render thread.
-	void SwapInterval(int interval) override;
 
 	void Resize() override {}
 

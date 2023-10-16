@@ -33,7 +33,7 @@ enum class KeyEventResult {
 // Hooks arrow keys for navigation
 KeyEventResult UnsyncKeyEvent(const KeyInput &key, ViewGroup *root);
 
-void KeyEvent(const KeyInput &key, ViewGroup *root);
+bool KeyEvent(const KeyInput &key, ViewGroup *root);
 void TouchEvent(const TouchInput &touch, ViewGroup *root);
 void AxisEvent(const AxisInput &axis, ViewGroup *root);
 
@@ -51,6 +51,8 @@ enum class UISound {
 void SetSoundEnabled(bool enabled);
 void SetSoundCallback(std::function<void(UISound, float)> func);
 
+// This is only meant for actual UI navigation sound, not achievements.
+// Call directly into the player for other UI effects.
 void PlayUISound(UISound sound, float volume = 0.25f);
 
 }  // namespace UI

@@ -44,7 +44,7 @@
 #include "GPU/GLES/ShaderManagerGLES.h"
 #include "GPU/GLES/GPU_GLES.h"
 
-const GLuint glprim[8] = {
+static const GLuint glprim[8] = {
 	// Points, which are expanded to triangles.
 	GL_TRIANGLES,
 	// Lines and line strips, which are also expanded to triangles.
@@ -149,8 +149,6 @@ void DrawEngineGLES::ClearInputLayoutMap() {
 }
 
 void DrawEngineGLES::BeginFrame() {
-	gpuStats.numTrackedVertexArrays = 0;
-
 	FrameData &frameData = frameData_[render_->GetCurFrame()];
 	render_->BeginPushBuffer(frameData.pushIndex);
 	render_->BeginPushBuffer(frameData.pushVertex);
@@ -206,8 +204,8 @@ static inline void VertexAttribSetup(int attrib, int fmt, int stride, int offset
 // TODO: Use VBO and get rid of the vertexData pointers - with that, we will supply only offsets
 GLRInputLayout *DrawEngineGLES::SetupDecFmtForDraw(const DecVtxFormat &decFmt) {
 	uint32_t key = decFmt.id;
-	GLRInputLayout *inputLayout = inputLayoutMap_.Get(key);
-	if (inputLayout) {
+	GLRInputLayout *inputLayout;
+	if (inputLayoutMap_.Get(key, &inputLayout)) {
 		return inputLayout;
 	}
 
@@ -218,7 +216,7 @@ GLRInputLayout *DrawEngineGLES::SetupDecFmtForDraw(const DecVtxFormat &decFmt) {
 	VertexAttribSetup(ATTR_COLOR0, decFmt.c0fmt, decFmt.stride, decFmt.c0off, entries);
 	VertexAttribSetup(ATTR_COLOR1, decFmt.c1fmt, decFmt.stride, decFmt.c1off, entries);
 	VertexAttribSetup(ATTR_NORMAL, decFmt.nrmfmt, decFmt.stride, decFmt.nrmoff, entries);
-	VertexAttribSetup(ATTR_POSITION, decFmt.posfmt, decFmt.stride, decFmt.posoff, entries);
+	VertexAttribSetup(ATTR_POSITION, DecVtxFormat::PosFmt(), decFmt.stride, decFmt.posoff, entries);
 
 	inputLayout = render_->CreateInputLayout(entries);
 	inputLayoutMap_.Insert(key, inputLayout);
@@ -245,9 +243,11 @@ void DrawEngineGLES::DoFlush() {
 		// can't goto bail here, skips too many variable initializations. So let's wipe the most important stuff.
 		indexGen.Reset();
 		decodedVerts_ = 0;
-		numDrawCalls_ = 0;
+		numDrawVerts_ = 0;
+		numDrawInds_ = 0;
 		vertexCountInDrawCalls_ = 0;
-		decodeCounter_ = 0;
+		decodeVertsCounter_ = 0;
+		decodeIndsCounter_ = 0;
 		return;
 	}
 
@@ -271,12 +271,9 @@ void DrawEngineGLES::DoFlush() {
 	uint32_t indexBufferOffset = 0;
 
 	if (vshader->UseHWTransform()) {
-		int vertexCount = 0;
-		bool useElements = true;
-
 		if (decOptions_.applySkinInDecode && (lastVType_ & GE_VTYPE_WEIGHT_MASK)) {
-			// If software skinning, we've already predecoded into "decoded_", and indices
-			// into decIndex_. So push that content.
+			// If software skinning, we're predecoding into "decoded". So make sure we're done, then push that content.
+			DecodeVerts(decoded_);
 			uint32_t size = decodedVerts_ * dec_->GetDecVtxFmt().stride;
 			u8 *dest = (u8 *)frameData.pushVertex->Allocate(size, 4, &vertexBuffer, &vertexBufferOffset);
 			memcpy(dest, decoded_, size);
@@ -284,27 +281,19 @@ void DrawEngineGLES::DoFlush() {
 			// Figure out how much pushbuffer space we need to allocate.
 			int vertsToDecode = ComputeNumVertsToDecode();
 			u8 *dest = (u8 *)frameData.pushVertex->Allocate(vertsToDecode * dec_->GetDecVtxFmt().stride, 4, &vertexBuffer, &vertexBufferOffset);
-			// Indices are decoded in here.
 			DecodeVerts(dest);
 		}
-
-		gpuStats.numUncachedVertsDrawn += indexGen.VertexCount();
+		DecodeInds();
 
 		// If there's only been one primitive type, and it's either TRIANGLES, LINES or POINTS,
 		// there is no need for the index buffer we built. We can then use glDrawArrays instead
 		// for a very minor speed boost. TODO: We can probably detect this case earlier, like before
 		// actually doing any vertex decoding (unless we're doing soft skinning and pre-decode on submit).
-		useElements = !indexGen.SeenOnlyPurePrims();
-		vertexCount = indexGen.VertexCount();
+		bool useElements = !indexGen.SeenOnlyPurePrims();
+		int vertexCount = indexGen.VertexCount();
+		gpuStats.numUncachedVertsDrawn += vertexCount;
 		if (!useElements && indexGen.PureCount()) {
 			vertexCount = indexGen.PureCount();
-		}
-		if (useElements) {
-			uint32_t esz = sizeof(uint16_t) * indexGen.VertexCount();
-			void *dest = frameData.pushIndex->Allocate(esz, 2, &indexBuffer, &indexBufferOffset);
-			// TODO: When we need to apply an index offset, we can apply it directly when copying the indices here.
-			// Of course, minding the maximum value of 65535...
-			memcpy(dest, decIndex_, esz);
 		}
 		prim = indexGen.Prim();
 
@@ -326,6 +315,11 @@ void DrawEngineGLES::DoFlush() {
 		LinkedShader *program = shaderManager_->ApplyFragmentShader(vsid, vshader, pipelineState_, framebufferManager_->UseBufferedRendering());
 		GLRInputLayout *inputLayout = SetupDecFmtForDraw(dec_->GetDecVtxFmt());
 		if (useElements) {
+			uint32_t esz = sizeof(uint16_t) * indexGen.VertexCount();
+			void *dest = frameData.pushIndex->Allocate(esz, 2, &indexBuffer, &indexBufferOffset);
+			// TODO: When we need to apply an index offset, we can apply it directly when copying the indices here.
+			// Of course, minding the maximum value of 65535...
+			memcpy(dest, decIndex_, esz);
 			render_->DrawIndexed(inputLayout,
 				vertexBuffer, vertexBufferOffset,
 				indexBuffer, indexBufferOffset,
@@ -343,6 +337,7 @@ void DrawEngineGLES::DoFlush() {
 			dec_ = GetVertexDecoder(lastVType_);
 		}
 		DecodeVerts(decoded_);
+		DecodeInds();
 
 		bool hasColor = (lastVType_ & GE_VTYPE_COL_MASK) != GE_VTYPE_COL_NONE;
 		if (gstate.isModeThrough()) {
@@ -381,7 +376,7 @@ void DrawEngineGLES::DoFlush() {
 			UpdateCachedViewportState(vpAndScissor_);
 		}
 
-		int maxIndex = indexGen.MaxIndex();
+		int maxIndex = MaxIndex();
 		int vertexCount = indexGen.VertexCount();
 
 		// TODO: Split up into multiple draw calls for GLES 2.0 where you can't guarantee support for more than 0x10000 verts.
@@ -470,27 +465,8 @@ void DrawEngineGLES::DoFlush() {
 	}
 
 bail:
-	gpuStats.numFlushes++;
-	gpuStats.numDrawCalls += numDrawCalls_;
-	gpuStats.numVertsSubmitted += vertexCountInDrawCalls_;
-
-	// TODO: When the next flush has the same vertex format, we can continue with the same offset in the vertex buffer,
-	// and start indexing from a higher value. This is very friendly to OpenGL (where we can't rely on baseindex if we
-	// wanted to avoid rebinding the vertex input every time).
-	indexGen.Reset();
-	decodedVerts_ = 0;
-	numDrawCalls_ = 0;
-	vertexCountInDrawCalls_ = 0;
-	decodeCounter_ = 0;
-	gstate_c.vertexFullAlpha = true;
+	ResetAfterDrawInline();
 	framebufferManager_->SetColorUpdated(gstate_c.skipDrawReason);
-
-	// Now seems as good a time as any to reset the min/max coords, which we may examine later.
-	gstate_c.vertBounds.minU = 512;
-	gstate_c.vertBounds.minV = 512;
-	gstate_c.vertBounds.maxU = 0;
-	gstate_c.vertBounds.maxV = 0;
-
 	GPUDebug::NotifyDraw();
 }
 
@@ -520,7 +496,7 @@ void TessellationDataTransferGLES::SendDataToShader(const SimpleVertex *const *p
 	if (prevSizeU < size_u || prevSizeV < size_v) {
 		prevSizeU = size_u;
 		prevSizeV = size_v;
-		if (!data_tex[0])
+		if (data_tex[0])
 			renderManager_->DeleteTexture(data_tex[0]);
 		data_tex[0] = renderManager_->CreateTexture(GL_TEXTURE_2D, size_u * 3, size_v, 1, 1);
 		renderManager_->TextureImage(data_tex[0], 0, size_u * 3, size_v, 1, Draw::DataFormat::R32G32B32A32_FLOAT, nullptr, GLRAllocType::NONE, false);
@@ -539,7 +515,7 @@ void TessellationDataTransferGLES::SendDataToShader(const SimpleVertex *const *p
 	// Weight U
 	if (prevSizeWU < weights.size_u) {
 		prevSizeWU = weights.size_u;
-		if (!data_tex[1])
+		if (data_tex[1])
 			renderManager_->DeleteTexture(data_tex[1]);
 		data_tex[1] = renderManager_->CreateTexture(GL_TEXTURE_2D, weights.size_u * 2, 1, 1, 1);
 		renderManager_->TextureImage(data_tex[1], 0, weights.size_u * 2, 1, 1, Draw::DataFormat::R32G32B32A32_FLOAT, nullptr, GLRAllocType::NONE, false);
@@ -551,7 +527,7 @@ void TessellationDataTransferGLES::SendDataToShader(const SimpleVertex *const *p
 	// Weight V
 	if (prevSizeWV < weights.size_v) {
 		prevSizeWV = weights.size_v;
-		if (!data_tex[2])
+		if (data_tex[2])
 			renderManager_->DeleteTexture(data_tex[2]);
 		data_tex[2] = renderManager_->CreateTexture(GL_TEXTURE_2D, weights.size_v * 2, 1, 1, 1);
 		renderManager_->TextureImage(data_tex[2], 0, weights.size_v * 2, 1, 1, Draw::DataFormat::R32G32B32A32_FLOAT, nullptr, GLRAllocType::NONE, false);

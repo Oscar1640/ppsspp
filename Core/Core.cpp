@@ -48,10 +48,6 @@
 #include "Windows/InputDevice.h"
 #endif
 
-// Time until we stop considering the core active without user input.
-// Should this be configurable?  2 hours currently.
-static const double ACTIVITY_IDLE_TIMEOUT = 2.0 * 3600.0;
-
 static std::condition_variable m_StepCond;
 static std::mutex m_hStepMutex;
 static std::condition_variable m_InactiveCond;
@@ -63,16 +59,12 @@ static uint32_t steppingAddress = 0;
 static std::set<CoreLifecycleFunc> lifecycleFuncs;
 static std::set<CoreStopRequestFunc> stopFuncs;
 static bool windowHidden = false;
-static double lastActivity = 0.0;
-static double lastKeepAwake = 0.0;
-static GraphicsContext *graphicsContext;
 static bool powerSaving = false;
 
 static MIPSExceptionInfo g_exceptionInfo;
 
 void Core_SetGraphicsContext(GraphicsContext *ctx) {
-	graphicsContext = ctx;
-	PSP_CoreParameter().graphicsContext = graphicsContext;
+	PSP_CoreParameter().graphicsContext = ctx;
 }
 
 void Core_NotifyWindowHidden(bool hidden) {
@@ -80,8 +72,8 @@ void Core_NotifyWindowHidden(bool hidden) {
 	// TODO: Wait until we can react?
 }
 
-void Core_NotifyActivity() {
-	lastActivity = time_now_d();
+bool Core_IsWindowHidden() {
+	return windowHidden;
 }
 
 void Core_ListenLifecycle(CoreLifecycleFunc func) {
@@ -162,20 +154,19 @@ static bool IsWindowSmall(int pixelWidth, int pixelHeight) {
 // TODO: Feels like this belongs elsewhere.
 bool UpdateScreenScale(int width, int height) {
 	bool smallWindow;
-#if defined(USING_QT_UI)
-	g_display.dpi = System_GetPropertyFloat(SYSPROP_DISPLAY_DPI);
+
 	float g_logical_dpi = System_GetPropertyFloat(SYSPROP_DISPLAY_LOGICAL_DPI);
+	g_display.dpi = System_GetPropertyFloat(SYSPROP_DISPLAY_DPI);
+
+	if (g_display.dpi < 0.0f) {
+		g_display.dpi = 96.0f;
+	}
+	if (g_logical_dpi < 0.0f) {
+		g_logical_dpi = 96.0f;
+	}
+
 	g_display.dpi_scale_x = g_logical_dpi / g_display.dpi;
 	g_display.dpi_scale_y = g_logical_dpi / g_display.dpi;
-#elif PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
-	g_display.dpi = System_GetPropertyFloat(SYSPROP_DISPLAY_DPI);
-	g_display.dpi_scale_x = 96.0f / g_display.dpi;
-	g_display.dpi_scale_y = 96.0f / g_display.dpi;
-#else
-	g_display.dpi = 96.0f;
-	g_display.dpi_scale_x = 1.0f;
-	g_display.dpi_scale_y = 1.0f;
-#endif
 	g_display.dpi_scale_real_x = g_display.dpi_scale_x;
 	g_display.dpi_scale_real_y = g_display.dpi_scale_y;
 
@@ -205,59 +196,23 @@ bool UpdateScreenScale(int width, int height) {
 	return false;
 }
 
-// Note: not used on Android.
-void UpdateRunLoop() {
+// Used by Windows, SDL, Qt.
+void UpdateRunLoop(GraphicsContext *ctx) {
+	NativeFrame(ctx);
 	if (windowHidden && g_Config.bPauseWhenMinimized) {
 		sleep_ms(16);
 		return;
 	}
-	NativeUpdate();
-	NativeRender(graphicsContext);
 }
 
-void KeepScreenAwake() {
-#if defined(_WIN32) && !PPSSPP_PLATFORM(UWP)
-	SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-#endif
-}
-
+// Note: not used on Android.
 void Core_RunLoop(GraphicsContext *ctx) {
-	float refreshRate = System_GetPropertyFloat(SYSPROP_DISPLAY_REFRESH_RATE);
-
-	graphicsContext = ctx;
-	while ((GetUIState() != UISTATE_INGAME || !PSP_IsInited()) && GetUIState() != UISTATE_EXIT) {
-		// In case it was pending, we're not in game anymore.  We won't get to Core_Run().
-		Core_StateProcessed();
-		double startTime = time_now_d();
-		UpdateRunLoop();
-
-		// Simple throttling to not burn the GPU in the menu.
-		double diffTime = time_now_d() - startTime;
-		int sleepTime = (int)(1000.0 / refreshRate) - (int)(diffTime * 1000.0);
-		if (sleepTime > 0)
-			sleep_ms(sleepTime);
-		if (!windowHidden) {
-			ctx->SwapBuffers();
-		}
+	if (windowHidden && g_Config.bPauseWhenMinimized) {
+		sleep_ms(16);
+		return;
 	}
 
-	while ((coreState == CORE_RUNNING || coreState == CORE_STEPPING) && GetUIState() == UISTATE_INGAME) {
-		UpdateRunLoop();
-		if (!windowHidden && !Core_IsStepping()) {
-			ctx->SwapBuffers();
-
-			// Keep the system awake for longer than normal for cutscenes and the like.
-			const double now = time_now_d();
-			if (now < lastActivity + ACTIVITY_IDLE_TIMEOUT) {
-				// Only resetting it ever prime number seconds in case the call is expensive.
-				// Using a prime number to ensure there's no interaction with other periodic events.
-				if (now - lastKeepAwake > 89.0 || now < lastKeepAwake) {
-					KeepScreenAwake();
-					lastKeepAwake = now;
-				}
-			}
-		}
-	}
+	NativeFrame(ctx);
 }
 
 void Core_DoSingleStep() {
@@ -326,14 +281,15 @@ void Core_ProcessStepping() {
 }
 
 // Many platforms, like Android, do not call this function but handle things on their own.
-// Instead they simply call NativeRender and NativeUpdate directly.
+// Instead they simply call NativeFrame directly.
 bool Core_Run(GraphicsContext *ctx) {
 	System_Notify(SystemNotification::DISASSEMBLY);
 	while (true) {
 		if (GetUIState() != UISTATE_INGAME) {
 			Core_StateProcessed();
 			if (GetUIState() == UISTATE_EXIT) {
-				UpdateRunLoop();
+				// Not sure why we do a final frame here?
+				NativeFrame(ctx);
 				return false;
 			}
 			Core_RunLoop(ctx);
@@ -343,6 +299,7 @@ bool Core_Run(GraphicsContext *ctx) {
 		switch (coreState) {
 		case CORE_RUNNING:
 		case CORE_STEPPING:
+			Core_StateProcessed();
 			// enter a fast runloop
 			Core_RunLoop(ctx);
 			if (coreState == CORE_POWERDOWN) {
@@ -357,7 +314,6 @@ bool Core_Run(GraphicsContext *ctx) {
 		case CORE_RUNTIME_ERROR:
 			// Exit loop!!
 			Core_StateProcessed();
-
 			return true;
 
 		case CORE_NEXTFRAME:
@@ -437,7 +393,7 @@ const char *ExecExceptionTypeAsString(ExecExceptionType type) {
 void Core_MemoryException(u32 address, u32 accessSize, u32 pc, MemoryExceptionType type) {
 	const char *desc = MemoryExceptionTypeAsString(type);
 	// In jit, we only flush PC when bIgnoreBadMemAccess is off.
-	if (g_Config.iCpuCore == (int)CPUCore::JIT && g_Config.bIgnoreBadMemAccess) {
+	if ((g_Config.iCpuCore == (int)CPUCore::JIT || g_Config.iCpuCore == (int)CPUCore::JIT_IR) && g_Config.bIgnoreBadMemAccess) {
 		WARN_LOG(MEMMAP, "%s: Invalid access at %08x (size %08x)", desc, address, accessSize);
 	} else {
 		WARN_LOG(MEMMAP, "%s: Invalid access at %08x (size %08x) PC %08x LR %08x", desc, address, accessSize, currentMIPS->pc, currentMIPS->r[MIPS_REG_RA]);
@@ -465,7 +421,7 @@ void Core_MemoryException(u32 address, u32 accessSize, u32 pc, MemoryExceptionTy
 void Core_MemoryExceptionInfo(u32 address, u32 accessSize, u32 pc, MemoryExceptionType type, std::string additionalInfo, bool forceReport) {
 	const char *desc = MemoryExceptionTypeAsString(type);
 	// In jit, we only flush PC when bIgnoreBadMemAccess is off.
-	if (g_Config.iCpuCore == (int)CPUCore::JIT && g_Config.bIgnoreBadMemAccess) {
+	if ((g_Config.iCpuCore == (int)CPUCore::JIT || g_Config.iCpuCore == (int)CPUCore::JIT_IR) && g_Config.bIgnoreBadMemAccess) {
 		WARN_LOG(MEMMAP, "%s: Invalid access at %08x (size %08x). %s", desc, address, accessSize, additionalInfo.c_str());
 	} else {
 		WARN_LOG(MEMMAP, "%s: Invalid access at %08x (size %08x) PC %08x LR %08x %s", desc, address, accessSize, currentMIPS->pc, currentMIPS->r[MIPS_REG_RA], additionalInfo.c_str());

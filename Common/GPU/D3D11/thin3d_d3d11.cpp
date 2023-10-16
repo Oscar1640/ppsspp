@@ -11,6 +11,7 @@
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Data/Encoding/Utf8.h"
+#include "Common/TimeUtil.h"
 #include "Common/Log.h"
 
 #include <map>
@@ -62,7 +63,7 @@ public:
 
 class D3D11DrawContext : public DrawContext {
 public:
-	D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *deviceContext, ID3D11Device1 *device1, ID3D11DeviceContext1 *deviceContext1, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, std::vector<std::string> deviceList);
+	D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *deviceContext, ID3D11Device1 *device1, ID3D11DeviceContext1 *deviceContext1, IDXGISwapChain *swapChain, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, std::vector<std::string> deviceList, int maxInflightFrames);
 	~D3D11DrawContext();
 
 	const DeviceCaps &GetDeviceCaps() const override {
@@ -75,10 +76,6 @@ public:
 		return (uint32_t)ShaderLanguage::HLSL_D3D11;
 	}
 	uint32_t GetDataFormatSupport(DataFormat fmt) const override;
-	PresentationMode GetPresentationMode() const override {
-		// TODO: Fix. Not yet used.
-		return PresentationMode::FIFO;
-	}
 
 	InputLayout *CreateInputLayout(const InputLayoutDesc &desc) override;
 	DepthStencilState *CreateDepthStencilState(const DepthStencilStateDesc &desc) override;
@@ -137,8 +134,9 @@ public:
 	void DrawUP(const void *vdata, int vertexCount) override;
 	void Clear(int mask, uint32_t colorval, float depthVal, int stencilVal) override;
 
-	// void BeginFrame() override; //Libretro bs
+	void BeginFrame(DebugFlags debugFlags) override;
 	void EndFrame() override;
+	void Present(PresentMode presentMode, int vblanks) override;
 
 	int GetFrameCount() override { return frameCount_; }
 
@@ -181,9 +179,10 @@ private:
 
 	HWND hWnd_;
 	ID3D11Device *device_;
-	ID3D11DeviceContext *context_;
 	ID3D11Device1 *device1_;
+	ID3D11DeviceContext *context_;
 	ID3D11DeviceContext1 *context1_;
+	IDXGISwapChain *swapChain_;
 
 	ID3D11Texture2D *bbRenderTargetTex_ = nullptr; // NOT OWNED
 	ID3D11RenderTargetView *bbRenderTargetView_ = nullptr;
@@ -223,7 +222,7 @@ private:
 	int nextIndexBufferOffset_ = 0;
 
 	InvalidationCallback invalidationCallback_;
-	int frameCount_ = 0;
+	int frameCount_ = FRAME_TIME_HISTORY_LENGTH;
 
 	// Dynamic state
 	float blendFactor_[4]{};
@@ -244,13 +243,14 @@ private:
 	std::vector<std::string> deviceList_;
 };
 
-D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *deviceContext, ID3D11Device1 *device1, ID3D11DeviceContext1 *deviceContext1, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, std::vector<std::string> deviceList)
+D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *deviceContext, ID3D11Device1 *device1, ID3D11DeviceContext1 *deviceContext1, IDXGISwapChain *swapChain, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, std::vector<std::string> deviceList, int maxInflightFrames)
 	: hWnd_(hWnd),
 		device_(device),
 		context_(deviceContext1),
 		device1_(device1),
 		context1_(deviceContext1),
 		featureLevel_(featureLevel),
+		swapChain_(swapChain),
 		deviceList_(deviceList) {
 
 	// We no longer support Windows Phone.
@@ -280,6 +280,10 @@ D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *de
 	caps_.fragmentShaderStencilWriteSupported = false;
 	caps_.blendMinMaxSupported = true;
 	caps_.multiSampleLevelsMask = 1;   // More could be supported with some work.
+
+	caps_.presentInstantModeChange = true;
+	caps_.presentMaxInterval = 4;
+	caps_.presentModesSupported = PresentMode::FIFO | PresentMode::IMMEDIATE;
 
 	D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
 	HRESULT result = device_->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options));
@@ -346,6 +350,13 @@ D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *de
 	const size_t UP_MAX_BYTES = 65536 * 24;
 
 	upBuffer_ = CreateBuffer(UP_MAX_BYTES, BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
+
+	IDXGIDevice1 *dxgiDevice1 = nullptr;
+	hr = device_->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&dxgiDevice1));
+	if (SUCCEEDED(hr)) {
+		caps_.setMaxFrameLatencySupported = true;
+		dxgiDevice1->SetMaximumFrameLatency(maxInflightFrames);
+	}
 }
 
 D3D11DrawContext::~D3D11DrawContext() {
@@ -416,16 +427,28 @@ void D3D11DrawContext::HandleEvent(Event ev, int width, int height, void *param1
 		curRTHeight_ = height;
 		break;
 	}
-	case Event::PRESENTED:
-		// Make sure that we don't eliminate the next time the render target is set.
-		curRenderTargetView_ = nullptr;
-		curDepthStencilView_ = nullptr;
-		break;
 	}
 }
 
 void D3D11DrawContext::EndFrame() {
+	// Fake a submit time.
+	frameTimeHistory_[frameCount_].firstSubmit = time_now_d();
 	curPipeline_ = nullptr;
+}
+
+void D3D11DrawContext::Present(PresentMode presentMode, int vblanks) {
+	frameTimeHistory_[frameCount_].queuePresent = time_now_d();
+
+	int interval = vblanks;
+	if (presentMode != PresentMode::FIFO) {
+		interval = 0;
+	}
+	// Safety for libretro
+	if (swapChain_) {
+		swapChain_->Present(interval, 0);
+	}
+	curRenderTargetView_ = nullptr;
+	curDepthStencilView_ = nullptr;
 	frameCount_++;
 }
 
@@ -842,7 +865,7 @@ bool D3D11Texture::FillLevel(ID3D11DeviceContext *context, int level, int w, int
 			for (int y = 0; y < h; ++y) {
 				void *dest = (uint8_t *)mapped.pData + mapped.DepthPitch * s + mapped.RowPitch * y;
 				uint32_t byteStride = w * (uint32_t)DataFormatSizeInBytes(format_);
-				const void *src = data[level] + byteStride * (y + h * d);
+				const void *src = data[level] + byteStride * (y + h * s);
 				memcpy(dest, src, byteStride);
 			}
 		}
@@ -1518,6 +1541,39 @@ void D3D11DrawContext::Clear(int mask, uint32_t colorval, float depthVal, int st
 	}
 }
 
+void D3D11DrawContext::BeginFrame(DebugFlags debugFlags) {
+	FrameTimeData &frameTimeData = frameTimeHistory_.Add(frameCount_);
+	frameTimeData.afterFenceWait = time_now_d();
+	frameTimeData.frameBegin = frameTimeData.afterFenceWait;
+
+	context_->OMSetRenderTargets(1, &curRenderTargetView_, curDepthStencilView_);
+
+	if (curBlend_ != nullptr) {
+		context_->OMSetBlendState(curBlend_->bs, blendFactor_, 0xFFFFFFFF);
+	}
+	if (curDepthStencil_ != nullptr) {
+		context_->OMSetDepthStencilState(GetCachedDepthStencilState(curDepthStencil_, stencilWriteMask_, stencilCompareMask_), stencilRef_);
+	}
+	if (curRaster_ != nullptr) {
+		context_->RSSetState(curRaster_->rs);
+	}
+	context_->IASetInputLayout(curInputLayout_);
+	context_->VSSetShader(curVS_, nullptr, 0);
+	context_->PSSetShader(curPS_, nullptr, 0);
+	context_->GSSetShader(curGS_, nullptr, 0);
+	if (curTopology_ != D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED) {
+		context_->IASetPrimitiveTopology(curTopology_);
+	}
+	if (curPipeline_ != nullptr) {
+		context_->IASetVertexBuffers(0, 1, nextVertexBuffers_, (UINT *)curPipeline_->input->strides.data(), (UINT *)nextVertexBufferOffsets_);
+		context_->IASetIndexBuffer(nextIndexBuffer_, DXGI_FORMAT_R16_UINT, nextIndexBufferOffset_);
+		if (curPipeline_->dynamicUniforms) {
+			context_->VSSetConstantBuffers(0, 1, &curPipeline_->dynamicUniforms);
+			context_->PSSetConstantBuffers(0, 1, &curPipeline_->dynamicUniforms);
+		}
+	}
+}
+
 void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x, int y, int z, Framebuffer *dstfb, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBit, const char *tag) {
 	D3D11Framebuffer *src = (D3D11Framebuffer *)srcfb;
 	D3D11Framebuffer *dst = (D3D11Framebuffer *)dstfb;
@@ -1829,8 +1885,8 @@ void D3D11DrawContext::GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h
 	}
 }
 
-DrawContext *T3DCreateD3D11Context(ID3D11Device *device, ID3D11DeviceContext *context, ID3D11Device1 *device1, ID3D11DeviceContext1 *context1, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, std::vector<std::string> adapterNames) {
-	return new D3D11DrawContext(device, context, device1, context1, featureLevel, hWnd, adapterNames);
+DrawContext *T3DCreateD3D11Context(ID3D11Device *device, ID3D11DeviceContext *context, ID3D11Device1 *device1, ID3D11DeviceContext1 *context1, IDXGISwapChain *swapChain, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, std::vector<std::string> adapterNames, int maxInflightFrames) {
+	return new D3D11DrawContext(device, context, device1, context1, swapChain, featureLevel, hWnd, adapterNames, maxInflightFrames);
 }
 
 }  // namespace Draw

@@ -263,12 +263,10 @@ void GamePauseScreen::update() {
 
 GamePauseScreen::GamePauseScreen(const Path &filename)
 	: UIDialogScreenWithGameBackground(filename) {
-	g_OSD.SetShowSidebar(false);
 }
 
 GamePauseScreen::~GamePauseScreen() {
 	__DisplaySetWasPaused();
-	g_OSD.SetShowSidebar(true);
 }
 
 void GamePauseScreen::CreateSavestateControls(UI::LinearLayout *leftColumnItems, bool vertical) {
@@ -354,7 +352,10 @@ void GamePauseScreen::CreateViews() {
 
 	rightColumnItems->SetSpacing(0.0f);
 	if (getUMDReplacePermit()) {
-		rightColumnItems->Add(new Choice(pa->T("Switch UMD")))->OnClick.Handle(this, &GamePauseScreen::OnSwitchUMD);
+		rightColumnItems->Add(new Choice(pa->T("Switch UMD")))->OnClick.Add([=](UI::EventParams &) {
+			screenManager()->push(new UmdReplaceScreen());
+			return UI::EVENT_DONE;
+		});
 	}
 	Choice *continueChoice = rightColumnItems->Add(new Choice(pa->T("Continue")));
 	root_->SetDefaultFocusView(continueChoice);
@@ -382,7 +383,7 @@ void GamePauseScreen::CreateViews() {
 		});
 	}
 	if (g_Config.bAchievementsEnable && Achievements::HasAchievementsOrLeaderboards()) {
-		rightColumnItems->Add(new Choice(pa->T("Achievements")))->OnClick.Add([&](UI::EventParams &e) {
+		rightColumnItems->Add(new Choice(ac->T("Achievements")))->OnClick.Add([&](UI::EventParams &e) {
 			screenManager()->push(new RetroAchievementsListScreen(gamePath_));
 			return UI::EVENT_DONE;
 		});
@@ -468,11 +469,6 @@ UI::EventReturn GamePauseScreen::OnLastSaveUndo(UI::EventParams &e) {
 	SaveState::UndoLastSave(gamePath_);
 
 	RecreateViews();
-	return UI::EVENT_DONE;
-}
-
-UI::EventReturn GamePauseScreen::OnSwitchUMD(UI::EventParams &e) {
-	screenManager()->push(new UmdReplaceScreen());
 	return UI::EVENT_DONE;
 }
 

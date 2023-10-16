@@ -42,8 +42,6 @@ protected:
 	UI::EventReturn OnLogConfig(UI::EventParams &e);
 	UI::EventReturn OnJitCompare(UI::EventParams &e);
 	UI::EventReturn OnShaderView(UI::EventParams &e);
-	UI::EventReturn OnFreezeFrame(UI::EventParams &e);
-	UI::EventReturn OnDumpFrame(UI::EventParams &e);
 	UI::EventReturn OnDeveloperTools(UI::EventParams &e);
 	UI::EventReturn OnResetLimitedLogging(UI::EventParams &e);
 
@@ -112,9 +110,11 @@ public:
 	const char *tag() const override { return "SystemInfo"; }
 
 	void CreateTabs() override;
+	void update() override;
 
 protected:
 	bool ShowSearchControls() const override { return false; }
+	void CreateInternalsTab(UI::ViewGroup *internals);
 };
 
 class AddressPromptScreen : public PopupScreen {
@@ -218,9 +218,11 @@ private:
 	UI::EventReturn OnLoadDump(UI::EventParams &e);
 
 	std::vector<std::string> files_;
-	std::shared_ptr<http::Download> listing_;
-	std::shared_ptr<http::Download> dumpDownload_;
+	std::shared_ptr<http::Request> listing_;
+	std::shared_ptr<http::Request> dumpDownload_;
 };
 
 void DrawProfile(UIContext &ui);
 const char *GetCompilerABI();
+
+void AddOverlayList(UI::ViewGroup *items, ScreenManager *screenManager);

@@ -182,6 +182,15 @@ void Jit::FlushAll() {
 }
 
 void Jit::FlushPrefixV() {
+	if (js.startDefaultPrefix && !js.blockWrotePrefixes && js.HasNoPrefix()) {
+		// They started default, we never modified in memory, and they're default now.
+		// No reason to modify memory.  This is common at end of blocks.  Just clear dirty.
+		js.prefixSFlag = (JitState::PrefixState)(js.prefixSFlag & ~JitState::PREFIX_DIRTY);
+		js.prefixTFlag = (JitState::PrefixState)(js.prefixTFlag & ~JitState::PREFIX_DIRTY);
+		js.prefixDFlag = (JitState::PrefixState)(js.prefixDFlag & ~JitState::PREFIX_DIRTY);
+		return;
+	}
+
 	if ((js.prefixSFlag & JitState::PREFIX_DIRTY) != 0) {
 		MOV(32, MIPSSTATE_VAR(vfpuCtrl[VFPU_CTRL_SPREFIX]), Imm32(js.prefixS));
 		js.prefixSFlag = (JitState::PrefixState) (js.prefixSFlag & ~JitState::PREFIX_DIRTY);
@@ -196,6 +205,9 @@ void Jit::FlushPrefixV() {
 		MOV(32, MIPSSTATE_VAR(vfpuCtrl[VFPU_CTRL_DPREFIX]), Imm32(js.prefixD));
 		js.prefixDFlag = (JitState::PrefixState) (js.prefixDFlag & ~JitState::PREFIX_DIRTY);
 	}
+
+	// If we got here, we must've written prefixes to memory in this block.
+	js.blockWrotePrefixes = true;
 }
 
 void Jit::WriteDowncount(int offset) {
@@ -303,6 +315,7 @@ void Jit::Compile(u32 em_address) {
 	int block_num = blocks.AllocateBlock(em_address);
 	JitBlock *b = blocks.GetBlock(block_num);
 	DoJit(em_address, b);
+	_assert_msg_(b->originalAddress == em_address, "original %08x != em_address %08x (block %d)", b->originalAddress, em_address, b->blockNum);
 	blocks.FinalizeBlock(block_num, jo.enableBlocklink);
 
 	EndWrite();
@@ -348,7 +361,8 @@ MIPSOpcode Jit::GetOffsetInstruction(int offset) {
 
 const u8 *Jit::DoJit(u32 em_address, JitBlock *b) {
 	js.cancel = false;
-	js.blockStart = js.compilerPC = mips_->pc;
+	js.blockStart = em_address;
+	js.compilerPC = em_address;
 	js.lastContinuedPC = 0;
 	js.initialBlockSize = 0;
 	js.nextExit = 0;
@@ -356,6 +370,7 @@ const u8 *Jit::DoJit(u32 em_address, JitBlock *b) {
 	js.curBlock = b;
 	js.compiling = true;
 	js.inDelaySlot = false;
+	js.blockWrotePrefixes = false;
 	js.afterOp = JitState::AFTER_NONE;
 	js.PrefixStart();
 
@@ -590,7 +605,7 @@ void Jit::Comp_ReplacementFunc(MIPSOpcode op) {
 
 	const ReplacementTableEntry *entry = GetReplacementFunc(index);
 	if (!entry) {
-		ERROR_LOG(HLE, "Invalid replacement op %08x", op.encoding);
+		ERROR_LOG_REPORT_ONCE(replFunc, HLE, "Invalid replacement op %08x at %08x", op.encoding, js.compilerPC);
 		return;
 	}
 
@@ -681,6 +696,10 @@ void Jit::Comp_Generic(MIPSOpcode op) {
 		// If it does eat them, it'll happen in MIPSCompileOp().
 		if ((info & OUT_EAT_PREFIX) == 0)
 			js.PrefixUnknown();
+
+		// Even if DISABLE'd, we want to set this flag so we overwrite.
+		if ((info & OUT_VFPU_PREFIX) != 0)
+			js.blockWrotePrefixes = true;
 	}
 }
 
@@ -689,7 +708,7 @@ static void HitInvalidBranch(uint32_t dest) {
 }
 
 void Jit::WriteExit(u32 destination, int exit_num) {
-	_dbg_assert_msg_(exit_num < MAX_JIT_BLOCK_EXITS, "Expected a valid exit_num");
+	_assert_msg_(exit_num < MAX_JIT_BLOCK_EXITS, "Expected a valid exit_num. dest=%08x", destination);
 
 	if (!Memory::IsValidAddress(destination) || (destination & 3) != 0) {
 		ERROR_LOG_REPORT(JIT, "Trying to write block exit to illegal destination %08x: pc = %08x", destination, currentMIPS->pc);

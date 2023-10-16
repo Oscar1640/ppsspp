@@ -191,12 +191,12 @@ const CommonCommandTableEntry commonCommandTable[] = {
 	{ GE_CMD_ANTIALIASENABLE, FLAG_FLUSHBEFOREONCHANGE },
 
 	// Viewport.
-	{ GE_CMD_OFFSETX, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
-	{ GE_CMD_OFFSETY, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
-	{ GE_CMD_VIEWPORTXSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
-	{ GE_CMD_VIEWPORTYSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
-	{ GE_CMD_VIEWPORTXCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
-	{ GE_CMD_VIEWPORTYCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
+	{ GE_CMD_OFFSETX, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_CULL_PLANES },
+	{ GE_CMD_OFFSETY, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_CULL_PLANES },
+	{ GE_CMD_VIEWPORTXSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULL_PLANES },
+	{ GE_CMD_VIEWPORTYSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULL_PLANES },
+	{ GE_CMD_VIEWPORTXCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULL_PLANES },
+	{ GE_CMD_VIEWPORTYCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULL_PLANES },
 	{ GE_CMD_VIEWPORTZSCALE, FLAG_FLUSHBEFOREONCHANGE,  DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_DEPTHRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
 	{ GE_CMD_VIEWPORTZCENTER, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_CULLRANGE | DIRTY_DEPTHRANGE | DIRTY_PROJMATRIX | DIRTY_VIEWPORTSCISSOR_STATE },
 	{ GE_CMD_DEPTHCLAMPENABLE, FLAG_FLUSHBEFOREONCHANGE, DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_RASTER_STATE },
@@ -206,12 +206,12 @@ const CommonCommandTableEntry commonCommandTable[] = {
 	{ GE_CMD_MAXZ, FLAG_FLUSHBEFOREONCHANGE, DIRTY_DEPTHRANGE | DIRTY_RASTER_STATE | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
 
 	// Region
-	{ GE_CMD_REGION1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
-	{ GE_CMD_REGION2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
+	{ GE_CMD_REGION1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_CULL_PLANES },
+	{ GE_CMD_REGION2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_CULL_PLANES },
 
 	// Scissor
-	{ GE_CMD_SCISSOR1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
-	{ GE_CMD_SCISSOR2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE },
+	{ GE_CMD_SCISSOR1, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_CULL_PLANES },
+	{ GE_CMD_SCISSOR2, FLAG_FLUSHBEFOREONCHANGE, DIRTY_FRAMEBUF | DIRTY_TEXTURE_PARAMS | DIRTY_VIEWPORTSCISSOR_STATE | DIRTY_CULLRANGE | DIRTY_CULL_PLANES },
 
 	// Lighting base colors
 	{ GE_CMD_AMBIENTCOLOR, FLAG_FLUSHBEFOREONCHANGE, DIRTY_AMBIENT },
@@ -447,6 +447,8 @@ void GPUCommonHW::DeviceLost() {
 // Call at the start of the GPU implementation's DeviceRestore
 void GPUCommonHW::DeviceRestore(Draw::DrawContext *draw) {
 	draw_ = draw;
+	displayResized_ = true;  // re-check display bounds.
+	renderResized_ = true;
 	framebufferManager_->DeviceRestore(draw_);
 	textureCache_->DeviceRestore(draw_);
 	shaderManager_->DeviceRestore(draw_);
@@ -607,7 +609,11 @@ u32 GPUCommonHW::CheckGPUFeatures() const {
 		features |= GPU_USE_VS_RANGE_CULLING;
 	}
 
-	if (draw_->GetShaderLanguageDesc().bitwiseOps) {
+	if (draw_->GetDeviceCaps().framebufferFetchSupported) {
+		features |= GPU_USE_FRAMEBUFFER_FETCH;
+	}
+
+	if (draw_->GetShaderLanguageDesc().bitwiseOps && g_Config.bUberShaderVertex) {
 		features |= GPU_USE_LIGHT_UBERSHADER;
 	}
 
@@ -618,6 +624,11 @@ u32 GPUCommonHW::CheckGPUFeatures() const {
 	// Even without depth clamp, force accurate depth on for some games that break without it.
 	if (PSP_CoreParameter().compat.flags().DepthRangeHack) {
 		features |= GPU_USE_ACCURATE_DEPTH;
+	}
+
+	// Some backends will turn this off again in the calling function.
+	if (g_Config.bUberShaderFragment) {
+		features |= GPU_USE_FRAGMENT_UBERSHADER;
 	}
 
 	return features;
@@ -885,14 +896,10 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 
 	PROFILE_THIS_SCOPE("execprim");
 
-	u32 data = op & 0xFFFFFF;
-	u32 count = data & 0xFFFF;
-	if (count == 0)
-		return;
 	FlushImm();
 
 	// Upper bits are ignored.
-	GEPrimitiveType prim = static_cast<GEPrimitiveType>((data >> 16) & 7);
+	GEPrimitiveType prim = static_cast<GEPrimitiveType>((op >> 16) & 7);
 	SetDrawType(DRAW_PRIM, prim);
 
 	// Discard AA lines as we can't do anything that makes sense with these anyway. The SW plugin might, though.
@@ -941,10 +948,15 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 		vfb->usageFlags |= FB_USAGE_BLUE_TO_ALPHA;
 	}
 
+	if (gstate_c.dirty & DIRTY_VERTEXSHADER_STATE) {
+		vertexCost_ = EstimatePerVertexCost();
+	}
+
+	u32 count = op & 0xFFFF;
 	// Must check this after SetRenderFrameBuffer so we know SKIPDRAW_NON_DISPLAYED_FB.
 	if (gstate_c.skipDrawReason & (SKIPDRAW_SKIPFRAME | SKIPDRAW_NON_DISPLAYED_FB)) {
 		// Rough estimate, not sure what's correct.
-		cyclesExecuted += EstimatePerVertexCost() * count;
+		cyclesExecuted += vertexCost_ * count;
 		if (gstate.isModeClear()) {
 			gpuStats.numClears++;
 		}
@@ -955,6 +967,10 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 
 	const void *verts = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
 	const void *inds = nullptr;
+
+	bool isTriangle = IsTrianglePrim(prim);
+
+	bool canExtend = isTriangle;
 	u32 vertexType = gstate.vertType;
 	if ((vertexType & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
 		u32 indexAddr = gstate_c.indexAddr;
@@ -963,10 +979,7 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 			return;
 		}
 		inds = Memory::GetPointerUnchecked(indexAddr);
-	}
-
-	if (gstate_c.dirty & DIRTY_VERTEXSHADER_STATE) {
-		vertexCost_ = EstimatePerVertexCost();
+		canExtend = false;
 	}
 
 	int bytesRead = 0;
@@ -976,7 +989,9 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 	int cullMode = gstate.getCullMode();
 
 	uint32_t vertTypeID = GetVertTypeID(vertexType, gstate.getUVGenMode(), g_Config.bSoftwareSkinning);
-	drawEngineCommon_->SubmitPrim(verts, inds, prim, count, vertTypeID, cullMode, &bytesRead);
+	if (!drawEngineCommon_->SubmitPrim(verts, inds, prim, count, vertTypeID, true, &bytesRead)) {
+		canExtend = false;
+	}
 	// After drawing, we advance the vertexAddr (when non indexed) or indexAddr (when indexed).
 	// Some games rely on this, they don't bother reloading VADDR and IADDR.
 	// The VADDR/IADDR registers are NOT updated.
@@ -984,18 +999,16 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 	int totalVertCount = count;
 
 	// PRIMs are often followed by more PRIMs. Save some work and submit them immediately.
-	const u32_le *src = (const u32_le *)Memory::GetPointerUnchecked(currentList->pc + 4);
+	const u32_le *start = (const u32_le *)Memory::GetPointerUnchecked(currentList->pc + 4);
+	const u32_le *src = start;
 	const u32_le *stall = currentList->stall ? (const u32_le *)Memory::GetPointerUnchecked(currentList->stall) : 0;
-	int cmdCount = 0;
 
 	// Optimized submission of sequences of PRIM. Allows us to avoid going through all the mess
 	// above for each one. This can be expanded to support additional games that intersperse
 	// PRIM commands with other commands. A special case is Earth Defence Force 2 that changes culling mode
 	// between each prim, we just change the triangle winding right here to still be able to join draw calls.
 
-	uint32_t vtypeCheckMask = ~GE_VTYPE_WEIGHTCOUNT_MASK;
-	if (!g_Config.bSoftwareSkinning)
-		vtypeCheckMask = 0xFFFFFFFF;
+	uint32_t vtypeCheckMask = g_Config.bSoftwareSkinning ? (~GE_VTYPE_WEIGHTCOUNT_MASK) : 0xFFFFFFFF;
 
 	if (debugRecording_)
 		goto bail;
@@ -1005,22 +1018,38 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 		switch (data >> 24) {
 		case GE_CMD_PRIM:
 		{
+			GEPrimitiveType newPrim = static_cast<GEPrimitiveType>((data >> 16) & 7);
+			if (IsTrianglePrim(newPrim) != isTriangle)
+				goto bail;  // Can't join over this boundary. Might as well exit and get this on the next time around.
+			// TODO: more efficient updating of verts/inds
+
 			u32 count = data & 0xFFFF;
-			if (count == 0) {
-				// Ignore.
+			bool clockwise = !gstate.isCullEnabled() || gstate.getCullMode() == cullMode;
+			if (canExtend) {
+				// Non-indexed draws can be cheaply merged if vertexAddr hasn't changed, that means the vertices
+				// are consecutive in memory.
+				_dbg_assert_((vertexType & GE_VTYPE_IDX_MASK) == GE_VTYPE_IDX_NONE);
+				int commandsExecuted = drawEngineCommon_->ExtendNonIndexedPrim(src, stall, vertTypeID, clockwise, &bytesRead, isTriangle);
+				if (!commandsExecuted) {
+					goto bail;
+				}
+				src += commandsExecuted - 1;
+				gstate_c.vertexAddr += bytesRead;
+				totalVertCount += count;
 				break;
 			}
 
-			GEPrimitiveType newPrim = static_cast<GEPrimitiveType>((data >> 16) & 7);
-			SetDrawType(DRAW_PRIM, newPrim);
-			// TODO: more efficient updating of verts/inds
 			verts = Memory::GetPointerUnchecked(gstate_c.vertexAddr);
 			inds = nullptr;
 			if ((vertexType & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
 				inds = Memory::GetPointerUnchecked(gstate_c.indexAddr);
+			} else {
+				// We can extend again after submitting a normal draw.
+				canExtend = isTriangle;
 			}
-
-			drawEngineCommon_->SubmitPrim(verts, inds, newPrim, count, vertTypeID, cullMode, &bytesRead);
+			if (!drawEngineCommon_->SubmitPrim(verts, inds, newPrim, count, vertTypeID, clockwise, &bytesRead)) {
+				canExtend = false;
+			}
 			AdvanceVerts(vertexType, count, bytesRead);
 			totalVertCount += count;
 			break;
@@ -1029,18 +1058,26 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 		{
 			uint32_t diff = data ^ vertexType;
 			// don't mask upper bits, vertexType is unmasked
-			if (diff & vtypeCheckMask) {
-				goto bail;
-			} else {
+			if (diff) {
+				if (diff & vtypeCheckMask)
+					goto bail;
+				drawEngineCommon_->FlushSkin();
+				canExtend = false;  // TODO: Might support extending between some vertex types in the future.
 				vertexType = data;
 				vertTypeID = GetVertTypeID(vertexType, gstate.getUVGenMode(), g_Config.bSoftwareSkinning);
 			}
 			break;
 		}
 		case GE_CMD_VADDR:
+		{
 			gstate.cmdmem[GE_CMD_VADDR] = data;
-			gstate_c.vertexAddr = gstate_c.getRelativeAddress(data & 0x00FFFFFF);
+			uint32_t newAddr = gstate_c.getRelativeAddress(data & 0x00FFFFFF);
+			if (gstate_c.vertexAddr != newAddr) {
+				canExtend = false;
+				gstate_c.vertexAddr = newAddr;
+			}
 			break;
+		}
 		case GE_CMD_IADDR:
 			gstate.cmdmem[GE_CMD_IADDR] = data;
 			gstate_c.indexAddr = gstate_c.getRelativeAddress(data & 0x00FFFFFF);
@@ -1102,6 +1139,8 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 				(Memory::ReadUnchecked_U32(target + 12 * 4) >> 24) == GE_CMD_RET &&
 				(target > currentList->stall || target + 12 * 4 < currentList->stall) &&
 				(gstate.boneMatrixNumber & 0x00FFFFFF) <= 96 - 12) {
+				drawEngineCommon_->FlushSkin();
+				canExtend = false;
 				FastLoadBoneMatrix(target);
 			} else {
 				goto bail;
@@ -1119,12 +1158,13 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 			// All other commands might need a flush or something, stop this inner loop.
 			goto bail;
 		}
-		cmdCount++;
 		src++;
 	}
 
 bail:
+	drawEngineCommon_->FlushSkin();
 	gstate.cmdmem[GE_CMD_VERTEXTYPE] = vertexType;
+	int cmdCount = src - start;
 	// Skip over the commands we just read out manually.
 	if (cmdCount > 0) {
 		UpdatePC(currentList->pc, currentList->pc + cmdCount * 4);
@@ -1140,8 +1180,9 @@ bail:
 		}
 	}
 
-	gpuStats.vertexGPUCycles += vertexCost_ * totalVertCount;
-	cyclesExecuted += vertexCost_ * totalVertCount;
+	int cycles = vertexCost_ * totalVertCount;
+	gpuStats.vertexGPUCycles += cycles;
+	cyclesExecuted += cycles;
 }
 
 void GPUCommonHW::Execute_Bezier(u32 op, u32 diff) {
@@ -1364,7 +1405,7 @@ void GPUCommonHW::Execute_WorldMtxNum(u32 op, u32 diff) {
 			if (dst[i] != newVal) {
 				Flush();
 				dst[i] = newVal;
-				gstate_c.Dirty(DIRTY_WORLDMATRIX);
+				gstate_c.Dirty(DIRTY_WORLDMATRIX | DIRTY_CULL_PLANES);
 			}
 			if (++i >= end) {
 				break;
@@ -1387,7 +1428,7 @@ void GPUCommonHW::Execute_WorldMtxData(u32 op, u32 diff) {
 	if (num < 12 && newVal != ((const u32 *)gstate.worldMatrix)[num]) {
 		Flush();
 		((u32 *)gstate.worldMatrix)[num] = newVal;
-		gstate_c.Dirty(DIRTY_WORLDMATRIX);
+		gstate_c.Dirty(DIRTY_WORLDMATRIX | DIRTY_CULL_PLANES);
 	}
 	num++;
 	gstate.worldmtxnum = (GE_CMD_WORLDMATRIXNUMBER << 24) | (num & 0x00FFFFFF);
@@ -1417,7 +1458,7 @@ void GPUCommonHW::Execute_ViewMtxNum(u32 op, u32 diff) {
 			if (dst[i] != newVal) {
 				Flush();
 				dst[i] = newVal;
-				gstate_c.Dirty(DIRTY_VIEWMATRIX);
+				gstate_c.Dirty(DIRTY_VIEWMATRIX | DIRTY_CULL_PLANES);
 			}
 			if (++i >= end) {
 				break;
@@ -1440,7 +1481,7 @@ void GPUCommonHW::Execute_ViewMtxData(u32 op, u32 diff) {
 	if (num < 12 && newVal != ((const u32 *)gstate.viewMatrix)[num]) {
 		Flush();
 		((u32 *)gstate.viewMatrix)[num] = newVal;
-		gstate_c.Dirty(DIRTY_VIEWMATRIX);
+		gstate_c.Dirty(DIRTY_VIEWMATRIX | DIRTY_CULL_PLANES);
 	}
 	num++;
 	gstate.viewmtxnum = (GE_CMD_VIEWMATRIXNUMBER << 24) | (num & 0x00FFFFFF);
@@ -1470,7 +1511,7 @@ void GPUCommonHW::Execute_ProjMtxNum(u32 op, u32 diff) {
 			if (dst[i] != newVal) {
 				Flush();
 				dst[i] = newVal;
-				gstate_c.Dirty(DIRTY_PROJMATRIX);
+				gstate_c.Dirty(DIRTY_PROJMATRIX | DIRTY_CULL_PLANES);
 			}
 			if (++i >= end) {
 				break;
@@ -1493,7 +1534,7 @@ void GPUCommonHW::Execute_ProjMtxData(u32 op, u32 diff) {
 	if (num < 16 && newVal != ((const u32 *)gstate.projMatrix)[num]) {
 		Flush();
 		((u32 *)gstate.projMatrix)[num] = newVal;
-		gstate_c.Dirty(DIRTY_PROJMATRIX);
+		gstate_c.Dirty(DIRTY_PROJMATRIX | DIRTY_CULL_PLANES);
 	}
 	num++;
 	if (num <= 16)
@@ -1643,25 +1684,25 @@ size_t GPUCommonHW::FormatGPUStatsCommon(char *buffer, size_t size) {
 	float vertexAverageCycles = gpuStats.numVertsSubmitted > 0 ? (float)gpuStats.vertexGPUCycles / (float)gpuStats.numVertsSubmitted : 0.0f;
 	return snprintf(buffer, size,
 		"DL processing time: %0.2f ms, %d drawsync, %d listsync\n"
-		"Draw calls: %d, flushes %d, clears %d (cached: %d)\n"
-		"Num Tracked Vertex Arrays: %d\n"
-		"Vertices: %d cached: %d uncached: %d\n"
+		"Draw: %d (%d dec), flushes %d, clears %d, bbox jumps %d (%d updates)\n"
+		"Vertices: %d drawn: %d\n"
 		"FBOs active: %d (evaluations: %d)\n"
 		"Textures: %d, dec: %d, invalidated: %d, hashed: %d kB\n"
 		"readbacks %d (%d non-block), uploads %d, depal %d\n"
+		"block transfers: %d\n"
 		"replacer: tracks %d references, %d unique textures\n"
-		"Cpy: depth %d, color %d, reint %d, blend %d, self %d, drawpix %d\n"
-		"GPU cycles executed: %d (%f per vertex)\n",
+		"Cpy: depth %d, color %d, reint %d, blend %d, self %d\n"
+		"GPU cycles: %d (%0.1f per vertex)\n%s",
 		gpuStats.msProcessingDisplayLists * 1000.0f,
 		gpuStats.numDrawSyncs,
 		gpuStats.numListSyncs,
 		gpuStats.numDrawCalls,
+		gpuStats.numVertexDecodes,
 		gpuStats.numFlushes,
 		gpuStats.numClears,
-		gpuStats.numCachedDrawCalls,
-		gpuStats.numTrackedVertexArrays,
+		gpuStats.numBBOXJumps,
+		gpuStats.numPlaneUpdates,
 		gpuStats.numVertsSubmitted,
-		gpuStats.numCachedVertsDrawn,
 		gpuStats.numUncachedVertsDrawn,
 		(int)framebufferManager_->NumVFBs(),
 		gpuStats.numFramebufferEvaluations,
@@ -1673,6 +1714,7 @@ size_t GPUCommonHW::FormatGPUStatsCommon(char *buffer, size_t size) {
 		gpuStats.numReadbacks,
 		gpuStats.numUploads,
 		gpuStats.numDepal,
+		gpuStats.numBlockTransfers,
 		gpuStats.numReplacerTrackedTex,
 		gpuStats.numCachedReplacedTextures,
 		gpuStats.numDepthCopies,
@@ -1680,8 +1722,8 @@ size_t GPUCommonHW::FormatGPUStatsCommon(char *buffer, size_t size) {
 		gpuStats.numReinterpretCopies,
 		gpuStats.numCopiesForShaderBlend,
 		gpuStats.numCopiesForSelfTex,
-		gpuStats.numDrawPixels,
 		gpuStats.vertexGPUCycles + gpuStats.otherGPUCycles,
-		vertexAverageCycles
+		vertexAverageCycles,
+		debugRecording_ ? "(debug-recording)" : ""
 	);
 }

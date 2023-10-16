@@ -138,7 +138,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\x86\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\x86\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;USE_FFMPEG;WITH_UPNP;WIN32;_ARCH_32=1;_M_IX86=1;_DEBUG;_LIB;_UNICODE;UNICODE;MINIUPNP_STATICLIB;ARMIPS_USE_STD_FILESYSTEM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -165,7 +165,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\x86_64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\x86_64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib;../ext/zstd/lib</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;USE_FFMPEG;WITH_UPNP;WIN32;_ARCH_64=1;_M_X64=1;_DEBUG;_LIB;_UNICODE;UNICODE;MINIUPNP_STATICLIB;ARMIPS_USE_STD_FILESYSTEM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -193,7 +193,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\aarch64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\aarch64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;USE_FFMPEG;WITH_UPNP;WIN32;_ARCH_64=1;_DEBUG;_LIB;_UNICODE;UNICODE;ARMIPS_USE_STD_FILESYSTEM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -221,7 +221,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\arm\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\arm\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRTDBG_MAP_ALLOC;USING_WIN_UI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_WARNINGS;USE_FFMPEG;WITH_UPNP;WIN32;_ARCH_32=1;_DEBUG;_LIB;_UNICODE;UNICODE;ARMIPS_USE_STD_FILESYSTEM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -253,7 +253,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\x86\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\x86\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
@@ -286,7 +286,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\x86_64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\x86_64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib;../ext/zstd/lib</AdditionalIncludeDirectories>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
       <BufferSecurityCheck>false</BufferSecurityCheck>
@@ -321,7 +321,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\aarch64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\aarch64\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
       <BufferSecurityCheck>false</BufferSecurityCheck>
@@ -356,7 +356,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ffmpeg\Windows\arm\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\ffmpeg\WindowsInclude;..\ext\libchdr\include;..\ffmpeg\Windows\arm\include;../common;..;../ext/glew;../ext/snappy;../ext/libpng17;../ext/zlib;../ext;../ext/zstd/lib</AdditionalIncludeDirectories>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Precise</FloatingPointModel>
       <BufferSecurityCheck>false</BufferSecurityCheck>
@@ -565,6 +565,7 @@
     <ClCompile Include="Debugger\WebSocket\SteppingSubscriber.cpp" />
     <ClCompile Include="Debugger\WebSocket\WebSocketUtils.cpp" />
     <ClCompile Include="FileSystems\BlobFileSystem.cpp" />
+    <ClCompile Include="FrameTiming.cpp" />
     <ClCompile Include="HLE\KUBridge.cpp" />
     <ClCompile Include="HLE\Plugins.cpp" />
     <ClCompile Include="HLE\sceKernelHeap.cpp" />
@@ -579,7 +580,17 @@
     <ClCompile Include="KeyMap.cpp" />
     <ClCompile Include="KeyMapDefaults.cpp" />
     <ClCompile Include="MemFault.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRAsm.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRCompALU.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRCompBranch.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRCompFPU.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRCompLoadStore.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRCompSystem.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRCompVec.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRJit.cpp" />
+    <ClCompile Include="MIPS\ARM64\Arm64IRRegCache.cpp" />
     <ClCompile Include="MIPS\fake\FakeJit.cpp" />
+    <ClCompile Include="MIPS\IR\IRAnalysis.cpp" />
     <ClCompile Include="MIPS\IR\IRAsm.cpp" />
     <ClCompile Include="MIPS\IR\IRCompALU.cpp" />
     <ClCompile Include="MIPS\IR\IRCompBranch.cpp" />
@@ -590,9 +601,27 @@
     <ClCompile Include="MIPS\IR\IRInst.cpp" />
     <ClCompile Include="MIPS\IR\IRInterpreter.cpp" />
     <ClCompile Include="MIPS\IR\IRJit.cpp" />
+    <ClCompile Include="MIPS\IR\IRNativeCommon.cpp" />
     <ClCompile Include="MIPS\IR\IRPassSimplify.cpp" />
     <ClCompile Include="MIPS\IR\IRRegCache.cpp" />
     <ClCompile Include="MIPS\MIPSVFPUFallbacks.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVAsm.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVCompALU.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVCompBranch.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVCompSystem.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVCompFPU.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVCompLoadStore.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVCompVec.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVJit.cpp" />
+    <ClCompile Include="MIPS\RiscV\RiscVRegCache.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRAsm.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRCompALU.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRCompBranch.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRCompFPU.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRCompLoadStore.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRCompSystem.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRCompVec.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRJit.cpp" />
     <ClCompile Include="Replay.cpp" />
     <ClCompile Include="Compatibility.cpp" />
     <ClCompile Include="Config.cpp" />
@@ -1079,6 +1108,7 @@
     </ClCompile>
     <ClCompile Include="WaveFile.cpp" />
     <ClCompile Include="WebServer.cpp" />
+    <ClCompile Include="MIPS\x86\X64IRRegCache.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ext\cityhash\city.h" />
@@ -1139,6 +1169,7 @@
     <ClInclude Include="Debugger\WebSocket\LogBroadcaster.h" />
     <ClInclude Include="Debugger\WebSocket\SteppingBroadcaster.h" />
     <ClInclude Include="FileSystems\BlobFileSystem.h" />
+    <ClInclude Include="FrameTiming.h" />
     <ClInclude Include="HLE\KernelThreadDebugInterface.h" />
     <ClInclude Include="HLE\KUBridge.h" />
     <ClInclude Include="HLE\Plugins.h" />
@@ -1153,14 +1184,21 @@
     <ClInclude Include="KeyMap.h" />
     <ClInclude Include="KeyMapDefaults.h" />
     <ClInclude Include="MemFault.h" />
+    <ClInclude Include="MIPS\ARM64\Arm64IRJit.h" />
+    <ClInclude Include="MIPS\ARM64\Arm64IRRegCache.h" />
     <ClInclude Include="MIPS\fake\FakeJit.h" />
+    <ClInclude Include="MIPS\IR\IRAnalysis.h" />
     <ClInclude Include="MIPS\IR\IRFrontend.h" />
     <ClInclude Include="MIPS\IR\IRInst.h" />
     <ClInclude Include="MIPS\IR\IRInterpreter.h" />
     <ClInclude Include="MIPS\IR\IRJit.h" />
+    <ClInclude Include="MIPS\IR\IRNativeCommon.h" />
     <ClInclude Include="MIPS\IR\IRPassSimplify.h" />
     <ClInclude Include="MIPS\IR\IRRegCache.h" />
     <ClInclude Include="MIPS\MIPSVFPUFallbacks.h" />
+    <ClInclude Include="MIPS\RiscV\RiscVJit.h" />
+    <ClInclude Include="MIPS\RiscV\RiscVRegCache.h" />
+    <ClInclude Include="MIPS\x86\X64IRJit.h" />
     <ClInclude Include="Replay.h" />
     <ClInclude Include="Compatibility.h" />
     <ClInclude Include="Config.h" />
@@ -1412,6 +1450,7 @@
     <ClInclude Include="..\ext\xxhash.h" />
     <ClInclude Include="WaveFile.h" />
     <ClInclude Include="WebServer.h" />
+    <ClInclude Include="MIPS\x86\X64IRRegCache.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\ext\cityhash\COPYING" />
@@ -1426,6 +1465,9 @@
     </ProjectReference>
     <ProjectReference Include="..\ext\libarmips.vcxproj">
       <Project>{129e5e2b-39c1-4d84-96fe-dfd22dbb4a25}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\ext\libchdr.vcxproj">
+      <Project>{956f1f48-b612-46d8-89ee-96996dcd9383}</Project>
     </ProjectReference>
     <ProjectReference Include="..\ext\miniupnpc.vcxproj">
       <Project>{d8a71225-178b-424e-96c1-cc3be2c1b047}</Project>

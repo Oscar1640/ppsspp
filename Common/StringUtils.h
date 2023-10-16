@@ -20,6 +20,8 @@
 #include <cstdarg>
 #include <cstdint>
 #include <string>
+#include <cstring>
+#include <string_view>
 #include <vector>
 
 #ifdef _MSC_VER
@@ -34,6 +36,14 @@ std::string LineNumberString(const std::string &str);
 std::string IndentString(const std::string &str, const std::string &sep, bool skipFirst = false);
 
 // Other simple string utilities.
+
+// Optimized for string constants.
+inline bool startsWith(const std::string &str, const char *key) {
+	size_t keyLen = strlen(key);
+	if (str.size() < keyLen)
+		return false;
+	return !memcmp(str.data(), key, keyLen);
+}
 
 inline bool startsWith(const std::string &str, const std::string &what) {
 	if (str.size() < what.size())
@@ -74,6 +84,9 @@ std::string StringFromInt(int value);
 std::string StripSpaces(const std::string &s);
 std::string StripQuotes(const std::string &s);
 
+std::string_view StripSpaces(std::string_view s);
+std::string_view StripQuotes(std::string_view s);
+
 void SplitString(const std::string& str, const char delim, std::vector<std::string>& output);
 
 void GetQuotedStrings(const std::string& str, std::vector<std::string>& output);
@@ -111,3 +124,9 @@ inline void CharArrayFromFormat(char (& out)[Count], const char* format, ...)
 
 // "C:/Windows/winhelp.exe" to "C:/Windows/", "winhelp", ".exe"
 bool SplitPath(const std::string& full_path, std::string* _pPath, std::string* _pFilename, std::string* _pExtension);
+
+// Replaces %1, %2, %3 in format with arg1, arg2, arg3.
+// Much safer than snprintf and friends.
+// For mixes of strings and ints, manually convert the ints to strings.
+std::string ApplySafeSubstitutions(const char *format, std::string_view string1, std::string_view string2 = "", std::string_view string3 = "", std::string_view string4 = "");
+std::string ApplySafeSubstitutions(const char *format, int i1, int i2 = 0, int i3 = 0, int i4 = 0);

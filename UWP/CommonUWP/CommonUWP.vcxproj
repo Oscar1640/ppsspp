@@ -9,10 +9,6 @@
       <Configuration>Debug</Configuration>
       <Platform>ARM64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug|Win32">
-      <Configuration>Debug</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Debug|x64">
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
@@ -24,10 +20,6 @@
     <ProjectConfiguration Include="Release|ARM64">
       <Configuration>Release</Configuration>
       <Platform>ARM64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Release|Win32">
-      <Configuration>Release</Configuration>
-      <Platform>Win32</Platform>
     </ProjectConfiguration>
     <ProjectConfiguration Include="Release|x64">
       <Configuration>Release</Configuration>
@@ -68,7 +60,7 @@
   <PropertyGroup>
     <GenerateManifest>false</GenerateManifest>
   </PropertyGroup>
-  <ItemDefinitionGroup Condition="'$(Platform)' == 'Win32' or '$(Platform)' == 'x64'" Label="Configuration">
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64'" Label="Configuration">
     <ClCompile>
       <CompileAsWinRT>false</CompileAsWinRT>
       <SDLCheck>false</SDLCheck>
@@ -114,6 +106,8 @@
     <ClInclude Include="..\..\Common\GPU\GPUBackendCommon.h" />
     <ClInclude Include="..\..\Common\GPU\Vulkan\VulkanLoader.h" />
     <ClInclude Include="..\..\Common\Math\Statistics.h" />
+    <ClInclude Include="..\..\Common\Net\HTTPNaettRequest.h" />
+    <ClInclude Include="..\..\Common\Net\HTTPRequest.h" />
     <ClInclude Include="..\..\Common\Net\NetBuffer.h" />
     <ClInclude Include="..\..\Common\Data\Collections\ConstMap.h" />
     <ClInclude Include="..\..\Common\Data\Collections\FixedSizeQueue.h" />
@@ -259,6 +253,7 @@
     <ClInclude Include="..\..\ext\libpng17\pnglibconf.h" />
     <ClInclude Include="..\..\ext\libpng17\pngpriv.h" />
     <ClInclude Include="..\..\ext\libpng17\pngstruct.h" />
+    <ClInclude Include="..\..\ext\naett\naett.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
@@ -273,6 +268,8 @@
     <ClCompile Include="..\..\Common\GPU\GPUBackendCommon.cpp" />
     <ClCompile Include="..\..\Common\GPU\Vulkan\VulkanLoader.cpp" />
     <ClCompile Include="..\..\Common\Math\Statistics.cpp" />
+    <ClCompile Include="..\..\Common\Net\HTTPNaettRequest.cpp" />
+    <ClCompile Include="..\..\Common\Net\HTTPRequest.cpp" />
     <ClCompile Include="..\..\Common\Net\NetBuffer.cpp" />
     <ClCompile Include="..\..\Common\Data\Color\RGBAUtil.cpp" />
     <ClCompile Include="..\..\Common\Data\Convert\SmallDataConvert.cpp" />
@@ -398,6 +395,7 @@
     <ClCompile Include="..\..\ext\libpng17\pngwrite.c" />
     <ClCompile Include="..\..\ext\libpng17\pngwtran.c" />
     <ClCompile Include="..\..\ext\libpng17\pngwutil.c" />
+    <ClCompile Include="..\..\ext\naett\naett.c" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\ext\basis_universal\basisu_transcoder_tables_astc.inc" />

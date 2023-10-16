@@ -161,6 +161,8 @@ std::string System_GetProperty(SystemProperty prop) {
 			return result;
 		}
 #endif
+	case SYSPROP_BUILD_VERSION:
+		return PPSSPP_GIT_VERSION;
 	default:
 		return "";
 	}
@@ -250,6 +252,7 @@ bool System_GetPropertyBool(SystemProperty prop) {
 	case SYSPROP_HAS_FOLDER_BROWSER:
 	case SYSPROP_HAS_OPEN_DIRECTORY:
 	case SYSPROP_HAS_TEXT_INPUT_DIALOG:
+	case SYSPROP_CAN_SHOW_FILE:
 		return true;
 	case SYSPROP_SUPPORTS_OPEN_FILE_IN_EDITOR:
 		return true;  // FileUtil.cpp: OpenFileInEditor
@@ -301,7 +304,7 @@ bool MainUI::HandleCustomEvent(QEvent *e) {
 		const char *filter = "All files (*.*)";
 		switch (fileType) {
 		case BrowseFileType::BOOTABLE:
-			filter = "PSP ROMs (*.iso *.cso *.pbp *.elf *.zip *.ppdmp)";
+			filter = "PSP ROMs (*.iso *.cso *.chd *.pbp *.elf *.zip *.ppdmp)";
 			break;
 		case BrowseFileType::IMAGE:
 			filter = "Pictures (*.jpg *.png)";
@@ -311,6 +314,9 @@ bool MainUI::HandleCustomEvent(QEvent *e) {
 			break;
 		case BrowseFileType::DB:
 			filter = "DB files (*.db)";
+			break;
+		case BrowseFileType::SOUND_EFFECT:
+			filter = "WAVE files (*.wav)";
 			break;
 		case BrowseFileType::ANY:
 			break;
@@ -402,6 +408,9 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 			emit(qtcamera->onStopCamera());
 		}
 		return true;
+	case SystemRequestType::SHOW_FILE_IN_FOLDER:
+		QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromUtf8(param1.c_str())));
+		return true;
 	default:
 		return false;
 	}
@@ -417,10 +426,6 @@ void System_Vibrate(int length_ms) {
 		length_ms = 50;
 	else if (length_ms == -2)
 		length_ms = 25;
-}
-
-void System_ShowFileInFolder(const char *path) {
-	QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromUtf8(path)));
 }
 
 void System_LaunchUrl(LaunchUrlType urlType, const char *url)
@@ -470,7 +475,7 @@ void MainUI::EmuThreadFunc() {
 	emuThreadState = (int)EmuThreadState::RUNNING;
 	while (emuThreadState != (int)EmuThreadState::QUIT_REQUESTED) {
 		updateAccelerometer();
-		UpdateRunLoop();
+		UpdateRunLoop(graphicsContext);
 	}
 	emuThreadState = (int)EmuThreadState::STOPPED;
 
@@ -537,7 +542,7 @@ QString MainUI::InputBoxGetQString(QString title, QString defaultValue) {
 
 void MainUI::resizeGL(int w, int h) {
 	if (UpdateScreenScale(w, h)) {
-		System_PostUIMessage("gpu_displayResized", "");
+		System_PostUIMessage(UIMessage::GPU_RENDER_RESIZED);
 	}
 	xscale = w / this->width();
 	yscale = h / this->height();
@@ -714,7 +719,7 @@ void MainUI::paintGL() {
 #endif
 	updateAccelerometer();
 	if (emuThreadState == (int)EmuThreadState::DISABLED) {
-		UpdateRunLoop();
+		UpdateRunLoop(graphicsContext);
 	} else {
 		graphicsContext->ThreadFrame();
 		// Do the rest in EmuThreadFunc
@@ -726,20 +731,7 @@ void MainUI::updateAccelerometer() {
 	// TODO: Toggle it depending on whether it is enabled
 	QAccelerometerReading *reading = acc->reading();
 	if (reading) {
-		AxisInput axis;
-		axis.deviceId = DEVICE_ID_ACCELEROMETER;
-
-		axis.axisId = JOYSTICK_AXIS_ACCELEROMETER_X;
-		axis.value = reading->x();
-		NativeAxis(axis);
-
-		axis.axisId = JOYSTICK_AXIS_ACCELEROMETER_Y;
-		axis.value = reading->y();
-		NativeAxis(axis);
-
-		axis.axisId = JOYSTICK_AXIS_ACCELEROMETER_Z;
-		axis.value = reading->z();
-		NativeAxis(axis);
+		NativeAccelerometer(reading->x(), reading->y(), reading->z());
 	}
 #endif
 }

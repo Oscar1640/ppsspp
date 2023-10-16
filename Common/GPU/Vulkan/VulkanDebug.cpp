@@ -21,6 +21,7 @@
 #include <mutex>
 
 #include "Common/Log.h"
+#include "Common/System/System.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/Vulkan/VulkanDebug.h"
 
@@ -82,9 +83,26 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugUtilsCallback(
 		// Extended validation (ARM best practices)
 		// Non-fifo validation not recommended
 		return false;
+	case 337425955:
+		// False positive
+		// https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/3615
+		return false;
 	default:
 		break;
 	}
+
+	/*
+	// Can be used to temporarily turn errors into info for easier debugging.
+	switch (messageCode) {
+	case 1544472022:
+		if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+			messageSeverity = (VkDebugUtilsMessageSeverityFlagBitsEXT)((messageSeverity & ~VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT);
+		}
+		break;
+	default:
+		break;
+	}
+	*/
 
 	int count;
 	{
@@ -122,7 +140,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugUtilsCallback(
 #ifdef _WIN32
 	OutputDebugStringA(msg.c_str());
 	if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-		if (options->breakOnError && IsDebuggerPresent()) {
+		if (options->breakOnError && System_GetPropertyBool(SYSPROP_DEBUGGER_PRESENT)) {
 			DebugBreak();
 		}
 		if (options->msgBoxOnError) {
@@ -130,7 +148,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugUtilsCallback(
 		}
 	} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 		// Don't break on perf warnings for now, even with a debugger. We log them at least.
-		if (options->breakOnWarning && IsDebuggerPresent() && 0 == (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)) {
+		if (options->breakOnWarning && System_GetPropertyBool(SYSPROP_DEBUGGER_PRESENT) && 0 == (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)) {
 			DebugBreak();
 		}
 	}

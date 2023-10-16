@@ -11,12 +11,12 @@
 // Main use is of course from EmuScreen.cpp, but also useful from control settings etc.
 class ControlMapper {
 public:
-	void Update();
+	void Update(double now);
 
 	// Inputs to the table-based mapping
 	// These functions are free-threaded.
 	bool Key(const KeyInput &key, bool *pauseTrigger);
-	void Axis(const AxisInput &axis);
+	void Axis(const AxisInput *axes, size_t count);
 
 	// Required callbacks.
 	// TODO: These are so many now that a virtual interface might be more appropriate..
@@ -42,8 +42,13 @@ public:
 
 	void GetDebugString(char *buffer, size_t bufSize) const;
 
+	struct InputSample {
+		float value;
+		double timestamp;
+	};
+
 private:
-	bool UpdatePSPState(const InputMapping &changedMapping);
+	bool UpdatePSPState(const InputMapping &changedMapping, double now);
 	float MapAxisValue(float value, int vkId, const InputMapping &mapping, const InputMapping &changedMapping, bool *oppositeTouched);
 	void SwapMappingIfEnabled(uint32_t *vkey);
 
@@ -57,6 +62,8 @@ private:
 	float virtKeys_[VIRTKEY_COUNT]{};
 	bool virtKeyOn_[VIRTKEY_COUNT]{};  // Track boolean output separaately since thresholds may differ.
 
+	double deviceTimestamps_[(size_t)DEVICE_ID_COUNT]{};
+
 	int lastNonDeadzoneDeviceID_[2]{};
 
 	float history_[2][2]{};
@@ -69,9 +76,11 @@ private:
 	bool swapAxes_ = false;
 
 	// Protects basically all the state.
+	// TODO: Maybe we should piggyback on the screenmanager mutex - it's always locked
+	// when events come in here.
 	std::mutex mutex_;
 
-	std::map<InputMapping, float> curInput_;
+	std::map<InputMapping, InputSample> curInput_;
 
 	// Callbacks
 	std::function<void(int, bool)> onVKey_;

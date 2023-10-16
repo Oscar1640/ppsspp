@@ -264,7 +264,7 @@ void CustomButton::Update() {
 }
 
 bool PSPButton::IsDown() {
-	return (__CtrlPeekButtons() & pspButtonBit_) != 0;
+	return (__CtrlPeekButtonsVisual() & pspButtonBit_) != 0;
 }
 
 PSPDpad::PSPDpad(ImageID arrowIndex, const char *key, ImageID arrowDownIndex, ImageID overlayIndex, float scale, float spacing, UI::LayoutParams *layoutParams)
@@ -318,54 +318,55 @@ void PSPDpad::ProcessTouch(float x, float y, bool down) {
 
 	float dx = (x - bounds_.centerX()) * inv_stick_size;
 	float dy = (y - bounds_.centerY()) * inv_stick_size;
-	float rad = sqrtf(dx*dx + dy*dy);
-	if (rad < deadzone || fabs(dx) > 0.5f || fabs(dy) > 0.5)
+	float rad = sqrtf(dx * dx + dy * dy);
+	if (!g_Config.bStickyTouchDPad && (rad < deadzone || fabs(dx) > 0.5f || fabs(dy) > 0.5))
 		down = false;
 
 	int ctrlMask = 0;
-	int lastDown = down_;
-
 	bool fourWay = g_Config.bDisableDpadDiagonals || rad < 0.2f;
 	if (down) {
 		if (fourWay) {
 			int direction = (int)(floorf((atan2f(dy, dx) / (2 * M_PI) * 4) + 0.5f)) & 3;
 			switch (direction) {
-			case 0: ctrlMask |= CTRL_RIGHT; break;
-			case 1: ctrlMask |= CTRL_DOWN; break;
-			case 2: ctrlMask |= CTRL_LEFT; break;
-			case 3: ctrlMask |= CTRL_UP; break;
+			case 0: ctrlMask = CTRL_RIGHT; break;
+			case 1: ctrlMask = CTRL_DOWN; break;
+			case 2: ctrlMask = CTRL_LEFT; break;
+			case 3: ctrlMask = CTRL_UP; break;
 			}
 			// 4 way pad
 		} else {
 			// 8 way pad
 			int direction = (int)(floorf((atan2f(dy, dx) / (2 * M_PI) * 8) + 0.5f)) & 7;
 			switch (direction) {
-			case 0: ctrlMask |= CTRL_RIGHT; break;
-			case 1: ctrlMask |= CTRL_RIGHT | CTRL_DOWN; break;
-			case 2: ctrlMask |= CTRL_DOWN; break;
-			case 3: ctrlMask |= CTRL_DOWN | CTRL_LEFT; break;
-			case 4: ctrlMask |= CTRL_LEFT; break;
-			case 5: ctrlMask |= CTRL_UP | CTRL_LEFT; break;
-			case 6: ctrlMask |= CTRL_UP; break;
-			case 7: ctrlMask |= CTRL_UP | CTRL_RIGHT; break;
+			case 0: ctrlMask = CTRL_RIGHT; break;
+			case 1: ctrlMask = CTRL_RIGHT | CTRL_DOWN; break;
+			case 2: ctrlMask = CTRL_DOWN; break;
+			case 3: ctrlMask = CTRL_DOWN | CTRL_LEFT; break;
+			case 4: ctrlMask = CTRL_LEFT; break;
+			case 5: ctrlMask = CTRL_UP | CTRL_LEFT; break;
+			case 6: ctrlMask = CTRL_UP; break;
+			case 7: ctrlMask = CTRL_UP | CTRL_RIGHT; break;
 			}
 		}
 	}
 
+	int lastDown = down_;
+	int pressed = ctrlMask & ~lastDown;
+	int released = (~ctrlMask) & lastDown;
 	down_ = ctrlMask;
-	int pressed = down_ & ~lastDown;
-	int released = (~down_) & lastDown;
-	static const int dir[4] = {CTRL_RIGHT, CTRL_DOWN, CTRL_LEFT, CTRL_UP};
+	bool vibrate = false;
+	static const int dir[4] = { CTRL_RIGHT, CTRL_DOWN, CTRL_LEFT, CTRL_UP };
 	for (int i = 0; i < 4; i++) {
 		if (pressed & dir[i]) {
-			if (g_Config.bHapticFeedback) {
-				System_Vibrate(HAPTIC_VIRTUAL_KEY);
-			}
+			vibrate = true;
 			__CtrlUpdateButtons(dir[i], 0);
 		}
 		if (released & dir[i]) {
 			__CtrlUpdateButtons(0, dir[i]);
 		}
+	}
+	if (vibrate && g_Config.bHapticFeedback) {
+		System_Vibrate(HAPTIC_VIRTUAL_KEY);
 	}
 }
 
@@ -894,7 +895,8 @@ bool GestureGamepad::Touch(const TouchInput &input) {
 			dragPointerId_ = input.id;
 			lastX_ = input.x;
 			lastY_ = input.y;
-
+			downX_ = input.x;
+			downY_ = input.y;
 			const float now = time_now_d();
 			if (now - lastTapRelease_ < 0.3f && !haveDoubleTapped_) {
 				if (g_Config.iDoubleTapGesture != 0 )
@@ -911,6 +913,15 @@ bool GestureGamepad::Touch(const TouchInput &input) {
 			deltaY_ += input.y - lastY_;
 			lastX_ = input.x;
 			lastY_ = input.y;
+
+			if (g_Config.bAnalogGesture) {
+				const float k = g_Config.fAnalogGestureSensibility * 0.02;
+				float dx = (input.x - downX_)*g_display.dpi_scale_x * k;
+				float dy = (input.y - downY_)*g_display.dpi_scale_y * k;
+				dx = std::min(1.0f, std::max(-1.0f, dx));
+				dy = std::min(1.0f, std::max(-1.0f, dy));
+				__CtrlSetAnalogXY(0, dx, -dy);
+			}
 		}
 	}
 	if (input.flags & TOUCH_UP) {
@@ -924,10 +935,26 @@ bool GestureGamepad::Touch(const TouchInput &input) {
 					controlMapper_->PSPKey(DEVICE_ID_TOUCH, GestureKey::keyList[g_Config.iDoubleTapGesture-1], KEY_UP);
 				haveDoubleTapped_ = false;
 			}
+
+			if (g_Config.bAnalogGesture)
+				__CtrlSetAnalogXY(0, 0, 0);
 		}
 	}
 	return true;
 }
+
+void GestureGamepad::Draw(UIContext &dc) {
+	float opacity = g_Config.iTouchButtonOpacity / 100.0;
+	if (opacity <= 0.0f)
+		return;
+
+	uint32_t colorBg = colorAlpha(GetButtonColor(), opacity);
+
+	if (g_Config.bAnalogGesture && dragPointerId_ != -1) {
+		dc.Draw()->DrawImage(ImageID("I_CIRCLE"), downX_, downY_, 0.7f, colorBg, ALIGN_CENTER);
+	}
+}
+
 
 void GestureGamepad::Update() {
 	const float th = 1.0f;

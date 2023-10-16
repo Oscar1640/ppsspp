@@ -25,6 +25,7 @@
 #include "Common/GPU/D3D9/D3D9StateCache.h"
 #include "Common/OSVersion.h"
 #include "Common/StringUtils.h"
+#include "Common/TimeUtil.h"
 
 #include "Common/Log.h"
 
@@ -518,10 +519,6 @@ public:
 		return (uint32_t)ShaderLanguage::HLSL_D3D9;
 	}
 	uint32_t GetDataFormatSupport(DataFormat fmt) const override;
-	PresentationMode GetPresentationMode() const override {
-		// TODO: Fix. Not yet used.
-		return PresentationMode::FIFO;
-	}
 
 	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const char *tag) override;
 	DepthStencilState *CreateDepthStencilState(const DepthStencilStateDesc &desc) override;
@@ -579,7 +576,10 @@ public:
 		curPipeline_ = (D3D9Pipeline *)pipeline;
 	}
 
+	void BeginFrame(Draw::DebugFlags debugFlags) override;
 	void EndFrame() override;
+	void Present(PresentMode presentMode, int vblanks) override;
+
 	int GetFrameCount() override { return frameCount_; }
 
 	void UpdateDynamicUniformBuffer(const void *ub, size_t size) override;
@@ -641,7 +641,7 @@ private:
 	D3DCAPS9 d3dCaps_;
 	char shadeLangVersion_[64]{};
 	DeviceCaps caps_{};
-	int frameCount_ = 0;
+	int frameCount_ = FRAME_TIME_HISTORY_LENGTH;
 
 	// Bound state
 	AutoRef<D3D9Pipeline> curPipeline_;
@@ -783,6 +783,9 @@ D3D9Context::D3D9Context(IDirect3D9 *d3d, IDirect3D9Ex *d3dEx, int adapterId, ID
 	caps_.multiSampleLevelsMask = 1;  // More could be supported with some work.
 
 	caps_.clipPlanesSupported = caps.MaxUserClipPlanes;
+	caps_.presentInstantModeChange = false;
+	caps_.presentMaxInterval = 1;
+	caps_.presentModesSupported = PresentMode::FIFO;
 
 	if ((caps.RasterCaps & D3DPRASTERCAPS_ANISOTROPY) != 0 && caps.MaxAnisotropy > 1) {
 		caps_.anisoSupported = true;
@@ -964,8 +967,28 @@ void D3D9Context::BindNativeTexture(int index, void *nativeTexture) {
 	device_->SetTexture(index, texture);
 }
 
+void D3D9Context::BeginFrame(Draw::DebugFlags debugFlags) {
+	FrameTimeData frameTimeData = frameTimeHistory_.Add(frameCount_);
+	frameTimeData.frameBegin = time_now_d();
+	frameTimeData.afterFenceWait = frameTimeData.frameBegin;  // no fence wait
+}
+
 void D3D9Context::EndFrame() {
+	frameTimeHistory_[frameCount_].firstSubmit = time_now_d();
 	curPipeline_ = nullptr;
+}
+
+void D3D9Context::Present(PresentMode presentMode, int vblanks) {
+	frameTimeHistory_[frameCount_].queuePresent = time_now_d();
+	if (deviceEx_) {
+		deviceEx_->EndScene();
+		deviceEx_->PresentEx(NULL, NULL, NULL, NULL, 0);
+		deviceEx_->BeginScene();
+	} else {
+		device_->EndScene();
+		device_->Present(NULL, NULL, NULL, NULL);
+		device_->BeginScene();
+	}
 	frameCount_++;
 }
 

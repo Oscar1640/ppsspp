@@ -723,10 +723,13 @@ void ArmJit::CompNEON_Mftv(MIPSOpcode op) {
 			// Set these BEFORE disable!
 			if (imm - 128 == VFPU_CTRL_SPREFIX) {
 				js.prefixSFlag = JitState::PREFIX_UNKNOWN;
+				js.blockWrotePrefixes = true;
 			} else if (imm - 128 == VFPU_CTRL_TPREFIX) {
 				js.prefixTFlag = JitState::PREFIX_UNKNOWN;
+				js.blockWrotePrefixes = true;
 			} else if (imm - 128 == VFPU_CTRL_DPREFIX) {
 				js.prefixDFlag = JitState::PREFIX_UNKNOWN;
+				js.blockWrotePrefixes = true;
 			}
 		} else {
 			//ERROR
@@ -758,10 +761,13 @@ void ArmJit::CompNEON_Vmtvc(MIPSOpcode op) {
 
 		if (imm - 128 == VFPU_CTRL_SPREFIX) {
 			js.prefixSFlag = JitState::PREFIX_UNKNOWN;
+			js.blockWrotePrefixes = true;
 		} else if (imm - 128 == VFPU_CTRL_TPREFIX) {
 			js.prefixTFlag = JitState::PREFIX_UNKNOWN;
+			js.blockWrotePrefixes = true;
 		} else if (imm - 128 == VFPU_CTRL_DPREFIX) {
 			js.prefixDFlag = JitState::PREFIX_UNKNOWN;
+			js.blockWrotePrefixes = true;
 		}
 	}
 }

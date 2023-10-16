@@ -399,6 +399,7 @@
     <ClInclude Include="..\ext\libpng17\pnglibconf.h" />
     <ClInclude Include="..\ext\libpng17\pngpriv.h" />
     <ClInclude Include="..\ext\libpng17\pngstruct.h" />
+    <ClInclude Include="..\ext\naett\naett.h" />
     <ClInclude Include="..\ext\vma\vk_mem_alloc.h" />
     <ClInclude Include="ABI.h" />
     <ClInclude Include="Arm64Emitter.h" />
@@ -471,6 +472,7 @@
     <ClInclude Include="GPU\Vulkan\VulkanBarrier.h" />
     <ClInclude Include="GPU\Vulkan\VulkanContext.h" />
     <ClInclude Include="GPU\Vulkan\VulkanDebug.h" />
+    <ClInclude Include="GPU\Vulkan\VulkanDescSet.h" />
     <ClInclude Include="GPU\Vulkan\VulkanFramebuffer.h" />
     <ClInclude Include="GPU\Vulkan\VulkanFrameData.h" />
     <ClInclude Include="GPU\Vulkan\VulkanImage.h" />
@@ -490,10 +492,12 @@
     <ClInclude Include="Math\lin\vec3.h" />
     <ClInclude Include="Math\math_util.h" />
     <ClInclude Include="Math\Statistics.h" />
+    <ClInclude Include="Net\HTTPNaettRequest.h" />
     <ClInclude Include="Net\NetBuffer.h" />
     <ClInclude Include="Net\HTTPClient.h" />
     <ClInclude Include="Net\HTTPHeaders.h" />
     <ClInclude Include="Net\HTTPServer.h" />
+    <ClInclude Include="Net\HTTPRequest.h" />
     <ClInclude Include="Net\Resolve.h" />
     <ClInclude Include="Net\Sinks.h" />
     <ClInclude Include="Net\URL.h" />
@@ -505,6 +509,7 @@
     <ClInclude Include="Render\Text\draw_text.h" />
     <ClInclude Include="Render\Text\draw_text_android.h" />
     <ClInclude Include="Render\Text\draw_text_qt.h" />
+    <ClInclude Include="Render\Text\draw_text_sdl.h" />
     <ClInclude Include="Render\Text\draw_text_uwp.h" />
     <ClInclude Include="Render\Text\draw_text_win.h" />
     <ClInclude Include="LogReporting.h" />
@@ -527,27 +532,6 @@
     <ClInclude Include="Crypto\sha256.h" />
     <ClInclude Include="DbgNew.h" />
     <ClInclude Include="ExceptionHandlerSetup.h" />
-    <ClInclude Include="GL\GLInterfaceBase.h" />
-    <ClInclude Include="GL\GLInterface\EGL.h">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">true</ExcludedFromBuild>
-    </ClInclude>
-    <ClInclude Include="GL\GLInterface\EGLAndroid.h">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">true</ExcludedFromBuild>
-    </ClInclude>
     <ClInclude Include="GraphicsContext.h" />
     <ClInclude Include="Log.h" />
     <ClInclude Include="LogManager.h" />
@@ -847,6 +831,7 @@
       <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
       </ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="..\ext\naett\naett.c" />
     <ClCompile Include="..\ext\vma\vk_mem_alloc.cpp" />
     <ClCompile Include="ABI.cpp" />
     <ClCompile Include="Arm64Emitter.cpp" />
@@ -916,6 +901,7 @@
     <ClCompile Include="GPU\Vulkan\VulkanBarrier.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanContext.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanDebug.cpp" />
+    <ClCompile Include="GPU\Vulkan\VulkanDescSet.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanFramebuffer.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanFrameData.cpp" />
     <ClCompile Include="GPU\Vulkan\VulkanImage.cpp" />
@@ -934,10 +920,12 @@
     <ClCompile Include="Math\lin\vec3.cpp" />
     <ClCompile Include="Math\math_util.cpp" />
     <ClCompile Include="Math\Statistics.cpp" />
+    <ClCompile Include="Net\HTTPNaettRequest.cpp" />
     <ClCompile Include="Net\NetBuffer.cpp" />
     <ClCompile Include="Net\HTTPClient.cpp" />
     <ClCompile Include="Net\HTTPHeaders.cpp" />
     <ClCompile Include="Net\HTTPServer.cpp" />
+    <ClCompile Include="Net\HTTPRequest.cpp" />
     <ClCompile Include="Net\Resolve.cpp" />
     <ClCompile Include="Net\Sinks.cpp" />
     <ClCompile Include="Net\URL.cpp" />
@@ -949,11 +937,13 @@
     <ClCompile Include="Render\Text\draw_text.cpp" />
     <ClCompile Include="Render\Text\draw_text_android.cpp" />
     <ClCompile Include="Render\Text\draw_text_qt.cpp" />
+    <ClCompile Include="Render\Text\draw_text_sdl.cpp" />
     <ClCompile Include="Render\Text\draw_text_uwp.cpp" />
     <ClCompile Include="Render\Text\draw_text_win.cpp" />
     <ClCompile Include="LogReporting.cpp" />
     <ClCompile Include="RiscVCPUDetect.cpp" />
     <ClCompile Include="RiscVEmitter.cpp" />
+    <ClCompile Include="LoongArchCPUDetect.cpp" />
     <ClCompile Include="Serialize\Serializer.cpp" />
     <ClCompile Include="Data\Convert\ColorConv.cpp" />
     <ClCompile Include="ConsoleListener.cpp" />
@@ -982,36 +972,6 @@
     <ClCompile Include="Crypto\sha1.cpp" />
     <ClCompile Include="Crypto\sha256.cpp" />
     <ClCompile Include="ExceptionHandlerSetup.cpp" />
-    <ClCompile Include="GL\GLInterface\EGL.cpp">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">true</ExcludedFromBuild>
-    </ClCompile>
-    <ClCompile Include="GL\GLInterface\EGLAndroid.cpp">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">true</ExcludedFromBuild>
-    </ClCompile>
-    <ClCompile Include="GL\GLInterface\GLInterface.cpp">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">true</ExcludedFromBuild>
-    </ClCompile>
     <ClCompile Include="LogManager.cpp" />
     <ClCompile Include="MemArenaAndroid.cpp" />
     <ClCompile Include="MemArenaPosix.cpp" />

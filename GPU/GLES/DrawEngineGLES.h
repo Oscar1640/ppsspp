@@ -86,19 +86,19 @@ public:
 
 	// So that this can be inlined
 	void Flush() {
-		if (!numDrawCalls_)
+		if (!numDrawVerts_)
 			return;
 		DoFlush();
 	}
 
 	void FinishDeferred() {
-		if (!numDrawCalls_)
+		if (!numDrawVerts_)
 			return;
 		DoFlush();
 	}
 
 	void DispatchFlush() override {
-		if (!numDrawCalls_)
+		if (!numDrawVerts_)
 			return;
 		Flush();
 	}
@@ -128,7 +128,7 @@ private:
 	};
 	FrameData frameData_[GLRenderManager::MAX_INFLIGHT_FRAMES];
 
-	DenseHashMap<uint32_t, GLRInputLayout *, nullptr> inputLayoutMap_;
+	DenseHashMap<uint32_t, GLRInputLayout *> inputLayoutMap_;
 
 	GLRInputLayout *softwareInputLayout_ = nullptr;
 	GLRenderManager *render_;

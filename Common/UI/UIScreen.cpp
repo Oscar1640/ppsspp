@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "Common/System/Display.h"
+#include "Common/System/System.h"
 #include "Common/Input/InputState.h"
 #include "Common/Input/KeyCodes.h"
 #include "Common/Math/curves.h"
@@ -9,8 +10,8 @@
 #include "Common/UI/Root.h"
 #include "Common/Data/Text/I18n.h"
 #include "Common/Render/DrawBuffer.h"
-
 #include "Common/Log.h"
+#include <Common/System/Request.h>
 
 static const bool ClickDebug = false;
 
@@ -74,14 +75,13 @@ void UIScreen::axis(const AxisInput &axis) {
 
 bool UIScreen::key(const KeyInput &key) {
 	if (!ignoreInput_ && root_) {
-		UI::KeyEvent(key, root_);
-		return false;
+		return UI::KeyEvent(key, root_);
 	} else {
 		return false;
 	}
 }
 
-void UIScreen::UnsyncTouch(const TouchInput &touch) {
+bool UIScreen::UnsyncTouch(const TouchInput &touch) {
 	if (ClickDebug && root_ && (touch.flags & TOUCH_DOWN)) {
 		INFO_LOG(SYSTEM, "Touch down!");
 		std::vector<UI::View *> views;
@@ -91,19 +91,22 @@ void UIScreen::UnsyncTouch(const TouchInput &touch) {
 		}
 	}
 
-	std::lock_guard<std::mutex> guard(eventQueueLock_);
 	QueuedEvent ev{};
 	ev.type = QueuedEventType::TOUCH;
 	ev.touch = touch;
+	std::lock_guard<std::mutex> guard(eventQueueLock_);
 	eventQueue_.push_back(ev);
+	return false;
 }
 
-void UIScreen::UnsyncAxis(const AxisInput &axis) {
-	std::lock_guard<std::mutex> guard(eventQueueLock_);
+void UIScreen::UnsyncAxis(const AxisInput *axes, size_t count) {
 	QueuedEvent ev{};
 	ev.type = QueuedEventType::AXIS;
-	ev.axis = axis;
-	eventQueue_.push_back(ev);
+	std::lock_guard<std::mutex> guard(eventQueueLock_);
+	for (size_t i = 0; i < count; i++) {
+		ev.axis = axes[i];
+		eventQueue_.push_back(ev);
+	}
 }
 
 bool UIScreen::UnsyncKey(const KeyInput &key) {
@@ -122,10 +125,10 @@ bool UIScreen::UnsyncKey(const KeyInput &key) {
 		}
 	}
 
-	std::lock_guard<std::mutex> guard(eventQueueLock_);
 	QueuedEvent ev{};
 	ev.type = QueuedEventType::KEY;
 	ev.key = key;
+	std::lock_guard<std::mutex> guard(eventQueueLock_);
 	eventQueue_.push_back(ev);
 	return retval;
 }
@@ -192,10 +195,7 @@ void UIScreen::deviceRestored() {
 void UIScreen::preRender() {
 	using namespace Draw;
 	Draw::DrawContext *draw = screenManager()->getDrawContext();
-	if (!draw) {
-		return;
-	}
-	draw->BeginFrame();
+	_dbg_assert_(draw != nullptr);
 	// Bind and clear the back buffer
 	draw->BindFramebufferAsRenderTarget(nullptr, { RPAction::CLEAR, RPAction::CLEAR, RPAction::CLEAR, 0xFF000000 }, "UI");
 	screenManager()->getUIContext()->BeginFrame();
@@ -212,12 +212,7 @@ void UIScreen::preRender() {
 }
 
 void UIScreen::postRender() {
-	Draw::DrawContext *draw = screenManager()->getDrawContext();
-	if (!draw) {
-		return;
-	}
 	screenManager()->getUIContext()->Flush();
-	draw->EndFrame();
 }
 
 void UIScreen::render() {
@@ -274,10 +269,10 @@ bool UIDialogScreen::key(const KeyInput &key) {
 	return retval;
 }
 
-void UIDialogScreen::sendMessage(const char *msg, const char *value) {
+void UIDialogScreen::sendMessage(UIMessage message, const char *value) {
 	Screen *screen = screenManager()->dialogParent(this);
 	if (screen) {
-		screen->sendMessage(msg, value);
+		screen->sendMessage(message, value);
 	}
 }
 
@@ -398,6 +393,10 @@ void PopupScreen::TriggerFinish(DialogResult result) {
 
 		OnCompleted(result);
 	}
+#if PPSSPP_PLATFORM(UWP)
+	// Inform UI that popup close to hide OSK (if visible)
+	System_NotifyUIState("popup_closed");
+#endif
 }
 
 void PopupScreen::CreateViews() {
@@ -427,7 +426,6 @@ void PopupScreen::CreateViews() {
 
 	CreatePopupContents(box_);
 	root_->SetDefaultFocusView(box_);
-
 	if (ShowButtons() && !button1_.empty()) {
 		// And the two buttons at the bottom.
 		LinearLayout *buttonRow = new LinearLayout(ORIENT_HORIZONTAL, new LinearLayoutParams(200, WRAP_CONTENT));

@@ -19,6 +19,7 @@
 
 #include <string>
 #include <vector>
+#include <thread>
 
 #include "Common/File/Path.h"
 
@@ -40,9 +41,6 @@ public:
 	// This gets called on startup and when we get back from settings.
 	u32 CheckGPUFeatures() const override;
 
-	bool IsReady() override;
-	void CancelReady() override;
-
 	// These are where we can reset command buffers etc.
 	void BeginHostFrame() override;
 	void EndHostFrame() override;
@@ -58,8 +56,6 @@ public:
 	TextureCacheVulkan *GetTextureCache() {
 		return textureCacheVulkan_;
 	}
-
-	std::string GetGpuProfileString() override;
 
 protected:
 	void FinishDeferred() override;
@@ -85,5 +81,4 @@ private:
 	PipelineManagerVulkan *pipelineManager_;
 
 	Path shaderCachePath_;
-	std::atomic<bool> shaderCacheLoaded_{};
 };

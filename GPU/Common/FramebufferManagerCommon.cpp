@@ -426,14 +426,6 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(Framebuffer
 			u32 v_fb_end_ptr = v->fb_address + v->fb_stride * v->height * bpp;
 
 			if (params.fb_address > v->fb_address && params.fb_address < v_fb_first_line_end_ptr) {
-				// If the framebuffer we can join to is currently bound as a texture, we likely have
-				// a situation like in #9324 and don't want to do this.
-				u32 curTextureAddress = gstate.getTextureAddress(0);
-				if (v->fb_address == curTextureAddress) {
-					// Don't try these joining shenanigans.
-					continue;
-				}
-
 				const int x_offset = (params.fb_address - v->fb_address) / bpp;
 				if (x_offset < params.fb_stride && v->height >= drawing_height) {
 					// Pretty certainly a pure render-to-X-offset.
@@ -1413,7 +1405,6 @@ Draw::Texture *FramebufferManagerCommon::MakePixelTexture(const u8 *srcPixels, G
 		}
 
 		// OK, current one seems good, let's use it (and mark it used).
-		gpuStats.numDrawPixels++;
 		draw_->UpdateTextureLevels(iter.tex, &srcPixels, generateTexture, 1);
 		// NOTE: numFlips is no good - this is called every frame when paused sometimes!
 		iter.frameNumber = frameNumber;
@@ -1442,8 +1433,7 @@ Draw::Texture *FramebufferManagerCommon::MakePixelTexture(const u8 *srcPixels, G
 	if (!tex) {
 		ERROR_LOG(G3D, "Failed to create DrawPixels texture");
 	}
-	gpuStats.numDrawPixels++;
-	gpuStats.numTexturesDecoded++;  // Separate stat for this later?
+	// We don't need to count here, already counted by numUploads by the caller.
 
 	// INFO_LOG(G3D, "Creating drawPixelsCache texture: %dx%d", tex->Width(), tex->Height());
 
@@ -1967,8 +1957,12 @@ bool FramebufferManagerCommon::NotifyFramebufferCopy(u32 src, u32 dst, int size,
 		if (flags & GPUCopyFlag::MEMSET) {
 			gpuStats.numClears++;
 		}
-		WARN_LOG_ONCE(btucpy, G3D, "Memcpy fbo upload %08x -> %08x (size: %x)", src, dst, size);
+		WARN_LOG_N_TIMES(btucpy, 5, G3D, "Memcpy fbo upload %08x -> %08x (size: %x)", src, dst, size);
 		FlushBeforeCopy();
+
+		// TODO: Hot Shots Golf makes a lot of these during the "meter", to copy back the image to the screen, it copies line by line.
+		// We could collect these in a buffer and flush on the next draw, or something like that, to avoid that. The line copies cause
+		// awkward visual artefacts.
 		const u8 *srcBase = Memory::GetPointerUnchecked(src);
 		GEBufferFormat srcFormat = channel == RASTER_DEPTH ? GE_FORMAT_DEPTH16 : dstBuffer->fb_format;
 		int srcStride = channel == RASTER_DEPTH ? dstBuffer->z_stride : dstBuffer->fb_stride;
@@ -1978,8 +1972,10 @@ bool FramebufferManagerCommon::NotifyFramebufferCopy(u32 src, u32 dst, int size,
 		// This is a memcpy, let's still copy just in case.
 		return false;
 	} else if (srcBuffer) {
-		WARN_LOG_ONCE(btdcpy, G3D, "Memcpy fbo download %08x -> %08x", src, dst);
+		WARN_LOG_N_TIMES(btdcpy, 5, G3D, "Memcpy fbo download %08x -> %08x", src, dst);
 		FlushBeforeCopy();
+		// TODO: In Hot Shots Golf, check if we can do a readback to a framebuffer here.
+		// Again we have the problem though that it's doing a lot of small copies here, one for each line.
 		if (srcH == 0 || srcY + srcH > srcBuffer->bufferHeight) {
 			WARN_LOG_ONCE(btdcpyheight, G3D, "Memcpy fbo download %08x -> %08x skipped, %d+%d is taller than %d", src, dst, srcY, srcH, srcBuffer->bufferHeight);
 		} else if (!g_Config.bSkipGPUReadbacks && (!srcBuffer->memoryUpdated || channel == RASTER_DEPTH)) {
@@ -2585,6 +2581,8 @@ void FramebufferManagerCommon::NotifyDisplayResized() {
 	pixelHeight_ = PSP_CoreParameter().pixelHeight;
 	presentation_->UpdateDisplaySize(pixelWidth_, pixelHeight_);
 
+	INFO_LOG(G3D, "FramebufferManagerCommon::NotifyDisplayResized: %dx%d", pixelWidth_, pixelHeight_);
+
 	// No drawing is allowed here. This includes anything that might potentially touch a command buffer, like creating images!
 	// So we need to defer the post processing initialization.
 	updatePostShaders_ = true;
@@ -2606,13 +2604,6 @@ void FramebufferManagerCommon::NotifyRenderResized(int msaaLevel) {
 	// No drawing is allowed here. This includes anything that might potentially touch a command buffer, like creating images!
 	// So we need to defer the post processing initialization.
 	updatePostShaders_ = true;
-
-#ifdef _WIN32
-	// Seems related - if you're ok with numbers all the time, show some more :)
-	if (g_Config.iShowStatusFlags != 0) {
-		ShowScreenResolution();
-	}
-#endif
 }
 
 void FramebufferManagerCommon::NotifyConfigChanged() {
@@ -2700,24 +2691,6 @@ void FramebufferManagerCommon::UpdateFramebufUsage(VirtualFramebuffer *vfb) {
 	checkFlag(FB_USAGE_TEXTURE, vfb->last_frame_used);
 	checkFlag(FB_USAGE_RENDER_COLOR, vfb->last_frame_render);
 	checkFlag(FB_USAGE_CLUT, vfb->last_frame_clut);
-}
-
-void FramebufferManagerCommon::ShowScreenResolution() {
-	auto gr = GetI18NCategory(I18NCat::GRAPHICS);
-
-	std::ostringstream messageStream;
-	messageStream << gr->T("Internal Resolution") << ": ";
-	messageStream << PSP_CoreParameter().renderWidth << "x" << PSP_CoreParameter().renderHeight << " ";
-	if (postShaderIsUpscalingFilter_) {
-		messageStream << gr->T("(upscaling)") << " ";
-	} else if (postShaderIsSupersampling_) {
-		messageStream << gr->T("(supersampling)") << " ";
-	}
-	messageStream << gr->T("Window Size") << ": ";
-	messageStream << PSP_CoreParameter().pixelWidth << "x" << PSP_CoreParameter().pixelHeight;
-
-	g_OSD.Show(OSDType::MESSAGE_INFO, messageStream.str(), 0.0f, "resize");
-	INFO_LOG(SYSTEM, "%s", messageStream.str().c_str());
 }
 
 void FramebufferManagerCommon::ClearAllDepthBuffers() {

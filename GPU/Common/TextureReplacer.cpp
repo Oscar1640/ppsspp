@@ -92,6 +92,13 @@ void TextureReplacer::NotifyConfigChanged() {
 		}
 
 		enabled_ = File::IsDirectory(basePath_);
+
+		if (g_Config.bSaveNewTextures) {
+			// Somewhat crude message, re-using translation strings.
+			auto d = GetI18NCategory(I18NCat::DEVELOPER);
+			auto di = GetI18NCategory(I18NCat::DIALOG);
+			g_OSD.Show(OSDType::MESSAGE_INFO, std::string(d->T("Save new textures")) + ": " + di->T("Enabled"), 2.0f);
+		}
 	} else if (wasEnabled) {
 		delete vfs_;
 		vfs_ = nullptr;
@@ -226,9 +233,10 @@ bool TextureReplacer::LoadIniValues(IniFile &ini, VFSBackend *dir, bool isOverri
 		ERROR_LOG(G3D, "Unsupported texture replacement version %d, trying anyway", version);
 	}
 
-	bool filenameWarning = false;
+	int badFileNameCount = 0;
 
 	std::map<ReplacementCacheKey, std::map<int, std::string>> filenameMap;
+	std::string badFilenames;
 
 	if (ini.HasSection("hashes")) {
 		auto hashes = ini.GetOrCreateSection("hashes")->ToMap();
@@ -237,20 +245,35 @@ bool TextureReplacer::LoadIniValues(IniFile &ini, VFSBackend *dir, bool isOverri
 
 		for (const auto &item : hashes) {
 			ReplacementCacheKey key(0, 0);
-			int level = 0;  // sscanf might fail to pluck the level, but that's ok, we default to 0. sscanf doesn't write to non-matched outputs.
+			// sscanf might fail to pluck the level if omitted from the line, but that's ok, we default level to 0.
+			// sscanf doesn't write to non-matched outputs.
+			int level = 0;
 			if (sscanf(item.first.c_str(), "%16llx%8x_%d", &key.cachekey, &key.hash, &level) >= 1) {
+				// We allow empty filenames, to mark textures that we don't want to keep saving.
 				filenameMap[key][level] = item.second;
 				if (checkFilenames) {
+					// TODO: We should check for the union of these on all platforms, really.
 #if PPSSPP_PLATFORM(WINDOWS)
+					bool bad = item.second.find_first_of("\\ABCDEFGHIJKLMNOPQRSTUVWXYZ:<>|?*") != std::string::npos;
 					// Uppercase probably means the filenames don't match.
 					// Avoiding an actual check of the filenames to avoid performance impact.
-					filenameWarning = filenameWarning || item.second.find_first_of("\\ABCDEFGHIJKLMNOPQRSTUVWXYZ:<>|?*") != std::string::npos;
 #else
-					filenameWarning = filenameWarning || item.second.find_first_of("\\:<>|?*") != std::string::npos;
+					bool bad = item.second.find_first_of("\\:<>|?*") != std::string::npos;
 #endif
+					if (bad) {
+						badFileNameCount++;
+						if (badFileNameCount == 10) {
+							badFilenames.append("...");
+						} else if (badFileNameCount < 10) {
+							badFilenames.append(item.second);
+							badFilenames.push_back('\n');
+						}
+					}
 				}
+			} else if (item.first.empty()) {
+				INFO_LOG(G3D, "Ignoring [hashes] line with empty key: '= %s'", item.second.c_str());
 			} else {
-				ERROR_LOG(G3D, "Unsupported syntax under [hashes]: %s", item.first.c_str());
+				ERROR_LOG(G3D, "Unsupported syntax under [hashes], ignoring: %s = ", item.first.c_str());
 			}
 		}
 	}
@@ -308,9 +331,10 @@ bool TextureReplacer::LoadIniValues(IniFile &ini, VFSBackend *dir, bool isOverri
 		aliases_[pair.first] = alias;
 	}
 
-	if (filenameWarning) {
+	if (badFileNameCount > 0) {
 		auto err = GetI18NCategory(I18NCat::ERRORS);
-		g_OSD.Show(OSDType::MESSAGE_ERROR, err->T("textures.ini filenames may not be cross-platform (banned characters)"), 6.0f);
+		g_OSD.Show(OSDType::MESSAGE_WARNING, err->T("textures.ini filenames may not be cross - platform(banned characters)"), badFilenames, 6.0f);
+		WARN_LOG(G3D, "Potentially bad filenames: %s", badFilenames.c_str());
 	}
 
 	if (ini.HasSection("hashranges")) {
@@ -337,6 +361,9 @@ bool TextureReplacer::LoadIniValues(IniFile &ini, VFSBackend *dir, bool isOverri
 		}
 	}
 
+	auto gr = GetI18NCategory(I18NCat::GRAPHICS);
+
+	g_OSD.Show(OSDType::MESSAGE_SUCCESS, gr->T("Texture replacement pack activated"), 2.0f);
 	return true;
 }
 
@@ -782,9 +809,13 @@ void TextureReplacer::Decimate(ReplacerDecimateMode mode) {
 	const double threshold = time_now_d() - age;
 	size_t totalSize = 0;
 	for (auto &item : levelCache_) {
-		std::lock_guard<std::mutex> guard(item.second->lock_);
-		item.second->PurgeIfNotUsedSinceTime(threshold);
-		totalSize += item.second->GetTotalDataSize();  // TODO: Make something better.
+		// During decimation, it's fine to try-lock here to avoid blocking the main thread while
+		// the level is being loaded - in that case we don't want to decimate anyway.
+		if (item.second->lock_.try_lock()) {
+			item.second->PurgeIfNotUsedSinceTime(threshold);
+			totalSize += item.second->GetTotalDataSize();  // TODO: Make something better.
+			item.second->lock_.unlock();
+		}
 		// don't actually delete the items here, just clean out the data.
 	}
 

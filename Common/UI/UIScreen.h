@@ -46,9 +46,9 @@ public:
 	virtual bool key(const KeyInput &key);
 	virtual void axis(const AxisInput &axis);
 
-	void UnsyncTouch(const TouchInput &touch) override;
+	bool UnsyncTouch(const TouchInput &touch) override;
 	bool UnsyncKey(const KeyInput &key) override;
-	void UnsyncAxis(const AxisInput &axis) override;
+	void UnsyncAxis(const AxisInput *axes, size_t count) override;
 
 	TouchInput transformTouch(const TouchInput &touch) override;
 
@@ -73,12 +73,13 @@ protected:
 	bool ignoreInsets_ = false;
 	bool ignoreInput_ = false;
 
-private:
+protected:
 	void DoRecreateViews();
 
 	bool recreateViews_ = true;
 	bool lastVertical_;
 
+private:
 	std::mutex eventQueueLock_;
 	std::deque<QueuedEvent> eventQueue_;
 };
@@ -87,7 +88,7 @@ class UIDialogScreen : public UIScreen {
 public:
 	UIDialogScreen() : UIScreen(), finished_(false) {}
 	bool key(const KeyInput &key) override;
-	void sendMessage(const char *msg, const char *value) override;
+	void sendMessage(UIMessage message, const char *value) override;
 
 private:
 	bool finished_;

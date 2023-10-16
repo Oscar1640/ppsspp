@@ -400,8 +400,8 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_REWIND, "Rewind"},
 	{VIRTKEY_SAVE_STATE, "Save State"},
 	{VIRTKEY_LOAD_STATE, "Load State"},
-	{VIRTKEY_PREVIOUS_SLOT,  "Previous Slot"},
-	{VIRTKEY_NEXT_SLOT,  "Next Slot"},
+	{VIRTKEY_PREVIOUS_SLOT, "Previous Slot"},
+	{VIRTKEY_NEXT_SLOT, "Next Slot"},
 #if !defined(MOBILE_DEVICE)
 	{VIRTKEY_TOGGLE_FULLSCREEN, "Toggle Fullscreen"},
 #endif
@@ -430,6 +430,9 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_SCREEN_ROTATION_HORIZONTAL, "Display Landscape"},
 	{VIRTKEY_SCREEN_ROTATION_HORIZONTAL180, "Display Landscape Reversed"},
 #endif
+
+	{VIRTKEY_TOGGLE_WLAN, "Toggle WLAN"},
+	{VIRTKEY_EXIT_APP, "Exit App"},
 
 	{CTRL_HOME, "Home"},
 	{CTRL_HOLD, "Hold"},
@@ -514,11 +517,11 @@ bool InputMappingsFromPspButton(int btn, std::vector<MultiInputMapping> *mapping
 		return false;
 	}
 	bool mapped = false;
-	for (auto iter2 = iter->second.begin(); iter2 != iter->second.end(); ++iter2) {
-		bool ignore = ignoreMouse && iter2->HasMouse();
+	for (auto &iter2 : iter->second) {
+		bool ignore = ignoreMouse && iter2.HasMouse();
 		if (mappings && !ignore) {
 			mapped = true;
-			mappings->push_back(*iter2);
+			mappings->push_back(iter2);
 		}
 	}
 	return mapped;
@@ -534,8 +537,6 @@ bool PspButtonHasMappings(int btn) {
 }
 
 MappedAnalogAxes MappedAxesForDevice(InputDeviceID deviceId) {
-	MappedAnalogAxes result{};
-
 	// Find the axisId mapped for a specific virtual button.
 	auto findAxisId = [&](int btn) -> MappedAnalogAxis {
 		MappedAnalogAxis info{ -1 };
@@ -561,6 +562,7 @@ MappedAnalogAxes MappedAxesForDevice(InputDeviceID deviceId) {
 		return MappedAnalogAxis{ -1 };
 	};
 
+	MappedAnalogAxes result;
 	std::lock_guard<std::recursive_mutex> guard(g_controllerMapLock);
 	result.leftX = findAxisIdPair(VIRTKEY_AXIS_X_MIN, VIRTKEY_AXIS_X_MAX);
 	result.leftY = findAxisIdPair(VIRTKEY_AXIS_Y_MIN, VIRTKEY_AXIS_Y_MAX);
@@ -619,6 +621,7 @@ bool ReplaceSingleKeyMapping(int btn, int index, MultiInputMapping key) {
 }
 
 void DeleteNthMapping(int key, int number) {
+	std::lock_guard<std::recursive_mutex> guard(g_controllerMapLock);
 	auto iter = g_controllerMap.find(key);
 	if (iter != g_controllerMap.end()) {
 		if (number < iter->second.size()) {
@@ -697,6 +700,8 @@ void LoadFromIni(IniFile &file) {
 		return;
 	}
 
+	std::lock_guard<std::recursive_mutex> guard(g_controllerMapLock);
+
 	Section *controls = file.GetOrCreateSection("ControlMapping");
 	for (size_t i = 0; i < ARRAY_SIZE(psp_button_names); i++) {
 		std::string value;
@@ -727,6 +732,8 @@ void LoadFromIni(IniFile &file) {
 
 void SaveToIni(IniFile &file) {
 	Section *controls = file.GetOrCreateSection("ControlMapping");
+
+	std::lock_guard<std::recursive_mutex> guard(g_controllerMapLock);
 
 	for (size_t i = 0; i < ARRAY_SIZE(psp_button_names); i++) {
 		std::vector<MultiInputMapping> keys;
@@ -796,6 +803,8 @@ void AutoConfForPad(const std::string &name) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_XBOX, false);
 	} else if (name == "Retro Station Controller") {
 		SetDefaultKeyMap(DEFAULT_MAPPING_RETRO_STATION_CONTROLLER, false);
+	} else {
+		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_PAD, false);
 	}
 #else
 	// TODO: Should actually check for XInput?

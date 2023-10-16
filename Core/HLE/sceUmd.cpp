@@ -55,7 +55,7 @@ static int umdInsertChangeEvent = -1;
 static std::vector<SceUID> umdWaitingThreads;
 static std::map<SceUID, u64> umdPausedWaits;
 
-bool UMDReplacePermit = false;
+bool g_UMDReplacePermit = false;
 bool UMDInserted = true;
 
 struct PspUmdInfo {
@@ -80,6 +80,7 @@ void __UmdInit()
 	driveCBId = 0;
 	umdWaitingThreads.clear();
 	umdPausedWaits.clear();
+	g_UMDReplacePermit = false;
 
 	__KernelRegisterWaitTypeFuncs(WAITTYPE_UMD, __UmdBeginCallback, __UmdEndCallback);
 }
@@ -104,8 +105,8 @@ void __UmdDoState(PointerWrap &p)
 	Do(p, umdPausedWaits);
 
 	if (s > 1) {
-		Do(p, UMDReplacePermit);
-		if (UMDReplacePermit) {
+		Do(p, g_UMDReplacePermit);
+		if (g_UMDReplacePermit) {
 			System_Notify(SystemNotification::UI);
 		}
 	}
@@ -486,12 +487,13 @@ static u32 sceUmdGetErrorStat()
 
 void __UmdReplace(const Path &filepath) {
 	std::string error = "";
-	if (!UmdReplace(filepath, error)) {
+	FileLoader *fileLoader;
+	if (!UmdReplace(filepath, &fileLoader, error)) {
 		ERROR_LOG(SCEIO, "UMD Replace failed: %s", error.c_str());
 		return;
 	}
 
-	Achievements::ChangeUMD(filepath);
+	Achievements::ChangeUMD(filepath, fileLoader);
 
 	UMDInserted = false;
 	// Wake any threads waiting for the disc to be removed.
@@ -505,14 +507,15 @@ void __UmdReplace(const Path &filepath) {
 }
 
 bool getUMDReplacePermit() {
-	return UMDReplacePermit;
+	return g_UMDReplacePermit;
 }
 
 static u32 sceUmdReplaceProhibit()
 {
-	DEBUG_LOG(SCEIO,"sceUmdReplaceProhibit()");
-	if (UMDReplacePermit) {
-		UMDReplacePermit = false;
+	DEBUG_LOG(SCEIO, "sceUmdReplaceProhibit()");
+	if (g_UMDReplacePermit) {
+		INFO_LOG(SCEIO, "sceUmdReplaceProhibit() - prohibited");
+		g_UMDReplacePermit = false;
 		System_Notify(SystemNotification::SWITCH_UMD_UPDATED);
 	}
 	return 0;
@@ -520,9 +523,10 @@ static u32 sceUmdReplaceProhibit()
 
 static u32 sceUmdReplacePermit()
 {
-	DEBUG_LOG(SCEIO,"sceUmdReplacePermit()");
-	if (!UMDReplacePermit) {
-		UMDReplacePermit = true;
+	DEBUG_LOG(SCEIO, "sceUmdReplacePermit()");
+	if (!g_UMDReplacePermit) {
+		INFO_LOG(SCEIO, "sceUmdReplacePermit() - permitted");
+		g_UMDReplacePermit = true;
 		System_Notify(SystemNotification::SWITCH_UMD_UPDATED);
 	}
 	return 0;
