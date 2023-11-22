@@ -580,7 +580,7 @@ bool EmuScreen::UnsyncTouch(const TouchInput &touch) {
 	}
 
 	if (root_) {
-		root_->Touch(touch);
+		UIScreen::UnsyncTouch(touch);
 	}
 	return true;
 }
@@ -655,7 +655,7 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 		break;
 
 	case VIRTKEY_FRAME_ADVANCE:
-		if (!Achievements::WarnUserIfChallengeModeActive()) {
+		if (!Achievements::WarnUserIfChallengeModeActive(false)) {
 			if (down) {
 				// If game is running, pause emulation immediately. Otherwise, advance a single frame.
 				if (Core_IsStepping()) {
@@ -713,7 +713,7 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 #endif
 
 	case VIRTKEY_REWIND:
-		if (down && !Achievements::WarnUserIfChallengeModeActive()) {
+		if (down && !Achievements::WarnUserIfChallengeModeActive(false)) {
 			if (SaveState::CanRewind()) {
 				SaveState::Rewind(&AfterSaveStateAction);
 			} else {
@@ -722,21 +722,23 @@ void EmuScreen::onVKey(int virtualKeyCode, bool down) {
 		}
 		break;
 	case VIRTKEY_SAVE_STATE:
-		if (down && !Achievements::WarnUserIfChallengeModeActive())
+		if (down && !Achievements::WarnUserIfChallengeModeActive(true)) {
 			SaveState::SaveSlot(gamePath_, g_Config.iCurrentStateSlot, &AfterSaveStateAction);
+		}
 		break;
 	case VIRTKEY_LOAD_STATE:
-		if (down && !Achievements::WarnUserIfChallengeModeActive())
+		if (down && !Achievements::WarnUserIfChallengeModeActive(false)) {
 			SaveState::LoadSlot(gamePath_, g_Config.iCurrentStateSlot, &AfterSaveStateAction);
+		}
 		break;
 	case VIRTKEY_PREVIOUS_SLOT:
-		if (down && !Achievements::WarnUserIfChallengeModeActive()) {
+		if (down && !Achievements::WarnUserIfChallengeModeActive(true)) {
 			SaveState::PrevSlot();
 			System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
 		}
 		break;
 	case VIRTKEY_NEXT_SLOT:
-		if (down && !Achievements::WarnUserIfChallengeModeActive()) {
+		if (down && !Achievements::WarnUserIfChallengeModeActive(true)) {
 			SaveState::NextSlot();
 			System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
 		}
@@ -870,6 +872,11 @@ bool EmuScreen::key(const KeyInput &key) {
 
 void EmuScreen::UnsyncAxis(const AxisInput *axes, size_t count) {
 	System_Notify(SystemNotification::ACTIVITY);
+
+	if (UI::IsFocusMovementEnabled()) {
+		return UIScreen::UnsyncAxis(axes, count);
+	}
+
 	return controlMapper_.Axis(axes, count);
 }
 
