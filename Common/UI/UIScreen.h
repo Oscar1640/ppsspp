@@ -36,9 +36,7 @@ public:
 	~UIScreen();
 
 	void update() override;
-	void preRender() override;
-	void render() override;
-	void postRender() override;
+	ScreenRenderFlags render(ScreenRenderMode mode) override;
 	void deviceLost() override;
 	void deviceRestored() override;
 
@@ -61,7 +59,6 @@ public:
 
 protected:
 	virtual void CreateViews() = 0;
-	virtual void DrawBackground(UIContext &dc) {}
 
 	void RecreateViews() override { recreateViews_ = true; }
 	bool UseVerticalLayout() const;
@@ -74,6 +71,10 @@ protected:
 	bool ignoreInput_ = false;
 
 protected:
+	virtual void DrawBackground(UIContext &ui) {}
+	virtual void DrawForeground(UIContext &ui) {}
+
+	void SetupViewport();
 	void DoRecreateViews();
 
 	bool recreateViews_ = true;
@@ -110,6 +111,9 @@ public:
 	void SetPopupOffset(float y);
 
 	void SetHasDropShadow(bool has) { hasDropShadow_ = has; }
+
+	// For the postproc param sliders on DisplayLayoutScreen
+	bool wantBrightBackground() const override { return !hasDropShadow_; }
 
 protected:
 	virtual bool FillVertical() const { return false; }

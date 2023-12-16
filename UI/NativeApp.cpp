@@ -114,6 +114,7 @@
 #include "UI/AudioCommon.h"
 #include "UI/BackgroundAudio.h"
 #include "UI/ControlMappingScreen.h"
+#include "UI/DevScreens.h"
 #include "UI/DiscordIntegration.h"
 #include "UI/EmuScreen.h"
 #include "UI/GameInfoCache.h"
@@ -215,44 +216,6 @@ public:
 // globals
 static LogListener *logger = nullptr;
 Path boot_filename;
-
-std::string NativeQueryConfig(std::string query) {
-	char temp[128];
-	if (query == "screenRotation") {
-		INFO_LOG(G3D, "g_Config.screenRotation = %d", g_Config.iScreenRotation);
-		snprintf(temp, sizeof(temp), "%d", g_Config.iScreenRotation);
-		return std::string(temp);
-	} else if (query == "immersiveMode") {
-		return std::string(g_Config.bImmersiveMode ? "1" : "0");
-	} else if (query == "hwScale") {
-		int scale = g_Config.iAndroidHwScale;
-		// Override hw scale for TV type devices.
-		if (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) == DEVICE_TYPE_TV)
-			scale = 0;
-
-		if (scale == 1) {
-			// If g_Config.iInternalResolution is also set to Auto (1), we fall back to "Device resolution" (0). It works out.
-			scale = g_Config.iInternalResolution;
-		} else if (scale >= 2) {
-			scale -= 1;
-		}
-
-		int max_res = std::max(System_GetPropertyInt(SYSPROP_DISPLAY_XRES), System_GetPropertyInt(SYSPROP_DISPLAY_YRES)) / 480 + 1;
-		snprintf(temp, sizeof(temp), "%d", std::min(scale, max_res));
-		return std::string(temp);
-	} else if (query == "sustainedPerformanceMode") {
-		return std::string(g_Config.bSustainedPerformanceMode ? "1" : "0");
-	} else if (query == "androidJavaGL") {
-		// If we're using Vulkan, we say no... need C++ to use Vulkan.
-		if (GetGPUBackend() == GPUBackend::VULKAN) {
-			return "false";
-		}
-		// Otherwise, some devices prefer the Java init so play it safe.
-		return "true";
-	} else {
-		return "";
-	}
-}
 
 int NativeMix(short *audio, int numSamples, int sampleRateHz) {
 	return __AudioMix(audio, numSamples, sampleRateHz);
@@ -622,10 +585,8 @@ void NativeInit(int argc, const char *argv[], const char *savegame_dir, const ch
 					fileToLog = argv[i] + strlen("--log=");
 				if (!strncmp(argv[i], "--state=", strlen("--state=")) && strlen(argv[i]) > strlen("--state="))
 					stateToLoad = Path(std::string(argv[i] + strlen("--state=")));
-#if !defined(MOBILE_DEVICE)
 				if (!strncmp(argv[i], "--escape-exit", strlen("--escape-exit")))
 					g_Config.bPauseExitsEmulator = true;
-#endif
 				if (!strncmp(argv[i], "--pause-menu-exit", strlen("--pause-menu-exit")))
 					g_Config.bPauseMenuExitsEmulator = true;
 				if (!strcmp(argv[i], "--fullscreen")) {
@@ -798,7 +759,7 @@ void NativeInit(int argc, const char *argv[], const char *savegame_dir, const ch
 		g_screenManager->switchScreen(new LogoScreen(AfterLogoScreen::DEFAULT));
 	}
 
-	g_screenManager->SetOverlayScreen(new OSDOverlayScreen());
+	g_screenManager->SetBackgroundOverlayScreens(new BackgroundScreen(), new OSDOverlayScreen());
 
 	// Easy testing
 	// screenManager->push(new GPUDriverTestScreen());
@@ -853,17 +814,14 @@ bool NativeInitGraphics(GraphicsContext *graphicsContext) {
 
 	ui_draw2d.SetAtlas(GetUIAtlas());
 	ui_draw2d.SetFontAtlas(GetFontAtlas());
-	ui_draw2d_front.SetAtlas(GetUIAtlas());
-	ui_draw2d_front.SetFontAtlas(GetFontAtlas());
 
 	uiContext = new UIContext();
 	uiContext->theme = GetTheme();
 	UpdateTheme(uiContext);
 
 	ui_draw2d.Init(g_draw, texColorPipeline);
-	ui_draw2d_front.Init(g_draw, texColorPipeline);
 
-	uiContext->Init(g_draw, texColorPipeline, colorPipeline, &ui_draw2d, &ui_draw2d_front);
+	uiContext->Init(g_draw, texColorPipeline, colorPipeline, &ui_draw2d);
 	if (uiContext->Text())
 		uiContext->Text()->SetFont("Tahoma", 20, 0);
 
@@ -959,6 +917,7 @@ void NativeShutdownGraphics() {
 	if (g_screenManager) {
 		g_screenManager->deviceLost();
 	}
+	g_iconCache.ClearTextures();
 
 	if (gpu)
 		gpu->DeviceLost();
@@ -990,7 +949,6 @@ void NativeShutdownGraphics() {
 	uiContext = nullptr;
 
 	ui_draw2d.Shutdown();
-	ui_draw2d_front.Shutdown();
 
 	if (colorPipeline) {
 		colorPipeline->Release();
@@ -1075,15 +1033,12 @@ static Matrix4x4 ComputeOrthoMatrix(float xres, float yres) {
 	return ortho;
 }
 
+static void SendMouseDeltaAxis();
+
 void NativeFrame(GraphicsContext *graphicsContext) {
 	PROFILE_END_FRAME();
 
-	bool menuThrottle = (GetUIState() != UISTATE_INGAME || !PSP_IsInited()) && GetUIState() != UISTATE_EXIT;
-
-	double startTime;
-	if (menuThrottle) {
-		startTime = time_now_d();
-	}
+	double startTime = time_now_d();
 
 	std::vector<PendingMessage> toProcess;
 	{
@@ -1106,10 +1061,8 @@ void NativeFrame(GraphicsContext *graphicsContext) {
 	Achievements::Idle();
 
 	g_DownloadManager.Update();
-	g_screenManager->update();
 
 	g_Discord.Update();
-	g_BackgroundAudio.Play();
 
 	g_OSD.Update();
 
@@ -1126,6 +1079,10 @@ void NativeFrame(GraphicsContext *graphicsContext) {
 		g_BackgroundAudio.Update();
 	}
 
+	g_iconCache.FrameUpdate();
+
+	g_screenManager->update();
+
 	// Apply the UIContext bounds as a 2D transformation matrix.
 	// TODO: This should be moved into the draw context...
 	Matrix4x4 ortho = ComputeOrthoMatrix(g_display.dp_xres, g_display.dp_yres);
@@ -1141,18 +1098,16 @@ void NativeFrame(GraphicsContext *graphicsContext) {
 	g_draw->BeginFrame(debugFlags);
 
 	ui_draw2d.PushDrawMatrix(ortho);
-	ui_draw2d_front.PushDrawMatrix(ortho);
 
 	g_screenManager->getUIContext()->SetTintSaturation(g_Config.fUITint, g_Config.fUISaturation);
 
 	// All actual rendering happen in here.
-	g_screenManager->render();
+	ScreenRenderFlags renderFlags = g_screenManager->render();
 	if (g_screenManager->getUIContext()->Text()) {
 		g_screenManager->getUIContext()->Text()->OncePerFrame();
 	}
 
 	ui_draw2d.PopDrawMatrix();
-	ui_draw2d_front.PopDrawMatrix();
 
 	g_draw->EndFrame();
 
@@ -1200,7 +1155,7 @@ void NativeFrame(GraphicsContext *graphicsContext) {
 		graphicsContext->Poll();
 	}
 
-	if (menuThrottle) {
+	if (!(renderFlags & ScreenRenderFlags::HANDLED_THROTTLING)) {
 		float refreshRate = System_GetPropertyFloat(SYSPROP_DISPLAY_REFRESH_RATE);
 		// Simple throttling to not burn the GPU in the menu.
 		// TODO: This should move into NativeFrame. Also, it's only necessary in MAILBOX or IMMEDIATE presentation modes.
@@ -1208,7 +1163,12 @@ void NativeFrame(GraphicsContext *graphicsContext) {
 		int sleepTime = (int)(1000.0 / refreshRate) - (int)(diffTime * 1000.0);
 		if (sleepTime > 0)
 			sleep_ms(sleepTime);
+
+		// TODO: We should ideally mix this with game audio.
+		g_BackgroundAudio.Play();
 	}
+
+	SendMouseDeltaAxis();
 }
 
 bool HandleGlobalMessage(UIMessage message, const std::string &value) {
@@ -1362,6 +1322,40 @@ void NativeAxis(const AxisInput *axes, size_t count) {
 		const AxisInput &axis = axes[i];
 		HLEPlugins::PluginDataAxis[axis.axisId] = axis.value;
 	}
+}
+
+// Called from NativeFrame and from NativeMouseDelta.
+static void SendMouseDeltaAxis() {
+	float mx, my;
+	MouseEventProcessor::MouseDeltaToAxes(time_now_d(), &mx, &my);
+
+	AxisInput axis[2];
+	axis[0].axisId = JOYSTICK_AXIS_MOUSE_REL_X;
+	axis[0].deviceId = DEVICE_ID_MOUSE;
+	axis[0].value = mx;
+	axis[1].axisId = JOYSTICK_AXIS_MOUSE_REL_Y;
+	axis[1].deviceId = DEVICE_ID_MOUSE;
+	axis[1].value = my;
+
+	HLEPlugins::PluginDataAxis[JOYSTICK_AXIS_MOUSE_REL_X] = mx;
+	HLEPlugins::PluginDataAxis[JOYSTICK_AXIS_MOUSE_REL_Y] = my;
+
+	//NOTICE_LOG(SYSTEM, "delta: %0.2f %0.2f    mx/my: %0.2f %0.2f   dpi: %f  sens: %f ",
+	//	g_mouseDeltaX, g_mouseDeltaY, mx, my, g_display.dpi_scale_x, g_Config.fMouseSensitivity);
+
+	if (GetUIState() == UISTATE_INGAME || g_Config.bMapMouse) {
+		NativeAxis(axis, 2);
+	}
+}
+
+void NativeMouseDelta(float dx, float dy) {
+	// Remap, shared code. Then send it as a regular axis event.
+	if (!g_Config.bMouseControl)
+		return;
+
+	MouseEventProcessor::ProcessDelta(time_now_d(), dx, dy);
+
+	SendMouseDeltaAxis();
 }
 
 void NativeAccelerometer(float tiltX, float tiltY, float tiltZ) {

@@ -19,7 +19,7 @@ void NiceSizeFormat(uint64_t size, char *out, size_t bufSize) {
 	if (s == 0)
 		snprintf(out, bufSize, "%d B", (int)size);
 	else
-		snprintf(out, bufSize, "%3.1f %s", f, sizes[s]);
+		snprintf(out, bufSize, "%3.2f %s", f, sizes[s]);
 }
 
 std::string NiceSizeFormat(uint64_t size) {
@@ -52,7 +52,7 @@ int Version::ToInteger() const {
 	return major * 1000000 + minor * 10000 + sub;
 }
 
-bool ParseMacAddress(std::string str, uint8_t macAddr[6]) {
+bool ParseMacAddress(const std::string &str, uint8_t macAddr[6]) {
 	unsigned int mac[6];
 	if (6 != sscanf(str.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5])) {
 		return false;

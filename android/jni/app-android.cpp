@@ -41,6 +41,8 @@ typedef _jobject *jobject;
 typedef _jclass *jclass;
 typedef jobject jstring;
 typedef jobject jbyteArray;
+typedef jobject jintArray;
+typedef jobject jfloatArray;
 
 struct JNIEnv {};
 
@@ -135,6 +137,7 @@ static std::string boardName;
 
 std::string g_externalDir;  // Original external dir (root of Android storage).
 std::string g_extFilesDir;  // App private external dir.
+std::string g_nativeLibDir;  // App native library dir
 
 static std::vector<std::string> g_additionalStorageDirs;
 
@@ -608,10 +611,34 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_audioConfig
 	optimalSampleRate = optimalSR;
 }
 
+// Easy way for the Java side to ask the C++ side for configuration options, such as
+// the rotation lock which must be controlled from Java on Android.
+static std::string QueryConfig(std::string query) {
+	char temp[128];
+	if (query == "screenRotation") {
+		INFO_LOG(G3D, "g_Config.screenRotation = %d", g_Config.iScreenRotation);
+		snprintf(temp, sizeof(temp), "%d", g_Config.iScreenRotation);
+		return std::string(temp);
+	} else if (query == "immersiveMode") {
+		return std::string(g_Config.bImmersiveMode ? "1" : "0");
+	} else if (query == "sustainedPerformanceMode") {
+		return std::string(g_Config.bSustainedPerformanceMode ? "1" : "0");
+	} else if (query == "androidJavaGL") {
+		// If we're using Vulkan, we say no... need C++ to use Vulkan.
+		if (GetGPUBackend() == GPUBackend::VULKAN) {
+			return "false";
+		}
+		// Otherwise, some devices prefer the Java init so play it safe.
+		return "true";
+	} else {
+		return "";
+	}
+}
+
 extern "C" jstring Java_org_ppsspp_ppsspp_NativeApp_queryConfig
 	(JNIEnv *env, jclass, jstring jquery) {
 	std::string query = GetJavaString(env, jquery);
-	std::string result = NativeQueryConfig(query);
+	std::string result = QueryConfig(query);
 	jstring jresult = env->NewStringUTF(result.c_str());
 	return jresult;
 }
@@ -679,7 +706,7 @@ static void parse_args(std::vector<std::string> &args, const std::string value) 
 
 extern "C" void Java_org_ppsspp_ppsspp_NativeApp_init
 (JNIEnv * env, jclass, jstring jmodel, jint jdeviceType, jstring jlangRegion, jstring japkpath,
-	jstring jdataDir, jstring jexternalStorageDir, jstring jexternalFilesDir, jstring jadditionalStorageDirs, jstring jcacheDir, jstring jshortcutParam,
+	jstring jdataDir, jstring jexternalStorageDir, jstring jexternalFilesDir, jstring jNativeLibDir, jstring jadditionalStorageDirs, jstring jcacheDir, jstring jshortcutParam,
 	jint jAndroidVersion, jstring jboard) {
 	SetCurrentThreadName("androidInit");
 
@@ -706,9 +733,11 @@ extern "C" void Java_org_ppsspp_ppsspp_NativeApp_init
 	std::string externalStorageDir = GetJavaString(env, jexternalStorageDir);
 	std::string additionalStorageDirsString = GetJavaString(env, jadditionalStorageDirs);
 	std::string externalFilesDir = GetJavaString(env, jexternalFilesDir);
+	std::string nativeLibDir = GetJavaString(env, jNativeLibDir);
 
 	g_externalDir = externalStorageDir;
 	g_extFilesDir = externalFilesDir;
+	g_nativeLibDir = nativeLibDir;
 
 	if (!additionalStorageDirsString.empty()) {
 		SplitString(additionalStorageDirsString, ':', g_additionalStorageDirs);
@@ -1195,8 +1224,14 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_touch
 }
 
 extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_keyDown(JNIEnv *, jclass, jint deviceId, jint key, jboolean isRepeat) {
-	if (!renderer_inited)
-		return false;
+	if (!renderer_inited) {
+		return false; // could probably return true here too..
+	}
+	if (key == 0 && deviceId >= DEVICE_ID_PAD_0 && deviceId <= DEVICE_ID_PAD_9) {
+		// Ignore keycode 0 from pads. Stadia controllers seem to produce them when pressing L2/R2 for some reason, confusing things.
+		return true;  // need to eat the key so it doesn't go through legacy path
+	}
+
 	KeyInput keyInput;
 	keyInput.deviceId = (InputDeviceID)deviceId;
 	keyInput.keyCode = (InputKeyCode)key;
@@ -1208,8 +1243,14 @@ extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_keyDown(JNIEnv *, jclass, j
 }
 
 extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_keyUp(JNIEnv *, jclass, jint deviceId, jint key) {
-	if (!renderer_inited)
-		return false;
+	if (!renderer_inited) {
+		return false; // could probably return true here too..
+	}
+	if (key == 0 && deviceId >= DEVICE_ID_PAD_0 && deviceId <= DEVICE_ID_PAD_9) {
+		// Ignore keycode 0 from pads. Stadia controllers seem to produce them when pressing L2/R2 for some reason, confusing things.
+		return true;  // need to eat the key so it doesn't go through legacy path
+	}
+
 	KeyInput keyInput;
 	keyInput.deviceId = (InputDeviceID)deviceId;
 	keyInput.keyCode = (InputKeyCode)key;
@@ -1217,25 +1258,58 @@ extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_keyUp(JNIEnv *, jclass, jin
 	return NativeKey(keyInput);
 }
 
-// TODO: Make a batched interface, since we get these in batches on the Android side.
 extern "C" void Java_org_ppsspp_ppsspp_NativeApp_joystickAxis(
-		JNIEnv *env, jclass, jint deviceId, jint axisId, jfloat value) {
+		JNIEnv *env, jclass, jint deviceId, jintArray axisIds, jfloatArray values, jint count) {
 	if (!renderer_inited)
 		return;
 
-	AxisInput axis;
-	axis.deviceId = (InputDeviceID)deviceId;
-	axis.axisId = (InputAxis)axisId;
-	axis.value = value;
-	NativeAxis(&axis, 1);
+	AxisInput *axis = new AxisInput[count];
+	_dbg_assert_(count <= env->GetArrayLength(axisIds));
+	_dbg_assert_(count <= env->GetArrayLength(values));
+	jint *axisIdBuffer = env->GetIntArrayElements(axisIds, NULL);
+	jfloat *valueBuffer = env->GetFloatArrayElements(values, NULL);
+
+	// These are dirty-filtered on the Java side.
+	for (int i = 0; i < count; i++) {
+		axis[i].deviceId = (InputDeviceID)(int)deviceId;
+		axis[i].axisId = (InputAxis)(int)axisIdBuffer[i];
+		axis[i].value = valueBuffer[i];
+	}
+	NativeAxis(axis, count);
+	delete[] axis;
 }
 
 extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mouseWheelEvent(
 	JNIEnv *env, jclass, jint stick, jfloat x, jfloat y) {
 	if (!renderer_inited)
 		return false;
-	// TODO: Support mousewheel for android
+	// TODO: Mousewheel should probably be an axis instead.
+	int wheelDelta = y * 30.0f;
+	if (wheelDelta > 500) wheelDelta = 500;
+	if (wheelDelta < -500) wheelDelta = -500;
+
+	KeyInput key;
+	key.deviceId = DEVICE_ID_MOUSE;
+	if (wheelDelta < 0) {
+		key.keyCode = NKCODE_EXT_MOUSEWHEEL_DOWN;
+		wheelDelta = -wheelDelta;
+	} else {
+		key.keyCode = NKCODE_EXT_MOUSEWHEEL_UP;
+	}
+	// There's no separate keyup event for mousewheel events,
+	// so we release it with a slight delay.
+	key.flags = KEY_DOWN | KEY_HASWHEELDELTA | (wheelDelta << 16);
+	NativeKey(key);
+	key.flags = KEY_UP;
+	NativeKey(key);
 	return true;
+}
+
+extern "C" void Java_org_ppsspp_ppsspp_NativeApp_mouseDelta(
+	JNIEnv * env, jclass, jfloat x, jfloat y) {
+	if (!renderer_inited)
+		return;
+	NativeMouseDelta(x, y);
 }
 
 extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_accelerometer(JNIEnv *, jclass, float x, float y, float z) {
@@ -1328,9 +1402,24 @@ void correctRatio(int &sz_x, int &sz_y, float scale) {
 void getDesiredBackbufferSize(int &sz_x, int &sz_y) {
 	sz_x = display_xres;
 	sz_y = display_yres;
-	std::string config = NativeQueryConfig("hwScale");
-	int scale;
-	if (1 == sscanf(config.c_str(), "%d", &scale) && scale > 0) {
+
+	int scale = g_Config.iAndroidHwScale;
+	// Override hw scale for TV type devices.
+	if (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) == DEVICE_TYPE_TV)
+		scale = 0;
+
+	if (scale == 1) {
+		// If g_Config.iInternalResolution is also set to Auto (1), we fall back to "Device resolution" (0). It works out.
+		scale = g_Config.iInternalResolution;
+	} else if (scale >= 2) {
+		scale -= 1;
+	}
+
+	int max_res = std::max(System_GetPropertyInt(SYSPROP_DISPLAY_XRES), System_GetPropertyInt(SYSPROP_DISPLAY_YRES)) / 480 + 1;
+
+	scale = std::min(scale, max_res);
+
+	if (scale > 0) {
 		correctRatio(sz_x, sz_y, scale);
 	} else {
 		sz_x = 0;
@@ -1376,6 +1465,10 @@ extern "C" jint JNICALL Java_org_ppsspp_ppsspp_NativeApp_getDesiredBackbufferWid
 
 extern "C" jint JNICALL Java_org_ppsspp_ppsspp_NativeApp_getDesiredBackbufferHeight(JNIEnv *, jclass) {
 	return desiredBackbufferSizeY;
+}
+
+extern "C" jint JNICALL Java_org_ppsspp_ppsspp_NativeApp_getDisplayFramerateMode(JNIEnv *, jclass) {
+	return g_Config.iDisplayFramerateMode;
 }
 
 std::vector<std::string> System_GetCameraDeviceList() {

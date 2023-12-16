@@ -266,7 +266,7 @@ UI::EventReturn SavedataPopupScreen::OnDeleteButtonClick(UI::EventParams &e) {
 	return UI::EVENT_DONE;
 }
 
-static std::string CleanSaveString(std::string str) {
+static std::string CleanSaveString(const std::string &str) {
 	std::string s = ReplaceAll(str, "&", "&&");
 	s = ReplaceAll(s, "\n", " ");
 	s = ReplaceAll(s, "\r", " ");
@@ -300,7 +300,7 @@ void SavedataButton::Draw(UIContext &dc) {
 	using namespace UI;
 
 	if (ginfo->icon.texture) {
-		texture = ginfo->icon.texture->GetTexture();
+		texture = ginfo->icon.texture;
 	}
 
 	int x = bounds_.x;
@@ -736,7 +736,7 @@ void GameIconView::Draw(UIContext &dc) {
 	float nw = std::min(bounds_.h * textureWidth_ / textureHeight_, (float)bounds_.w);
 
 	dc.Flush();
-	dc.GetDrawContext()->BindTexture(0, info->icon.texture->GetTexture());
+	dc.GetDrawContext()->BindTexture(0, info->icon.texture);
 	dc.Draw()->Rect(bounds_.x, bounds_.y, nw, bounds_.h, color);
 	dc.Flush();
 	dc.RebindTexture();

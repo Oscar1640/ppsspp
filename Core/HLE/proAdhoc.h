@@ -1042,7 +1042,7 @@ void addFriend(SceNetAdhocctlConnectPacketS2C * packet);
 * Send chat or get that
 * @param std::string ChatString 
 */
-void sendChat(std::string chatString);
+void sendChat(const std::string &chatString);
 std::vector<std::string> getChatLog();
 int GetChatChangeID();
 int GetChatMessageCount();

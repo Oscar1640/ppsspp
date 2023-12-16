@@ -154,7 +154,11 @@ void GetIndexBounds(const void *inds, int count, u32 vertType, u16 *indexLowerBo
 		*indexUpperBound = (u16)upperBound;
 	} else {
 		*indexLowerBound = 0;
-		*indexUpperBound = count - 1;
+		if (count > 0) {
+			*indexUpperBound = count - 1;
+		} else {
+			*indexUpperBound = 0;
+		}
 	}
 }
 
@@ -1497,7 +1501,7 @@ std::string VertexDecoder::GetString(DebugShaderStringType stringType) {
 			// No disassembler defined
 #endif
 			std::string buffer;
-			for (auto line : lines) {
+			for (const auto &line : lines) {
 				buffer += line;
 				buffer += "\n";
 			}

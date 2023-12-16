@@ -715,7 +715,7 @@ bool GPUCommon::InterpretList(DisplayList &list) {
 	return gpuState == GPUSTATE_DONE || gpuState == GPUSTATE_ERROR;
 }
 
-void GPUCommon::BeginFrame() {
+void GPUCommon::PSPFrame() {
 	immCount_ = 0;
 	if (dumpNextFrame_) {
 		NOTICE_LOG(G3D, "DUMPING THIS FRAME");
@@ -726,6 +726,10 @@ void GPUCommon::BeginFrame() {
 	}
 	GPUDebug::NotifyBeginFrame();
 	GPURecord::NotifyBeginFrame();
+}
+
+bool GPUCommon::PresentedThisFrame() const {
+	return framebufferManager_ ? framebufferManager_->PresentedThisFrame() : true;
 }
 
 void GPUCommon::SlowRunLoop(DisplayList &list) {
@@ -927,9 +931,6 @@ void GPUCommon::Execute_Call(u32 op, u32 diff) {
 }
 
 void GPUCommon::DoExecuteCall(u32 target) {
-	// Saint Seiya needs correct support for relative calls.
-	const u32 retval = currentList->pc + 4;
-
 	// Bone matrix optimization - many games will CALL a bone matrix (!).
 	// We don't optimize during recording - so the matrix data gets recorded.
 	if (!debugRecording_ && Memory::IsValidRange(target, 13 * 4) && (Memory::ReadUnchecked_U32(target) >> 24) == GE_CMD_BONEMATRIXDATA) {
@@ -950,7 +951,7 @@ void GPUCommon::DoExecuteCall(u32 target) {
 		// TODO: UpdateState(GPUSTATE_ERROR) ?
 	} else {
 		auto &stackEntry = currentList->stack[currentList->stackptr++];
-		stackEntry.pc = retval;
+		stackEntry.pc = currentList->pc + 4;
 		stackEntry.offsetAddr = gstate_c.offsetAddr;
 		// The base address is NOT saved/restored for a regular call.
 		UpdatePC(currentList->pc, target - 4);
@@ -1611,6 +1612,7 @@ std::vector<GPUDebugOp> GPUCommon::DissassembleOpRange(u32 startpc, u32 endpc) {
 
 	// Don't trigger a pause.
 	u32 prev = Memory::IsValidAddress(startpc - 4) ? Memory::Read_U32(startpc - 4) : 0;
+	result.reserve((endpc - startpc) / 4);
 	for (u32 pc = startpc; pc < endpc; pc += 4) {
 		u32 op = Memory::IsValidAddress(pc) ? Memory::Read_U32(pc) : 0;
 		GeDisassembleOp(pc, op, prev, buffer, sizeof(buffer));
@@ -1862,7 +1864,7 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 
 bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags) {
 	// Track stray copies of a framebuffer in RAM. MotoGP does this.
-	if (framebufferManager_->MayIntersectFramebuffer(src) || framebufferManager_->MayIntersectFramebuffer(dest)) {
+	if (framebufferManager_->MayIntersectFramebufferColor(src) || framebufferManager_->MayIntersectFramebufferColor(dest)) {
 		if (!framebufferManager_->NotifyFramebufferCopy(src, dest, size, flags, gstate_c.skipDrawReason)) {
 			// We use matching values in PerformReadbackToMemory/PerformWriteColorFromMemory.
 			// Since they're identical we don't need to copy.
@@ -1890,7 +1892,7 @@ bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags
 
 bool GPUCommon::PerformMemorySet(u32 dest, u8 v, int size) {
 	// This may indicate a memset, usually to 0, of a framebuffer.
-	if (framebufferManager_->MayIntersectFramebuffer(dest)) {
+	if (framebufferManager_->MayIntersectFramebufferColor(dest)) {
 		Memory::Memset(dest, v, size, "GPUMemset");
 		if (!framebufferManager_->NotifyFramebufferCopy(dest, dest, size, GPUCopyFlag::MEMSET, gstate_c.skipDrawReason)) {
 			InvalidateCache(dest, size, GPU_INVALIDATE_HINT);
@@ -1929,7 +1931,7 @@ void GPUCommon::PerformWriteFormattedFromMemory(u32 addr, int size, int frameWid
 }
 
 bool GPUCommon::PerformWriteStencilFromMemory(u32 dest, int size, WriteStencil flags) {
-	if (framebufferManager_->MayIntersectFramebuffer(dest)) {
+	if (framebufferManager_->MayIntersectFramebufferColor(dest)) {
 		framebufferManager_->PerformWriteStencilFromMemory(dest, size, flags);
 		return true;
 	}
@@ -1954,7 +1956,7 @@ bool GPUCommon::DescribeCodePtr(const u8 *ptr, std::string &name) {
 }
 
 void GPUCommon::UpdateUVScaleOffset() {
-#ifdef _M_SSE
+#if defined(_M_SSE)
 	__m128i values = _mm_slli_epi32(_mm_load_si128((const __m128i *)&gstate.texscaleu), 8);
 	_mm_storeu_si128((__m128i *)&gstate_c.uv, values);
 #elif PPSSPP_ARCH(ARM_NEON)

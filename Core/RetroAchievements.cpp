@@ -77,6 +77,7 @@ std::string s_game_hash;
 std::set<uint32_t> g_activeChallenges;
 bool g_isIdentifying = false;
 bool g_isLoggingIn = false;
+bool g_hasRichPresence = false;
 int g_loginResult;
 
 double g_lastLoginAttemptTime;
@@ -104,6 +105,19 @@ bool IsLoggedIn() {
 	return rc_client_get_user_info(g_rcClient) != nullptr && !g_isLoggingIn;
 }
 
+// This is the RetroAchievements game ID, rather than the PSP game ID.
+static u32 GetGameID() {
+	if (!g_rcClient) {
+		return 0;
+	}
+
+	const rc_client_game_t *info = rc_client_get_game_info(g_rcClient);
+	if (!info) {
+		return 0;
+	}
+	return info->id;  // 0 if not identified
+}
+
 bool EncoreModeActive() {
 	if (!g_rcClient) {
 		return false;
@@ -118,22 +132,30 @@ bool UnofficialEnabled() {
 	return rc_client_get_unofficial_enabled(g_rcClient);
 }
 
-bool ChallengeModeActive() {
+bool HardcoreModeActive() {
 	if (!g_rcClient) {
 		return false;
 	}
-	return IsLoggedIn() && rc_client_get_hardcore_enabled(g_rcClient);
+	// See "Enabling Hardcore" under https://github.com/RetroAchievements/rcheevos/wiki/rc_client-integration.
+	return IsLoggedIn() && rc_client_get_hardcore_enabled(g_rcClient) && rc_client_is_processing_required(g_rcClient);
 }
 
-bool WarnUserIfChallengeModeActive(bool isSaveStateAction, const char *message) {
-	if (!ChallengeModeActive() || (isSaveStateAction && g_Config.bAchievementsSaveStateInChallengeMode)) {
+size_t GetRichPresenceMessage(char *buffer, size_t bufSize) {
+	if (!IsLoggedIn() || !rc_client_has_rich_presence(g_rcClient)) {
+		return (size_t)-1;
+	}
+	return rc_client_get_rich_presence_message(g_rcClient, buffer, bufSize);
+}
+
+bool WarnUserIfHardcoreModeActive(bool isSaveStateAction, const char *message) {
+	if (!HardcoreModeActive() || (isSaveStateAction && g_Config.bAchievementsSaveStateInHardcoreMode)) {
 		return false;
 	}
 
 	const char *showMessage = message;
 	if (!message) {
 		auto ac = GetI18NCategory(I18NCat::ACHIEVEMENTS);
-		showMessage = ac->T("This feature is not available in Challenge Mode");
+		showMessage = ac->T("This feature is not available in Hardcore Mode");
 	}
 
 	g_OSD.Show(OSDType::MESSAGE_WARNING, showMessage, "", g_RAImageID, 3.0f);
@@ -146,18 +168,6 @@ bool IsBlockingExecution() {
 		// INFO_LOG(ACHIEVEMENTS, "isLoggingIn: %d   isIdentifying: %d", (int)g_isLoggingIn, (int)g_isIdentifying);
 	}
 	return g_isLoggingIn || g_isIdentifying;
-}
-
-static u32 GetGameID() {
-	if (!g_rcClient) {
-		return 0;
-	}
-
-	const rc_client_game_t *info = rc_client_get_game_info(g_rcClient);
-	if (!info) {
-		return 0;
-	}
-	return info->id;  // 0 if not identified
 }
 
 bool IsActive() {
@@ -236,13 +246,14 @@ static void event_handler_callback(const rc_client_event_t *event, rc_client_t *
 	{
 		// TODO: Do some zany fireworks!
 
-		// All achievements for the game have been earned. The handler should notify the player that the game was completed or mastered, depending on challenge mode.
+		// All achievements for the game have been earned. The handler should notify the player that the game was completed or mastered, depending on mode, hardcore or not.
 		auto ac = GetI18NCategory(I18NCat::ACHIEVEMENTS);
 
 		const rc_client_game_t *gameInfo = rc_client_get_game_info(g_rcClient);
 
 		// TODO: Translation?
 		std::string title = ApplySafeSubstitutions(ac->T("Mastered %1"), gameInfo->title);
+
 		rc_client_user_game_summary_t summary;
 		rc_client_get_user_game_summary(g_rcClient, &summary);
 
@@ -340,7 +351,7 @@ static void event_handler_callback(const rc_client_event_t *event, rc_client_t *
 		break;
 	case RC_CLIENT_EVENT_RESET:
 		WARN_LOG(ACHIEVEMENTS, "Resetting game due to achievement setting change!");
-		// Challenge mode was enabled, or something else that forces a game reset.
+		// Hardcore mode was enabled, or something else that forces a game reset.
 		System_PostUIMessage(UIMessage::REQUEST_GAME_RESET);
 		break;
 	case RC_CLIENT_EVENT_SERVER_ERROR:
@@ -728,9 +739,9 @@ std::string GetGameAchievementSummary() {
 		summaryString = ApplySafeSubstitutions(ac->T("Earned", "You have unlocked %1 of %2 achievements, earning %3 of %4 points"),
 			summary.num_unlocked_achievements, summary.num_core_achievements + summary.num_unofficial_achievements,
 			summary.points_unlocked, summary.points_core);
-		if (ChallengeModeActive()) {
+		if (HardcoreModeActive()) {
 			summaryString.append("\n");
-			summaryString.append(ac->T("Challenge Mode"));
+			summaryString.append(ac->T("Hardcore Mode"));
 		}
 		if (EncoreModeActive()) {
 			summaryString.append("\n");

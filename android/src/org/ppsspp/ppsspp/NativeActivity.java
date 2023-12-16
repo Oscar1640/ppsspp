@@ -401,6 +401,7 @@ public abstract class NativeActivity extends Activity {
 		String extStorageDir = Environment.getExternalStorageDirectory().getAbsolutePath();
 		File externalFiles = this.getExternalFilesDir(null);
 		String externalFilesDir = externalFiles == null ? "" : externalFiles.getAbsolutePath();
+		String nativeLibDir = getApplicationLibraryDir(appInfo);
 
 		Log.i(TAG, "Ext storage: " + extStorageState + " " + extStorageDir);
 		Log.i(TAG, "Ext files dir: " + externalFilesDir);
@@ -443,7 +444,7 @@ public abstract class NativeActivity extends Activity {
 		overrideShortcutParam = null;
 
 		NativeApp.audioConfig(optimalFramesPerBuffer, optimalSampleRate);
-		NativeApp.init(model, deviceType, languageRegion, apkFilePath, dataDir, extStorageDir, externalFilesDir, additionalStorageDirs, cacheDir, shortcut, Build.VERSION.SDK_INT, Build.BOARD);
+		NativeApp.init(model, deviceType, languageRegion, apkFilePath, dataDir, extStorageDir, externalFilesDir, nativeLibDir, additionalStorageDirs, cacheDir, shortcut, Build.VERSION.SDK_INT, Build.BOARD);
 
 		// Allow C++ to tell us to use JavaGL or not.
 		javaGL = "true".equalsIgnoreCase(NativeApp.queryConfig("androidJavaGL"));
@@ -636,6 +637,7 @@ public abstract class NativeActivity extends Activity {
 					// mGLSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 8);
 				// }
 			}
+
 			mGLSurfaceView.setRenderer(nativeRenderer);
 			setContentView(mGLSurfaceView);
 		} else {
@@ -661,6 +663,37 @@ public abstract class NativeActivity extends Activity {
 		}
 	}
 
+	private void applyFrameRate(Surface surface, float frameRateHz) {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R)
+			return;
+		if (mSurface != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+			try {
+				int method = NativeApp.getDisplayFramerateMode();
+				if (method > 0) {
+					Log.i(TAG, "Setting desired framerate to " + frameRateHz + " Hz method=" + method);
+					switch (method) {
+						case 1:
+							mSurface.setFrameRate(frameRateHz, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+							break;
+						case 2:
+							mSurface.setFrameRate(frameRateHz, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+							break;
+						case 3:
+							if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+								mSurface.setFrameRate(frameRateHz, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE, Surface.CHANGE_FRAME_RATE_ALWAYS);
+							}
+							break;
+						default:
+							break;
+					}
+
+				}
+			} catch (Exception e) {
+				Log.e(TAG, "Failed to set framerate: " + e.toString());
+			}
+		}
+	}
+
 	public void notifySurface(Surface surface) {
 		mSurface = surface;
 
@@ -676,6 +709,8 @@ public abstract class NativeActivity extends Activity {
 			} else {
 				startRenderLoopThread();
 			}
+		} else if (mSurface != null) {
+			applyFrameRate(mSurface, 60.0f);
 		}
 		updateSustainedPerformanceMode();
 	}
@@ -692,6 +727,8 @@ public abstract class NativeActivity extends Activity {
 		}
 
 		Log.w(TAG, "startRenderLoopThread: Starting thread");
+
+		applyFrameRate(mSurface, 60.0f);
 		runVulkanRenderLoop(mSurface);
 	}
 
@@ -1019,12 +1056,18 @@ public abstract class NativeActivity extends Activity {
 		}
 
 		if ((event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0) {
+			if ((event.getSource() & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE) {
+				float dx = event.getAxisValue(MotionEvent.AXIS_RELATIVE_X);
+				float dy = event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y);
+				NativeApp.mouseDelta(dx, dy);
+			}
+
 			switch (event.getAction()) {
 			case MotionEvent.ACTION_HOVER_MOVE:
 				// process the mouse hover movement...
 				return true;
 			case MotionEvent.ACTION_SCROLL:
-				NativeApp.mouseWheelEvent(event.getX(), event.getY());
+				NativeApp.mouseWheelEvent(event.getAxisValue(MotionEvent.AXIS_HSCROLL), event.getAxisValue(MotionEvent.AXIS_VSCROLL));
 				return true;
 			}
 		}

@@ -737,6 +737,7 @@ add_library(Common STATIC
 	Common/Input/InputState.cpp
 	Common/Input/InputState.h
 	Common/Math/fast/fast_matrix.c
+	Common/Math/CrossSIMD.h
 	Common/Math/curves.cpp
 	Common/Math/curves.h
 	Common/Math/expression_parser.cpp
@@ -872,6 +873,12 @@ include_directories(Common)
 setup_target_project(Common Common)
 
 target_link_libraries(Common Ext::Snappy cpu_features)
+
+if(ARM64)
+    if(ANDROID)
+        target_link_libraries(Common adrenotools)
+    endif()
+endif()
 
 if(USING_GLES2 OR (USING_EGL AND NOT USING_FBDEV))
 	find_package(X11)

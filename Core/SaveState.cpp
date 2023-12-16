@@ -398,11 +398,11 @@ namespace SaveState
 		pspFileSystem.DoState(p);
 	}
 
-	void Enqueue(SaveState::Operation op)
+	void Enqueue(const SaveState::Operation &op)
 	{
-		if (Achievements::ChallengeModeActive()) {
-			if (g_Config.bAchievementsSaveStateInChallengeMode && (op.type == SaveState::SAVESTATE_SAVE) || (op.type == SAVESTATE_SAVE_SCREENSHOT)) {
-				// We allow saving in challenge mode if this setting is on.
+		if (Achievements::HardcoreModeActive()) {
+			if (g_Config.bAchievementsSaveStateInHardcoreMode && ((op.type == SaveState::SAVESTATE_SAVE) || (op.type == SAVESTATE_SAVE_SCREENSHOT))) {
+				// We allow saving in hardcore mode if this setting is on.
 			} else {
 				// Operation not allowed
 				return;
@@ -1052,8 +1052,8 @@ namespace SaveState
 			case SAVESTATE_SAVE_SCREENSHOT:
 			{
 				if (g_Config.bSavestateScreenshotResLimit) {
-					int maxRes = g_Config.iInternalResolution > 2 ? 2 : -1;
-				tempResult = TakeGameScreenshot(op.filename, ScreenshotFormat::JPG, SCREENSHOT_DISPLAY, nullptr, nullptr, maxRes);
+					int maxResMultiplier = 2;
+					tempResult = TakeGameScreenshot(op.filename, ScreenshotFormat::JPG, SCREENSHOT_DISPLAY, nullptr, nullptr, maxResMultiplier);
 				} else {
 					tempResult = TakeGameScreenshot(op.filename, ScreenshotFormat::JPG, SCREENSHOT_DISPLAY);
 				}

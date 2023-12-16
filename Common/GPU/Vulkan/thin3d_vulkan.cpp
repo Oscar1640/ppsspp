@@ -392,6 +392,26 @@ public:
 		}
 		return list;
 	}
+	std::vector<std::string> GetPresentModeList(const char *currentMarkerString) const override {
+		std::vector<std::string> list;
+		for (auto mode : vulkan_->GetAvailablePresentModes()) {
+			std::string str = VulkanPresentModeToString(mode);
+			if (mode == vulkan_->GetPresentMode()) {
+				str += std::string(" (") + currentMarkerString + ")";
+			}
+			list.push_back(str);
+		}
+		return list;
+	}
+	std::vector<std::string> GetSurfaceFormatList() const override {
+		std::vector<std::string> list;
+		for (auto &format : vulkan_->SurfaceFormats()) {
+			std::string str = StringFromFormat("%s : %s", VulkanFormatToString(format.format), VulkanColorSpaceToString(format.colorSpace));
+			list.push_back(str);
+		}
+		return list;
+	}
+
 	uint32_t GetSupportedShaderLanguages() const override {
 		return (uint32_t)ShaderLanguage::GLSL_VULKAN;
 	}
@@ -932,22 +952,15 @@ VKContext::VKContext(VulkanContext *vulkan, bool useRenderThread)
 
 	// VkSampleCountFlagBits is arranged correctly for our purposes.
 	// Only support MSAA levels that have support for all three of color, depth, stencil.
-	if (!caps_.isTilingGPU) {
-		// Check for depth stencil resolve. Without it, depth textures won't work, and we don't want that mess
-		// of compatibility reports, so we'll just disable multisampling in this case for now.
-		// There are potential workarounds for devices that don't support it, but those are nearly non-existent now.
-		const auto &resolveProperties = vulkan->GetPhysicalDeviceProperties().depthStencilResolve;
-		if (vulkan->Extensions().KHR_depth_stencil_resolve &&
-			((resolveProperties.supportedDepthResolveModes & resolveProperties.supportedStencilResolveModes) & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0) {
-			caps_.multiSampleLevelsMask = (limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts & limits.framebufferStencilSampleCounts);
-		} else {
-			caps_.multiSampleLevelsMask = 1;
-		}
-	} else {
-		caps_.multiSampleLevelsMask = 1;
-	}
 
-	if (caps_.vendor == GPUVendor::VENDOR_QUALCOMM) {
+	bool multisampleAllowed = true;
+
+    caps_.deviceID = deviceProps.deviceID;
+
+    if (caps_.vendor == GPUVendor::VENDOR_QUALCOMM) {
+		if (caps_.deviceID < 0x6000000)  // On sub 6xx series GPUs, disallow multisample.
+			multisampleAllowed = false;
+
 		// Adreno 5xx devices, all known driver versions, fail to discard stencil when depth write is off.
 		// See: https://github.com/hrydgard/ppsspp/pull/11684
 		if (deviceProps.deviceID >= 0x05000000 && deviceProps.deviceID < 0x06000000) {
@@ -1007,13 +1020,38 @@ VKContext::VKContext(VulkanContext *vulkan, bool useRenderThread)
 				bugs_.Infest(Bugs::UNIFORM_INDEXING_BROKEN);
 			}
 		}
+
+		if (isOldVersion) {
+			// Very rough heuristic.
+			multisampleAllowed = false;
+		}
+	}
+
+	if (!vulkan->Extensions().KHR_depth_stencil_resolve) {
+		INFO_LOG(G3D, "KHR_depth_stencil_resolve not supported, disabling multisampling");
+	}
+
+	// We limit multisampling functionality to reasonably recent and known-good tiling GPUs.
+	if (multisampleAllowed) {
+		// Check for depth stencil resolve. Without it, depth textures won't work, and we don't want that mess
+		// of compatibility reports, so we'll just disable multisampling in this case for now.
+		// There are potential workarounds for devices that don't support it, but those are nearly non-existent now.
+		const auto &resolveProperties = vulkan->GetPhysicalDeviceProperties().depthStencilResolve;
+		if (((resolveProperties.supportedDepthResolveModes & resolveProperties.supportedStencilResolveModes) & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0) {
+			caps_.multiSampleLevelsMask = (limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts & limits.framebufferStencilSampleCounts);
+			INFO_LOG(G3D, "Multisample levels mask: %d", caps_.multiSampleLevelsMask);
+		} else {
+			INFO_LOG(G3D, "Not enough depth/stencil resolve modes supported, disabling multisampling.");
+			caps_.multiSampleLevelsMask = 1;
+		}
+	} else {
+		caps_.multiSampleLevelsMask = 1;
 	}
 
 	// Vulkan can support this through input attachments and various extensions, but not worth
 	// the trouble.
 	caps_.framebufferFetchSupported = false;
 
-	caps_.deviceID = deviceProps.deviceID;
 	device_ = vulkan->GetDevice();
 
 	VkBufferUsageFlags usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -1260,7 +1298,7 @@ Texture *VKContext::CreateTexture(const TextureDesc &desc) {
 		return tex;
 	} else {
 		ERROR_LOG(G3D,  "Failed to create texture");
-		delete tex;
+		tex->Release();
 		return nullptr;
 	}
 }
@@ -1512,11 +1550,15 @@ std::vector<std::string> VKContext::GetFeatureList() const {
 std::vector<std::string> VKContext::GetExtensionList(bool device, bool enabledOnly) const {
 	std::vector<std::string> extensions;
 	if (enabledOnly) {
-		for (auto &iter : (device ? vulkan_->GetDeviceExtensionsEnabled() : vulkan_->GetInstanceExtensionsEnabled())) {
+		const auto& enabled = (device ? vulkan_->GetDeviceExtensionsEnabled() : vulkan_->GetInstanceExtensionsEnabled());
+		extensions.reserve(enabled.size());
+		for (auto &iter : enabled) {
 			extensions.push_back(iter);
 		}
 	} else {
-		for (auto &iter : (device ? vulkan_->GetDeviceExtensionsAvailable() : vulkan_->GetInstanceExtensionsAvailable())) {
+		const auto& available = (device ? vulkan_->GetDeviceExtensionsAvailable() : vulkan_->GetInstanceExtensionsAvailable());
+		extensions.reserve(available.size());
+		for (auto &iter : available) {
 			extensions.push_back(iter.extensionName);
 		}
 	}
@@ -1667,7 +1709,7 @@ void VKContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChanne
 		break;
 	}
 
-	boundTextures_[binding].clear();
+	boundTextures_[binding].reset(nullptr);
 	boundImageView_[binding] = renderManager_.BindFramebufferAsTexture(fb->GetFB(), binding, aspect, layer);
 }
 

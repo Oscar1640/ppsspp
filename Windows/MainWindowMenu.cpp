@@ -74,9 +74,9 @@ namespace MainWindow {
 
 		bool loadStateEnableBool = menuEnableBool;
 		bool saveStateEnableBool = menuEnableBool;
-		if (Achievements::ChallengeModeActive()) {
+		if (Achievements::HardcoreModeActive()) {
 			loadStateEnableBool = false;
-			if (!g_Config.bAchievementsSaveStateInChallengeMode) {
+			if (!g_Config.bAchievementsSaveStateInHardcoreMode) {
 				saveStateEnableBool = false;
 			}
 		}
@@ -532,7 +532,7 @@ namespace MainWindow {
 			}
 			break;
 		case ID_FILE_LOADSTATEFILE:
-			if (!Achievements::WarnUserIfChallengeModeActive(false)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(false)) {
 				if (W32Util::BrowseForFileName(true, hWnd, L"Load state", 0, L"Save States (*.ppst)\0*.ppst\0All files\0*.*\0\0", L"ppst", fn)) {
 					SetCursor(LoadCursor(0, IDC_WAIT));
 					SaveState::Load(Path(fn), -1, SaveStateActionFinished);
@@ -540,7 +540,7 @@ namespace MainWindow {
 			}
 			break;
 		case ID_FILE_SAVESTATEFILE:
-			if (!Achievements::WarnUserIfChallengeModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
 				if (W32Util::BrowseForFileName(false, hWnd, L"Save state", 0, L"Save States (*.ppst)\0*.ppst\0All files\0*.*\0\0", L"ppst", fn)) {
 					SetCursor(LoadCursor(0, IDC_WAIT));
 					SaveState::Save(Path(fn), -1, SaveStateActionFinished);
@@ -550,7 +550,7 @@ namespace MainWindow {
 
 		case ID_FILE_SAVESTATE_NEXT_SLOT:
 		{
-			if (!Achievements::WarnUserIfChallengeModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
 				SaveState::NextSlot();
 				System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
 			}
@@ -559,7 +559,7 @@ namespace MainWindow {
 
 		case ID_FILE_SAVESTATE_NEXT_SLOT_HC:
 		{
-			if (!Achievements::WarnUserIfChallengeModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
 				if (!KeyMap::PspButtonHasMappings(VIRTKEY_NEXT_SLOT)) {
 					SaveState::NextSlot();
 					System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
@@ -573,13 +573,13 @@ namespace MainWindow {
 		case ID_FILE_SAVESTATE_SLOT_3:
 		case ID_FILE_SAVESTATE_SLOT_4:
 		case ID_FILE_SAVESTATE_SLOT_5:
-			if (!Achievements::WarnUserIfChallengeModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
 				g_Config.iCurrentStateSlot = wmId - ID_FILE_SAVESTATE_SLOT_1;
 			}
 			break;
 
 		case ID_FILE_QUICKLOADSTATE:
-			if (!Achievements::WarnUserIfChallengeModeActive(false)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(false)) {
 				SetCursor(LoadCursor(0, IDC_WAIT));
 				SaveState::LoadSlot(PSP_CoreParameter().fileToStart, g_Config.iCurrentStateSlot, SaveStateActionFinished);
 			}
@@ -587,7 +587,7 @@ namespace MainWindow {
 
 		case ID_FILE_QUICKLOADSTATE_HC:
 		{
-			if (!Achievements::WarnUserIfChallengeModeActive(false)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(false)) {
 				if (!KeyMap::PspButtonHasMappings(VIRTKEY_LOAD_STATE)) {
 					SetCursor(LoadCursor(0, IDC_WAIT));
 					SaveState::LoadSlot(PSP_CoreParameter().fileToStart, g_Config.iCurrentStateSlot, SaveStateActionFinished);
@@ -597,7 +597,7 @@ namespace MainWindow {
 		}
 		case ID_FILE_QUICKSAVESTATE:
 		{
-			if (!Achievements::WarnUserIfChallengeModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
 				SetCursor(LoadCursor(0, IDC_WAIT));
 				SaveState::SaveSlot(PSP_CoreParameter().fileToStart, g_Config.iCurrentStateSlot, SaveStateActionFinished);
 			}
@@ -606,7 +606,7 @@ namespace MainWindow {
 
 		case ID_FILE_QUICKSAVESTATE_HC:
 		{
-			if (!Achievements::WarnUserIfChallengeModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
 				if (!KeyMap::PspButtonHasMappings(VIRTKEY_SAVE_STATE))
 				{
 					SetCursor(LoadCursor(0, IDC_WAIT));

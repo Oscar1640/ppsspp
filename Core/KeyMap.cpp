@@ -408,8 +408,8 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_SPEED_CUSTOM2, "Alt speed 2"},
 	{VIRTKEY_SPEED_ANALOG, "Analog speed"},
 	{VIRTKEY_PAUSE, "Pause"},
-#ifndef MOBILE_DEVICE
 	{VIRTKEY_FRAME_ADVANCE, "Frame Advance"},
+#if !defined(MOBILE_DEVICE)
 	{VIRTKEY_RECORD, "Audio/Video Recording"},
 #endif
 	{VIRTKEY_REWIND, "Rewind"},
@@ -608,7 +608,7 @@ bool IsKeyMapped(InputDeviceID device, int key) {
 	return false;
 }
 
-bool ReplaceSingleKeyMapping(int btn, int index, MultiInputMapping key) {
+bool ReplaceSingleKeyMapping(int btn, int index, const MultiInputMapping &key) {
 	std::lock_guard<std::recursive_mutex> guard(g_controllerMapLock);
 	// Check for duplicate
 	for (int i = 0; i < (int)g_controllerMap[btn].size(); ++i) {
@@ -822,8 +822,12 @@ void AutoConfForPad(const std::string &name) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_PAD, false);
 	}
 #else
-	// TODO: Should actually check for XInput?
-	if (name.find("Xbox") != std::string::npos) {
+#if PPSSPP_PLATFORM(WINDOWS)
+	const bool platformSupportsXinput = true;
+#else
+	const bool platformSupportsXinput = false;
+#endif
+	if (platformSupportsXinput && name.find("Xbox") != std::string::npos) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_XINPUT, false);
 	} else {
 		SetDefaultKeyMap(DEFAULT_MAPPING_PAD, false);

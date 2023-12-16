@@ -167,4 +167,19 @@ enum class DebugOverlay : int {
 	AUDIO,
 	GPU_PROFILE,
 	GPU_ALLOCATOR,
+	FRAMEBUFFER_LIST,
+};
+
+// Android-only for now
+enum class DisplayFramerateMode : int {
+	DEFAULT,
+	REQUEST_60HZ,
+	FORCE_60HZ_METHOD1,
+	FORCE_60HZ_METHOD2,
+};
+
+enum class SkipGPUReadbackMode : int {
+	NO_SKIP,
+	SKIP,
+	COPY_TO_TEXTURE,
 };

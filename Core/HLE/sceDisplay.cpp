@@ -351,7 +351,7 @@ void __DisplaySetWasPaused() {
 
 // TOOD: Should return 59.997?
 static int FrameTimingLimit() {
-	bool challenge = Achievements::ChallengeModeActive();
+	bool challenge = Achievements::HardcoreModeActive();
 
 	auto fixRate = [=](int limit) {
 		int minRate = challenge ? 60 : 1;
@@ -362,10 +362,10 @@ static int FrameTimingLimit() {
 		}
 	};
 
-	// Note: Fast-forward is OK in challenge mode.
+	// Note: Fast-forward is OK in hardcore mode.
 	if (PSP_CoreParameter().fastForward)
 		return 0;
-	// Can't slow down in challenge mode.
+	// Can't slow down in hardcore mode.
 	if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM1)
 		return fixRate(g_Config.iFpsLimit1);
 	if (PSP_CoreParameter().fpsLimit == FPSLimit::CUSTOM2)
@@ -598,6 +598,10 @@ void __DisplayFlip(int cyclesLate) {
 		postEffectRequiresFlip = duplicateFrames || g_Config.bShaderChainRequires60FPS;
 	}
 
+	if (!FrameTimingThrottled()) {
+		// NOTICE_LOG(SYSTEM, "Throttle: %d %d", (int)fastForwardSkipFlip, (int)postEffectRequiresFlip);
+	}
+
 	const bool fbDirty = gpu->FramebufferDirty();
 
 	bool needFlip = fbDirty || noRecentFlip || postEffectRequiresFlip;
@@ -690,7 +694,8 @@ void __DisplayFlip(int cyclesLate) {
 }
 
 void hleAfterFlip(u64 userdata, int cyclesLate) {
-	gpu->BeginFrame();  // doesn't really matter if begin or end of frame.
+	gpu->PSPFrame();
+
 	PPGeNotifyFrame();
 
 	// This seems like as good a time as any to check if the config changed.
