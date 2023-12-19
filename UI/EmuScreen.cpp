@@ -410,6 +410,14 @@ void EmuScreen::bootComplete() {
 #endif
 	}
 
+	if (g_Config.bStereoRendering) {
+		auto gr = GetI18NCategory(I18NCat::GRAPHICS);
+		auto di = GetI18NCategory(I18NCat::DIALOG);
+		// Stereo rendering is experimental, so let's notify the user it's being used.
+		// Carefully reuse translations for this rare warning.
+		g_OSD.Show(OSDType::MESSAGE_WARNING, std::string(gr->T("Stereo rendering")) + ": " + di->T("Enabled"));
+	}
+
 	saveStateSlot_ = SaveState::GetCurrentSlot();
 
 	loadingViewColor_->Divert(0x00FFFFFF, 0.2f);
@@ -1479,7 +1487,7 @@ ScreenRenderFlags EmuScreen::render(ScreenRenderMode mode) {
 
 	if (mode & ScreenRenderMode::TOP) {
 		System_Notify(SystemNotification::KEEP_SCREEN_AWAKE);
-	} else if (!g_Config.bRunBehindPauseMenu) {
+	} else if (!g_Config.bRunBehindPauseMenu && strcmp(screenManager()->topScreen()->tag(), "DevMenu") != 0) {
 		// Not on top. Let's not execute, only draw the image.
 		draw->BindFramebufferAsRenderTarget(nullptr, { RPAction::CLEAR, RPAction::DONT_CARE, RPAction::DONT_CARE }, "EmuScreen_Stepping");
 		// Just to make sure.
