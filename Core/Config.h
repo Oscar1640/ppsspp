@@ -414,6 +414,7 @@ public:
 	bool bMouseConfine; // Trap inside the window.
 	float fMouseSensitivity;
 	float fMouseSmoothing;
+	int iMouseWheelUpDelayMs;
 
 	bool bSystemControls;
 	int iRapidFireInterval;
