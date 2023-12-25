@@ -1283,7 +1283,7 @@ static void ProcessWheelRelease(InputKeyCode keyCode, double now, bool keyPress)
 	}
 
 	if (keyPress) {
-		g_wheelReleaseTime[dir] = now + (RELEASE_TIME / 6 * (float)g_Config.iMouseWheelUpDelay);
+		g_wheelReleaseTime[dir] = now + RELEASE_TIME;
 	}
 }
 
