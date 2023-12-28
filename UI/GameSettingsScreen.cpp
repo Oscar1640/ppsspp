@@ -686,9 +686,14 @@ void GameSettingsScreen::CreateControlsSettings(UI::ViewGroup* controlsSettings)
 	controlsSettings->Add(new ItemHeader(ms->T("Controls")));
 	controlsSettings->Add(new Choice(co->T("Control Mapping")))->OnClick.Handle(this, &GameSettingsScreen::OnControlMapping);
 	controlsSettings->Add(new Choice(co->T("Calibrate Analog Stick")))->OnClick.Handle(this, &GameSettingsScreen::OnCalibrateAnalogs);
-	controlsSettings->Add(new PopupSliderChoiceFloat(&g_Config.fAnalogTriggerThreshold, 0.02f, 0.98f, 0.75f, co->T("Analog trigger threshold"), screenManager()));
-
 	if (!g_Config.bSimpleUI) {
+	controlsSettings->Add(new PopupSliderChoiceFloat(&g_Config.fAnalogTriggerThreshold, 0.02f, 0.98f, 0.75f, co->T("Analog trigger threshold"), screenManager()));
+	auto axisToButton = new PopupSliderChoiceFloat(&g_Config.fAxisBindThreshold, 0.01f, 0.96f, 0.0f, co->T("Axis to button threshold"), 0.05f, screenManager());
+	controlsSettings->Add(axisToButton);
+	axisToButton->OnChange.Add([=](EventParams& e) {
+		settingInfo_->Show(co->T("AxisToButton Tip", "Affects how far you have to push the analog stick(not mouse) to trigger the PSP button mapped to it."), e.v);
+		return UI::EVENT_CONTINUE;
+	});
 #if defined(USING_WIN_UI) || (PPSSPP_PLATFORM(LINUX) && !PPSSPP_PLATFORM(ANDROID))
 	controlsSettings->Add(new CheckBox(&g_Config.bSystemControls, co->T("Enable standard shortcut keys")));
 #endif
@@ -697,12 +702,6 @@ void GameSettingsScreen::CreateControlsSettings(UI::ViewGroup* controlsSettings)
 	controlsSettings->Add(new CheckBox(&g_Config.bEnableDInputWithXInput, co->T("Enable Dinput along Xinput", "Enable Dinput along Xinput gamepads(might cause problems with gamepads that can use both without manual switch)")));
 
 #endif
-	auto axisToButton = new PopupSliderChoiceFloat(&g_Config.fAxisBindThreshold, 0.01f, 0.96f, 0.0f, co->T("Axis to button threshold"), 0.05f, screenManager());
-	controlsSettings->Add(axisToButton);
-	axisToButton->OnChange.Add([=](EventParams& e) {
-		settingInfo_->Show(co->T("AxisToButton Tip", "Affects how far you have to push the analog stick(not mouse) to trigger the PSP button mapped to it."), e.v);
-		return UI::EVENT_CONTINUE;
-	});
 	}
 
 	if (System_GetPropertyBool(SYSPROP_HAS_ACCELEROMETER)) {
