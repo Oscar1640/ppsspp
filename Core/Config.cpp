@@ -831,6 +831,8 @@ static const ConfigSetting controlSettings[] = {
 	ConfigSetting("AnalogAutoRotSpeed", &g_Config.fAnalogAutoRotSpeed, 8.0f, CfgFlag::PER_GAME),
 
 	ConfigSetting("AnalogLimiterDeadzone", &g_Config.fAnalogLimiterDeadzone, 0.6f, CfgFlag::DEFAULT),
+
+	ConfigSetting("AnalogTriggerThreshold", &g_Config.fAnalogTriggerThreshold, 0.75f, CfgFlag::DEFAULT),
 	ConfigSetting("EnableDInputWithXInput", &g_Config.bEnableDInputWithXInput, false, CfgFlag::DEFAULT),
 
 	ConfigSetting("AllowMappingCombos", &g_Config.bAllowMappingCombos, false, CfgFlag::DEFAULT),
@@ -1903,19 +1905,14 @@ void PlayTimeTracker::Stop(const std::string &gameId) {
 void PlayTimeTracker::Load(const Section *section) {
 	tracker_.clear();
 
-	std::vector<std::string> keys;
-	section->GetKeys(keys);
+	auto map = section->ToMap();
 
-	for (auto key : keys) {
-		std::string value;
-		if (!section->Get(key.c_str(), &value, nullptr)) {
-			continue;
-		}
-
+	for (const auto &iter : map) {
+		const std::string &value = iter.second;
 		// Parse the string.
 		PlayTime gameTime{};
 		if (2 == sscanf(value.c_str(), "%d,%llu", &gameTime.totalTimePlayed, (long long *)&gameTime.lastTimePlayed)) {
-			tracker_[key] = gameTime;
+			tracker_[iter.first.c_str()] = gameTime;
 		}
 	}
 }

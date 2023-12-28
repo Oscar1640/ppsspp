@@ -406,6 +406,9 @@ public:
 	float fAnalogLimiterDeadzone;
 	float fAxisBindThreshold;
 
+	// Trigger configuration
+	float fAnalogTriggerThreshold;
+
 	// Sets whether combo mapping is enabled.
 	bool bAllowMappingCombos;
 
