@@ -33,7 +33,7 @@ public:
 	CwCheatScreen(const Path &gamePath);
 	~CwCheatScreen();
 
-	void LoadCheatInfo();
+	bool TryLoadCheatInfo();
 	UI::EventReturn ParseCheatDB(std::string line, std::vector<std::string> title, std::vector<std::string> newList, Path cheatFile);
 	UI::EventReturn OnAddCheat(UI::EventParams &params);
 	UI::EventReturn OnImportCheat(UI::EventParams &params);

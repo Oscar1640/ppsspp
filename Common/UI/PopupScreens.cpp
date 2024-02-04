@@ -166,6 +166,15 @@ PopupSliderChoice::PopupSliderChoice(int *value, int minValue, int maxValue, int
 	OnClick.Handle(this, &PopupSliderChoice::HandleClick);
 }
 
+void PopupSliderChoice::SetFormat(std::string_view fmt) {
+	fmt_ = fmt;
+	if (units_.empty()) {
+		if (startsWith(fmt_, "%d ")) {
+			units_ = fmt_.substr(3);
+		}
+	}
+}
+
 PopupSliderChoiceFloat::PopupSliderChoiceFloat(float *value, float minValue, float maxValue, float defaultValue, const std::string &text, ScreenManager *screenManager, const std::string &units, LayoutParams *layoutParams)
 	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), minValue_(minValue), maxValue_(maxValue), defaultValue_(defaultValue), step_(1.0f), units_(units), screenManager_(screenManager) {
 	_dbg_assert_(maxValue > minValue);
@@ -179,6 +188,15 @@ PopupSliderChoiceFloat::PopupSliderChoiceFloat(float *value, float minValue, flo
 	_dbg_assert_(maxValue > minValue);
 	fmt_ = "%2.2f";
 	OnClick.Handle(this, &PopupSliderChoiceFloat::HandleClick);
+}
+
+void PopupSliderChoiceFloat::SetFormat(std::string_view fmt) {
+	fmt_ = fmt;
+	if (units_.empty()) {
+		if (startsWith(fmt_, "%f ")) {
+			units_ = fmt_.substr(3);
+		}
+	}
 }
 
 EventReturn PopupSliderChoice::HandleClick(EventParams &e) {
@@ -500,8 +518,8 @@ void SliderFloatPopupScreen::OnCompleted(DialogResult result) {
 	}
 }
 
-PopupTextInputChoice::PopupTextInputChoice(std::string *value, const std::string &title, const std::string &placeholder, int maxLen, ScreenManager *screenManager, LayoutParams *layoutParams)
-	: AbstractChoiceWithValueDisplay(title, layoutParams), screenManager_(screenManager), value_(value), placeHolder_(placeholder), maxLen_(maxLen) {
+PopupTextInputChoice::PopupTextInputChoice(RequesterToken token, std::string *value, const std::string &title, const std::string &placeholder, int maxLen, ScreenManager *screenManager, LayoutParams *layoutParams)
+	: AbstractChoiceWithValueDisplay(title, layoutParams), screenManager_(screenManager), value_(value), placeHolder_(placeholder), maxLen_(maxLen), token_(token) {
 	OnClick.Handle(this, &PopupTextInputChoice::HandleClick);
 }
 
@@ -510,7 +528,7 @@ EventReturn PopupTextInputChoice::HandleClick(EventParams &e) {
 
 	// Choose method depending on platform capabilities.
 	if (System_GetPropertyBool(SYSPROP_HAS_TEXT_INPUT_DIALOG)) {
-		System_InputBoxGetString(text_, *value_ , [=](const std::string &enteredValue, int) {
+		System_InputBoxGetString(token_, text_, *value_ , [=](const std::string &enteredValue, int) {
 			*value_ = StripSpaces(enteredValue);
 			EventParams params{};
 			OnChange.Trigger(params);
@@ -668,10 +686,10 @@ std::string ChoiceWithValueDisplay::ValueText() const {
 	return valueText.str();
 }
 
-FileChooserChoice::FileChooserChoice(std::string *value, const std::string &text, BrowseFileType fileType, LayoutParams *layoutParams)
-	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), fileType_(fileType) {
+FileChooserChoice::FileChooserChoice(RequesterToken token, std::string *value, const std::string &text, BrowseFileType fileType, LayoutParams *layoutParams)
+	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), fileType_(fileType), token_(token) {
 	OnClick.Add([=](UI::EventParams &) {
-		System_BrowseForFile(text_, fileType, [=](const std::string &returnValue, int) {
+		System_BrowseForFile(token, text_, fileType, [=](const std::string &returnValue, int) {
 			if (*value_ != returnValue) {
 				*value = returnValue;
 				UI::EventParams e{};
@@ -690,6 +708,30 @@ std::string FileChooserChoice::ValueText() const {
 	}
 	Path path(*value_);
 	return path.GetFilename();
+}
+
+FolderChooserChoice::FolderChooserChoice(RequesterToken token, std::string *value, const std::string &text, LayoutParams *layoutParams)
+	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), token_(token) {
+	OnClick.Add([=](UI::EventParams &) {
+		System_BrowseForFolder(token_, text_, Path(*value), [=](const std::string &returnValue, int) {
+			if (*value_ != returnValue) {
+				*value = returnValue;
+				UI::EventParams e{};
+				e.s = *value;
+				OnChange.Trigger(e);
+			}
+		});
+		return UI::EVENT_DONE;
+	});
+}
+
+std::string FolderChooserChoice::ValueText() const {
+	if (value_->empty()) {
+		auto di = GetI18NCategory(I18NCat::DIALOG);
+		return di->T("Default");
+	}
+	Path path(*value_);
+	return path.ToVisualString();
 }
 
 }  // namespace

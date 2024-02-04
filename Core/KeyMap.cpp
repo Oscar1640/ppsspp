@@ -465,6 +465,9 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_TOGGLE_WLAN, "Toggle WLAN"},
 	{VIRTKEY_EXIT_APP, "Exit App"},
 
+	{VIRTKEY_TOGGLE_MOUSE, "Toggle mouse input"},
+	{VIRTKEY_TOGGLE_TOUCH_CONTROLS, "Toggle touch controls"},
+
 	{VIRTKEY_AXIS_RIGHT_Y_MAX, "RightAn.Up"},
 	{VIRTKEY_AXIS_RIGHT_Y_MIN, "RightAn.Down"},
 	{VIRTKEY_AXIS_RIGHT_X_MIN, "RightAn.Left"},
@@ -550,12 +553,16 @@ bool InputMappingsFromPspButtonNoLock(int btn, std::vector<MultiInputMapping> *m
 		return false;
 	}
 	bool mapped = false;
-	mappings->clear();
+	if (mappings) {
+		mappings->clear();
+	}
 	for (auto &iter2 : iter->second) {
 		bool ignore = ignoreMouse && iter2.HasMouse();
-		if (mappings && !ignore) {
+		if (!ignore) {
 			mapped = true;
-			mappings->push_back(iter2);
+			if (mappings) {
+				mappings->push_back(iter2);
+			}
 		}
 	}
 	return mapped;

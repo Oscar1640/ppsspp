@@ -569,6 +569,9 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		case BrowseFileType::INI:
 			filter = MakeFilter(L"Ini files (*.ini)|*.ini|All files (*.*)|*.*||");
 			break;
+		case BrowseFileType::ZIP:
+			filter = MakeFilter(L"ZIP files (*.zip)|*.zip|All files (*.*)|*.*||");
+			break;
 		case BrowseFileType::DB:
 			filter = MakeFilter(L"Cheat db files (*.db)|*.db|All files (*.*)|*.*||");
 			break;
@@ -595,7 +598,7 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 	case SystemRequestType::BROWSE_FOR_FOLDER:
 	{
 		std::thread([=] {
-			std::string folder = W32Util::BrowseForFolder(MainWindow::GetHWND(), param1.c_str());
+			std::string folder = W32Util::BrowseForFolder(MainWindow::GetHWND(), param1, param2);
 			if (folder.size()) {
 				g_requestManager.PostSystemSuccess(requestId, folder.c_str());
 			} else {

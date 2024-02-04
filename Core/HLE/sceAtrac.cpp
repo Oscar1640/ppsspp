@@ -127,7 +127,13 @@ extern "C" {
 #include "libavformat/avformat.h"
 #include "libswresample/swresample.h"
 #include "libavutil/samplefmt.h"
+#include "libavcodec/avcodec.h"
+#include "libavutil/version.h"
 }
+
+#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(59, 16, 100)
+#define AVCodec const AVCodec
+#endif
 
 #endif // USE_FFMPEG
 
@@ -909,7 +915,10 @@ int Atrac::Analyze(u32 addr, u32 size) {
 				}
 				int checkNumLoops = Memory::Read_U32(first_.addr + offset + 28);
 				if (checkNumLoops != 0 && chunkSize < 36 + 20) {
-					return hleReportError(ME, ATRAC_ERROR_UNKNOWN_FORMAT, "smpl chunk too small for loop (%d)", chunkSize);
+					return hleReportError(ME, ATRAC_ERROR_UNKNOWN_FORMAT, "smpl chunk too small for loop (%d, %d)", checkNumLoops, chunkSize);
+				}
+				if (checkNumLoops < 0) {
+					return hleReportError(ME, ATRAC_ERROR_UNKNOWN_FORMAT, "bad checkNumLoops (%d)", checkNumLoops);
 				}
 
 				loopinfo_.resize(checkNumLoops);
@@ -1879,7 +1888,7 @@ int __AtracSetContext(Atrac *atrac) {
 		atrac->ReleaseFFMPEGContext();
 	}
 
-	const AVCodec *codec = avcodec_find_decoder(ff_codec);
+	AVCodec *codec = avcodec_find_decoder(ff_codec);
 	atrac->codecCtx_ = avcodec_alloc_context3(codec);
 
 	if (atrac->codecType_ == PSP_MODE_AT_3) {

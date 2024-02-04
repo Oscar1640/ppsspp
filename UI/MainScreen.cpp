@@ -226,12 +226,12 @@ private:
 };
 
 void GameButton::Draw(UIContext &dc) {
-	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(dc.GetDrawContext(), gamePath_, 0);
+	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(dc.GetDrawContext(), gamePath_, GameInfoFlags::PARAM_SFO | GameInfoFlags::ICON);
 	Draw::Texture *texture = 0;
 	u32 color = 0, shadowColor = 0;
 	using namespace UI;
 
-	if (ginfo->icon.texture) {
+	if (ginfo->Ready(GameInfoFlags::ICON) && ginfo->icon.texture) {
 		texture = ginfo->icon.texture;
 	}
 
@@ -427,10 +427,9 @@ void GameButton::Draw(UIContext &dc) {
 }
 
 std::string GameButton::DescribeText() const {
-	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(nullptr, gamePath_, 0);
-	if (ginfo->pending)
+	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(nullptr, gamePath_, GameInfoFlags::PARAM_SFO);
+	if (!ginfo->Ready(GameInfoFlags::PARAM_SFO))
 		return "...";
-
 	auto u = GetI18NCategory(I18NCat::UI_ELEMENTS);
 	return ApplySafeSubstitutions(u->T("%1 button"), ginfo->GetTitle());
 }
@@ -510,11 +509,11 @@ void DirButton::Draw(UIContext &dc) {
 	}
 }
 
-GameBrowser::GameBrowser(const Path &path, BrowseFlags browseFlags, bool *gridStyle, ScreenManager *screenManager, std::string lastText, std::string lastLink, UI::LayoutParams *layoutParams)
-	: LinearLayout(UI::ORIENT_VERTICAL, layoutParams), path_(path), gridStyle_(gridStyle), browseFlags_(browseFlags), lastText_(lastText), lastLink_(lastLink), screenManager_(screenManager) {
+GameBrowser::GameBrowser(int token, const Path &path, BrowseFlags browseFlags, bool *gridStyle, ScreenManager *screenManager, std::string lastText, std::string lastLink, UI::LayoutParams *layoutParams)
+	: LinearLayout(UI::ORIENT_VERTICAL, layoutParams), path_(path), gridStyle_(gridStyle), browseFlags_(browseFlags), lastText_(lastText), lastLink_(lastLink), screenManager_(screenManager), token_(token) {
 	using namespace UI;
 	path_.SetUserAgent(StringFromFormat("PPSSPP/%s", PPSSPP_GIT_VERSION));
-	path_.SetRootAlias("ms:", GetSysDirectory(DIRECTORY_MEMSTICK_ROOT).ToVisualString());
+	path_.SetRootAlias("ms:", GetSysDirectory(DIRECTORY_MEMSTICK_ROOT).ToVisualString() + "/");
 	Refresh();
 }
 
@@ -604,7 +603,7 @@ UI::EventReturn GameBrowser::LastClick(UI::EventParams &e) {
 
 UI::EventReturn GameBrowser::BrowseClick(UI::EventParams &e) {
 	auto mm = GetI18NCategory(I18NCat::MAINMENU);
-	System_BrowseForFolder(mm->T("Choose folder"), [this](const std::string &filename, int) {
+	System_BrowseForFolder(token_, mm->T("Choose folder"), path_.GetPath(), [this](const std::string &filename, int) {
 		this->SetPath(Path(filename));
 	});
 	return UI::EVENT_DONE;
@@ -781,7 +780,7 @@ void GameBrowser::Refresh() {
 			if (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) == DEVICE_TYPE_TV) {
 				topBar->Add(new Choice(mm->T("Enter Path"), new LayoutParams(WRAP_CONTENT, 64.0f)))->OnClick.Add([=](UI::EventParams &) {
 					auto mm = GetI18NCategory(I18NCat::MAINMENU);
-					System_InputBoxGetString(mm->T("Enter Path"), path_.GetPath().ToString(), [=](const char *responseString, int responseValue) {
+					System_InputBoxGetString(token_, mm->T("Enter Path"), path_.GetPath().ToString(), [=](const char *responseString, int responseValue) {
 						this->SetPath(Path(responseString));
 					});
 					return UI::EVENT_DONE;
@@ -801,6 +800,11 @@ void GameBrowser::Refresh() {
 		layoutChoice->AddChoice(ImageID("I_LINES"));
 		layoutChoice->SetSelection(*gridStyle_ ? 0 : 1, false);
 		layoutChoice->OnChoice.Handle(this, &GameBrowser::LayoutChange);
+		topBar->Add(new Choice(ImageID("I_ROTATE_LEFT"), new LayoutParams(64.0f, 64.0f)))->OnClick.Add([=](UI::EventParams &e) {
+			path_.Refresh();
+			Refresh();
+			return UI::EVENT_DONE;
+		});
 		topBar->Add(new Choice(ImageID("I_GEAR"), new LayoutParams(64.0f, 64.0f)))->OnClick.Handle(this, &GameBrowser::GridSettingsClick);
 		Add(topBar);
 
@@ -1093,7 +1097,7 @@ void MainScreen::CreateViews() {
 	if (showRecent) {
 		ScrollView *scrollRecentGames = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT));
 		scrollRecentGames->SetTag("MainScreenRecentGames");
-		GameBrowser *tabRecentGames = new GameBrowser(
+		GameBrowser *tabRecentGames = new GameBrowser(GetRequesterToken(),
 			Path("!RECENT"), BrowseFlags::NONE, &g_Config.bGridView1, screenManager(), "", "",
 			new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
 		scrollRecentGames->Add(tabRecentGames);
@@ -1113,10 +1117,10 @@ void MainScreen::CreateViews() {
 		scrollHomebrew->SetTag("MainScreenHomebrew");
 
 
-		GameBrowser *tabAllGames = new GameBrowser(Path(g_Config.currentDirectory), BrowseFlags::STANDARD, &g_Config.bGridView2, screenManager(),
+		GameBrowser *tabAllGames = new GameBrowser(GetRequesterToken(), Path(g_Config.currentDirectory), BrowseFlags::STANDARD, &g_Config.bGridView2, screenManager(),
 			mm->T("How to get games"), "https://www.ppsspp.org/getgames",
 			new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
-		GameBrowser *tabHomebrew = new GameBrowser(GetSysDirectory(DIRECTORY_GAME), BrowseFlags::HOMEBREW_STORE, &g_Config.bGridView3, screenManager(),
+		GameBrowser *tabHomebrew = new GameBrowser(GetRequesterToken(), GetSysDirectory(DIRECTORY_GAME), BrowseFlags::HOMEBREW_STORE, &g_Config.bGridView3, screenManager(),
 			mm->T("How to get homebrew & demos", "How to get homebrew && demos"), "https://www.ppsspp.org/gethomebrew",
 			new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
 
@@ -1146,7 +1150,7 @@ void MainScreen::CreateViews() {
 
 			Path remotePath(FormatRemoteISOUrl(g_Config.sLastRemoteISOServer.c_str(), g_Config.iLastRemoteISOPort, RemoteSubdir().c_str()));
 
-			GameBrowser *tabRemote = new GameBrowser(remotePath, BrowseFlags::NAVIGATE, &g_Config.bGridView3, screenManager(),
+			GameBrowser *tabRemote = new GameBrowser(GetRequesterToken(), remotePath, BrowseFlags::NAVIGATE, &g_Config.bGridView3, screenManager(),
 				ri->T("Remote disc streaming"), "https://www.ppsspp.org/docs/reference/disc-streaming",
 				new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
 			tabRemote->SetHomePath(remotePath);
@@ -1318,7 +1322,7 @@ bool MainScreen::key(const KeyInput &touch) {
 			searchKeyModifier_ = true;
 		if (touch.keyCode == NKCODE_F && searchKeyModifier_ && System_GetPropertyBool(SYSPROP_HAS_TEXT_INPUT_DIALOG)) {
 			auto se = GetI18NCategory(I18NCat::SEARCH);
-			System_InputBoxGetString(se->T("Search term"), searchFilter_, [&](const std::string &value, int) {
+			System_InputBoxGetString(GetRequesterToken(), se->T("Search term"), searchFilter_, [&](const std::string &value, int) {
 				searchFilter_ = StripSpaces(value);
 				searchChanged_ = true;
 			});
@@ -1387,7 +1391,7 @@ void MainScreen::update() {
 UI::EventReturn MainScreen::OnLoadFile(UI::EventParams &e) {
 	if (System_GetPropertyBool(SYSPROP_HAS_FILE_BROWSER)) {
 		auto mm = GetI18NCategory(I18NCat::MAINMENU);
-		System_BrowseForFile(mm->T("Load"), BrowseFileType::BOOTABLE, [](const std::string &value, int) {
+		System_BrowseForFile(GetRequesterToken(), mm->T("Load"), BrowseFileType::BOOTABLE, [](const std::string &value, int) {
 			System_PostUIMessage(UIMessage::REQUEST_GAME_BOOT, value);
 		});
 	}
@@ -1431,12 +1435,12 @@ bool MainScreen::DrawBackgroundFor(UIContext &dc, const Path &gamePath, float pr
 
 	std::shared_ptr<GameInfo> ginfo;
 	if (!gamePath.empty()) {
-		ginfo = g_gameInfoCache->GetInfo(dc.GetDrawContext(), gamePath, GAMEINFO_WANTBG);
+		ginfo = g_gameInfoCache->GetInfo(dc.GetDrawContext(), gamePath, GameInfoFlags::BG);
 		// Loading texture data may bind a texture.
 		dc.RebindTexture();
 
 		// Let's not bother if there's no picture.
-		if (!ginfo || (!ginfo->pic1.texture && !ginfo->pic0.texture)) {
+		if (!ginfo->Ready(GameInfoFlags::BG) || (!ginfo->pic1.texture && !ginfo->pic0.texture)) {
 			return false;
 		}
 	} else {
@@ -1459,11 +1463,10 @@ bool MainScreen::DrawBackgroundFor(UIContext &dc, const Path &gamePath, float pr
 UI::EventReturn MainScreen::OnGameSelected(UI::EventParams &e) {
 	g_Config.Save("MainScreen::OnGameSelected");
 	Path path(e.s);
-	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(nullptr, path, GAMEINFO_WANTBG);
-	if (ginfo && ginfo->fileType == IdentifiedFileType::PSP_SAVEDATA_DIRECTORY) {
+	std::shared_ptr<GameInfo> ginfo = g_gameInfoCache->GetInfo(nullptr, path, GameInfoFlags::FILE_TYPE);
+	if (ginfo->fileType == IdentifiedFileType::PSP_SAVEDATA_DIRECTORY) {
 		return UI::EVENT_DONE;
 	}
-
 	if (g_GameManager.GetState() == GameManagerState::INSTALLING)
 		return UI::EVENT_DONE;
 
@@ -1603,7 +1606,7 @@ void UmdReplaceScreen::CreateViews() {
 	if (g_Config.iMaxRecent > 0) {
 		ScrollView *scrollRecentGames = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT));
 		scrollRecentGames->SetTag("UmdReplaceRecentGames");
-		GameBrowser *tabRecentGames = new GameBrowser(
+		GameBrowser *tabRecentGames = new GameBrowser(GetRequesterToken(),
 			Path("!RECENT"), BrowseFlags::NONE, &g_Config.bGridView1, screenManager(), "", "",
 			new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
 		scrollRecentGames->Add(tabRecentGames);
@@ -1614,7 +1617,7 @@ void UmdReplaceScreen::CreateViews() {
 	ScrollView *scrollAllGames = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT));
 	scrollAllGames->SetTag("UmdReplaceAllGames");
 
-	GameBrowser *tabAllGames = new GameBrowser(Path(g_Config.currentDirectory), BrowseFlags::STANDARD, &g_Config.bGridView2, screenManager(),
+	GameBrowser *tabAllGames = new GameBrowser(GetRequesterToken(), Path(g_Config.currentDirectory), BrowseFlags::STANDARD, &g_Config.bGridView2, screenManager(),
 		mm->T("How to get games"), "https://www.ppsspp.org/getgames.html",
 		new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
 
@@ -1629,7 +1632,7 @@ void UmdReplaceScreen::CreateViews() {
 	if (System_GetPropertyBool(SYSPROP_HAS_FILE_BROWSER)) {
 		rightColumnItems->Add(new Choice(mm->T("Load", "Load...")))->OnClick.Add([&](UI::EventParams &e) {
 			auto mm = GetI18NCategory(I18NCat::MAINMENU);
-			System_BrowseForFile(mm->T("Load"), BrowseFileType::BOOTABLE, [&](const std::string &value, int) {
+			System_BrowseForFile(GetRequesterToken(), mm->T("Load"), BrowseFileType::BOOTABLE, [&](const std::string &value, int) {
 				__UmdReplace(Path(value));
 				TriggerFinish(DR_OK);
 			});

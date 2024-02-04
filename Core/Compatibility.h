@@ -118,6 +118,8 @@ struct CompatFlags {
 	bool ForceUMDReadSpeed;
 	bool AllowDelayedReadbacks;
 	bool TacticsOgreEliminateDebugReadback;
+	bool FramebufferAllowLargeVerticalOffset;
+	bool DisableMemcpySlicing;
 };
 
 struct VRCompat {
