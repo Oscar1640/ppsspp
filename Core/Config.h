@@ -621,7 +621,7 @@ public:
 	bool HasRecentIsos() const;
 	void ClearRecentIsos();
 
-	const std::map<std::string, std::pair<std::string, int>> &GetLangValuesMapping();
+	const std::map<std::string, std::pair<std::string, int>, std::less<>> &GetLangValuesMapping();
 	bool LoadAppendedConfig();
 	void SetAppendedConfigIni(const Path &path);
 	void UpdateAfterSettingAutoFrameSkip();
@@ -645,7 +645,7 @@ private:
 	std::string gameId_;
 	std::string gameIdTitle_;
 	std::vector<std::string> recentIsos;
-	std::map<std::string, std::pair<std::string, int>> langValuesMapping_;
+	std::map<std::string, std::pair<std::string, int>, std::less<>> langValuesMapping_;
 	PlayTimeTracker playTimeTracker_;
 	Path iniFilename_;
 	Path controllerIniFilename_;
